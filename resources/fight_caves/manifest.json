@@ -1,0 +1,16 @@
+{
+  "version": "fight-caves-assets-v1",
+  "archive": "fight-caves-assets-v1.tar.gz",
+  "url": "https://github.com/jordanbailey00/fc-rl/releases/download/fight-caves-assets-v1/fight-caves-assets-v1.tar.gz",
+  "sha256": "69c389ff833f9326eec2937032e65c2b65d855436d3eb9574d781ba7b3cc5578",
+  "size_bytes": 228,
+  "extract_to": "resources/fight_caves",
+  "required_files": [
+    {
+      "path": "fightcaves.collision",
+      "sha256": "6a1bb2a81c85d53e318aad9e82adb95e2e0b1b80ba7bce4b22175921634d8591",
+      "size_bytes": 4096
+    }
+  ],
+  "notes": "Runtime assets are downloaded separately and are not vendored in PufferLib."
+}
