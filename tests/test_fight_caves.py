@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import configparser
 import hashlib
 import importlib.util
 from io import BytesIO
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tarfile
@@ -28,6 +30,65 @@ def load_setup_data():
 
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def load_e2e():
+    spec = importlib.util.spec_from_file_location("fight_caves_e2e", REPO_ROOT / "tests/fight_caves_e2e.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_e2e_requires_disposable_checkout(tmp_path):
+    e2e = load_e2e()
+    (tmp_path / "build").mkdir()
+    with pytest.raises(RuntimeError, match="use clean-clone"):
+        e2e.Acceptance(tmp_path).execute()
+    assert not (tmp_path / "build/fight-caves-e2e").exists()
+
+
+def test_e2e_rejects_dirty_source_and_wrong_overlay(monkeypatch, tmp_path):
+    e2e = load_e2e()
+    monkeypatch.setattr(e2e, "git", lambda *args: b" M source.c\n")
+    with pytest.raises(RuntimeError, match="source is dirty"):
+        e2e.prepare_clone(str(tmp_path), "HEAD", False)
+    with pytest.raises(RuntimeError, match="only supports this repository at HEAD"):
+        e2e.prepare_clone(str(tmp_path), "HEAD", True)
+
+
+def test_e2e_expected_failure_needs_nonzero_and_explanation(tmp_path):
+    e2e = load_e2e()
+    test = e2e.Acceptance(tmp_path)
+    test.output.mkdir(parents=True)
+    test.run("expected", sys.executable, "-c", "raise SystemExit('reason')", expected="reason")
+    with pytest.raises(RuntimeError, match="failed acceptance"):
+        test.run("unexpected-pass", sys.executable, "-c", "print('reason')", expected="reason")
+    with pytest.raises(RuntimeError, match="failed acceptance"):
+        test.run("unexplained", sys.executable, "-c", "raise SystemExit(1)", expected="reason")
+
+
+@pytest.mark.parametrize("fault", [None, "nan", "missing", "steps", "length", "alias"])
+def test_e2e_checks_saved_metric_histories(tmp_path, fault):
+    e2e = load_e2e()
+    metrics = {f"env/{key}": "0,0" for key in e2e.ENV_METRICS}
+    metrics.update({"env/perf": "0,0", "env/score": "0,0", "agent_steps": "1024,2048"})
+    if fault == "nan":
+        metrics["env/wave_reached"] = "0,nan"
+    elif fault == "missing":
+        del metrics["env/wave_reached"]
+    elif fault == "steps":
+        metrics["agent_steps"] = "1024,1024"
+    elif fault == "length":
+        metrics["env/wave_reached"] = "0"
+    elif fault == "alias":
+        metrics["env/perf"] = "1,1"
+    path = tmp_path / "run.ini"
+    path.write_text("[metrics]\n" + "\n".join(f"{key}={value}" for key, value in metrics.items()))
+    if fault:
+        with pytest.raises(RuntimeError):
+            e2e.read_run(path, 2048)
+    else:
+        assert e2e.read_run(path, 2048)[1]["agent_steps"][-1] == 2048
 
 
 def make_archive(path: Path, members: dict[str, bytes]) -> bytes:
@@ -135,7 +196,26 @@ def test_download_failure_is_actionable(tmp_path):
         setup_data.download(missing, tmp_path / "download")
 
 
-@pytest.mark.parametrize("mode, missing", [("core", "clang"), ("cpu", "python")])
+def test_release_bundle_is_reproducible_and_installs(tmp_path, monkeypatch):
+    tools = load_setup_data()
+    source = tmp_path / "test.map"
+    source.write_bytes(b"bundle fixture")
+    files = [tools.BundleFile(source, "runtime/test.map")]
+    first, second = tmp_path / "a.tar.gz", tmp_path / "b.tar.gz"
+    tools.write_archive(first, files)
+    tools.write_archive(second, files)
+    assert first.read_bytes() == second.read_bytes()
+    bundle = tools.bundle_manifest(first, files, "example/repo", "test-v1", "runtime")
+    assert bundle["url"] == "https://github.com/example/repo/releases/download/test-v1/a.tar.gz"
+    bundle["url"] = first.as_uri()
+    root = tmp_path / "installed"
+    monkeypatch.setattr(tools, "RESOURCE_ROOT", root)
+    tools.install_bundle("core", bundle, force=False)
+    assert tools.verify_tree(root, bundle, exact=True) == []
+    assert (root / "runtime/test.map").read_bytes() == source.read_bytes()
+
+
+@pytest.mark.parametrize("mode, missing", [("core", "clang"), ("cpu", "clang"), ("native", "ccache")])
 def test_preflight_reports_missing_commands_instead_of_continuing(mode, missing):
     preflight = REPO_ROOT / "ocean" / "fight_caves" / "tools.py"
     environment = os.environ.copy()
@@ -154,115 +234,190 @@ def test_preflight_reports_missing_commands_instead_of_continuing(mode, missing)
     assert result.returncode != 0
     assert f"required command '{missing}' is unavailable" in result.stderr
 
-@pytest.mark.parametrize("status", [0, 1])
-def test_legacy_viewer_build_delegates_to_standard_build(tmp_path, monkeypatch, status):
-    tools = load_setup_data()
-    monkeypatch.setattr(sys, "argv", [str(SETUP_DATA)])
-    monkeypatch.setattr(tools, "REPO_ROOT", tmp_path)
-    calls = []
-    def build(args, **kwargs):
-        calls.append((args, kwargs))
-        return status
-    monkeypatch.setattr(tools.subprocess, "call", build)
-    assert tools.build_viewer_main() == status
-    assert calls == [(["bash", "build.sh", "fight_caves", "--fast"], {"cwd": tmp_path})]
-
-
-def test_compatibility_replay_uses_standard_executable(tmp_path, monkeypatch):
-    tools = load_setup_data()
-    monkeypatch.setattr(tools, "repo_root", lambda: str(tmp_path))
-    assert tools.find_viewer() is None
-    viewer = tmp_path / "fight_caves"
-    viewer.write_text("#!/bin/sh\nexit 0\n")
-    viewer.chmod(0o755)
-    assert tools.find_viewer() == str(viewer)
+@pytest.mark.parametrize("command", ["build-viewer", "play", "eval"])
+def test_retired_python_launch_commands_are_rejected(command):
+    result = subprocess.run(
+        [sys.executable, str(SETUP_DATA), command], cwd=REPO_ROOT,
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 2
+    assert f"Unknown Fight Caves command: {command}" in result.stderr
 
 
 def test_standard_build_prepares_both_asset_bundles():
     build = (REPO_ROOT / "build.sh").read_text()
     branch = build.split('elif [ "$ENV" = "fight_caves" ]; then', 1)[1].split("elif ", 1)[0]
     assert 'tools.py" setup --all' in branch
+    assert 'osrs_*|nethack|fight_caves)' in build
+    assert '-c "$SRC_DIR/binding.c" -o build/fight_caves_binding.o' in build
 
 
 @pytest.mark.parametrize("broken", [False, True])
-def test_replay_asset_check_is_independent_of_display(monkeypatch, broken):
+def test_asset_setup_verification_is_independent_of_display(monkeypatch, broken, capsys):
     tools = load_setup_data()
     monkeypatch.delenv("DISPLAY", raising=False)
-    def verify(errors, names):
-        assert names == ("core", "viewer")
-        if broken:
-            errors.append("missing viewer asset")
-    monkeypatch.setattr(tools, "verify_assets", verify)
+    monkeypatch.setattr(sys, "argv", [str(SETUP_DATA), "--all", "--verify-only"])
+    monkeypatch.setattr(tools, "load_manifest",
+                        lambda _: {"bundles": {"core": {}, "viewer": {}}})
+    checked = []
+    def verify(root, bundle, *, exact):
+        checked.append(bundle)
+        return ["missing viewer asset"] if broken else []
+    monkeypatch.setattr(tools, "verify_tree", verify)
+    assert tools.setup_main() == int(broken)
+    assert len(checked) == (1 if broken else 2)
     if broken:
-        with pytest.raises(tools.AssetError, match="Restore assets"):
-            tools.verify_runtime_assets()
-    else:
-        tools.verify_runtime_assets()
+        assert "Fight Caves asset setup failed" in capsys.readouterr().err
 
 
-MODULE_PATH = REPO_ROOT / "ocean" / "fight_caves" / "tools.py"
-SPEC = importlib.util.spec_from_file_location("fight_caves_eval_contract", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
-EVAL_CONTRACT = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = EVAL_CONTRACT
-SPEC.loader.exec_module(EVAL_CONTRACT)
+@pytest.fixture
+def compiled_contract():
+    return {
+        "contract_dump_schema_version": 1,
+        "policy_obs_size": 286, "puffer_obs_size": 320,
+        "puffer_action_dims": [17, 9, 8], "puffer_mask_size": 34,
+        "observation_version": "test_obs", "action_version": "test_actions",
+        "reward_version": "test_rewards", "prayer_timing_version": "test_prayer",
+        "state_hash_version": 6, "active_loadout": "test_loadout",
+    }
 
 
-def test_checkpoint_format_accepts_exact_raw_weight_size(tmp_path):
-    checkpoint = tmp_path / "raw.bin"
-    checkpoint.write_bytes(b"\x00" * 64)
-    assert EVAL_CONTRACT.checkpoint_format(checkpoint, 64) == "raw"
+def test_executable_contract_uses_subprocess(tmp_path, monkeypatch, compiled_contract):
+    tools = load_setup_data()
+    executable = tmp_path / "fight_caves"
+    executable.touch()
+    def run(argv, **kwargs):
+        assert argv == [str(executable), "--contract"]
+        assert kwargs["cwd"] == REPO_ROOT
+        assert kwargs["timeout"] == 10
+        return subprocess.CompletedProcess(argv, 0, json.dumps(compiled_contract), "")
+    monkeypatch.setattr(tools.subprocess, "run", run)
+    contract = tools.load_compiled_contract(executable)
+    tools.validate_compiled_contract(contract, "test_loadout")
+    assert contract == compiled_contract
 
 
-def test_checkpoint_format_accepts_pytorch_zip_container(tmp_path):
-    checkpoint = tmp_path / "cpu.bin"
-    checkpoint.write_bytes(b"PK\x03\x04state-dictionary-placeholder")
-    assert EVAL_CONTRACT.checkpoint_format(checkpoint, 64) == "pytorch"
-
-
-def test_checkpoint_format_rejects_unknown_or_missing_file(tmp_path):
-    checkpoint = tmp_path / "wrong.bin"
-    checkpoint.write_bytes(b"not a supported checkpoint")
-    assert EVAL_CONTRACT.checkpoint_format(checkpoint, 64) is None
-    assert EVAL_CONTRACT.checkpoint_format(tmp_path / "missing.bin", 64) is None
-
-
-@pytest.mark.parametrize("saved,current,accepted", [
-    (4, 5, True), (5, 5, True), (5, 4, False), (3, 5, False), (6, 5, False),
-    (4, 6, True), (5, 6, True), (6, 6, True), (3, 6, False), (7, 6, False),
+@pytest.mark.parametrize("output,message", [
+    ("", "invalid JSON"), ("noise\\n{}", "invalid JSON"), ("[]", "not an object"),
 ])
-def test_state_hash_checkpoint_migration_is_directional(tmp_path, saved, current, accepted):
-    expected = {"state_hash_version": current, "puffer_obs_size": 320,
-                "puffer_action_dims": [17, 9, 8], "reward_version": "unchanged"}
-    actual = dict(expected, state_hash_version=saved)
-    marker = tmp_path / "contract.json"
-    marker.write_text(json.dumps({"contract": actual}))
-    preflight = {"contract": expected}
-    if accepted:
-        EVAL_CONTRACT.validate_checkpoint_marker(marker, preflight)
-    else:
-        with pytest.raises(EVAL_CONTRACT.ContractError, match="does not match"):
-            EVAL_CONTRACT.validate_checkpoint_marker(marker, preflight)
-    assert expected["state_hash_version"] == current
+def test_executable_contract_rejects_bad_output(tmp_path, monkeypatch, output, message):
+    tools = load_setup_data()
+    executable = tmp_path / "fight_caves"
+    executable.touch()
+    monkeypatch.setattr(tools.subprocess, "run", lambda *a, **k:
+                        subprocess.CompletedProcess(a, 0, output, ""))
+    with pytest.raises(tools.ContractError, match=message):
+        tools.load_compiled_contract(executable)
+
+
+@pytest.mark.parametrize("failure", ["missing", "permission", "timeout", "exit"])
+def test_executable_contract_reports_failures(tmp_path, monkeypatch, failure):
+    tools = load_setup_data()
+    executable = tmp_path / "fight_caves"
+    if failure != "missing":
+        executable.touch()
+    def run(*args, **kwargs):
+        if failure == "permission":
+            raise PermissionError("not executable")
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(args, 10)
+        return subprocess.CompletedProcess(args, 2, "", "unsupported --contract")
+    monkeypatch.setattr(tools.subprocess, "run", run)
+    with pytest.raises(tools.ContractError):
+        tools.load_compiled_contract(executable)
 
 
 @pytest.mark.parametrize("field,value", [
-    ("puffer_obs_size", 319), ("puffer_action_dims", [17, 9, 8, 14]),
-    ("reward_version", "different"), ("unknown_field", 1),
+    ("contract_dump_schema_version", 2), ("contract_dump_schema_version", True),
+    ("policy_obs_size", 0), ("puffer_obs_size", 319), ("puffer_mask_size", -1),
+    ("policy_obs_size", True), ("puffer_action_dims", []),
+    ("puffer_action_dims", [17, 9, True]), ("puffer_action_dims", [17, 9, 9]),
 ])
-@pytest.mark.parametrize("saved,current", [(4, 5), (4, 6), (5, 6)])
-def test_state_hash_migration_does_not_hide_other_contract_changes(tmp_path, saved, current, field, value):
-    expected = {"state_hash_version": current, "puffer_obs_size": 320,
-                "puffer_action_dims": [17, 9, 8], "reward_version": "unchanged"}
-    actual = dict(expected, state_hash_version=saved)
-    actual[field] = value
-    marker = tmp_path / "contract.json"
-    marker.write_text(json.dumps({"contract": actual}))
-    with pytest.raises(EVAL_CONTRACT.ContractError, match="does not match"):
-        EVAL_CONTRACT.validate_checkpoint_marker(marker, {"contract": expected})
+def test_compiled_contract_rejects_invalid_dimensions(compiled_contract, field, value):
+    tools = load_setup_data()
+    compiled_contract[field] = value
+    with pytest.raises(tools.ContractError):
+        tools.validate_compiled_contract(compiled_contract)
+
+
+def test_compiled_contract_checks_required_fields_and_loadout(compiled_contract):
+    tools = load_setup_data()
+    with pytest.raises(tools.ContractError, match="active loadout mismatch"):
+        tools.validate_compiled_contract(compiled_contract, "another_loadout")
+    for field in tools.REQUIRED_FIELDS:
+        incomplete = dict(compiled_contract)
+        del incomplete[field]
+        with pytest.raises(tools.ContractError, match="omits"):
+            tools.validate_compiled_contract(incomplete)
+
+
+def test_contract_identity_is_exact_not_a_legacy_migration(compiled_contract):
+    tools = load_setup_data()
+    same = dict(reversed(list(compiled_contract.items())))
+    assert tools.contract_identity(same) == tools.contract_identity(compiled_contract)
+    for field in compiled_contract:
+        changed = dict(compiled_contract, **{field: "changed"})
+        assert tools.contract_identity(changed) != tools.contract_identity(compiled_contract)
+
+
+def test_native_preflight_checks_both_bundles_without_python_packages(monkeypatch):
+    tools = load_setup_data()
+    monkeypatch.setenv("CUDA_HOME", "/example/cuda")
+    checks = []
+    monkeypatch.setattr(tools, "verify_assets", lambda errors, names: checks.append(names))
+    monkeypatch.setattr(tools, "require_command",
+                        lambda errors, name, purpose: checks.append(name))
+    monkeypatch.setattr(tools, "check_openmp", lambda *args: None)
+    monkeypatch.setattr(tools, "check_linux_viewer_link", lambda *args: None)
+    assert tools.run_preflight("native") == 0
+    assert ("core", "viewer") in checks
+    assert "/example/cuda/bin/nvcc" in checks
+    assert "ccache" in checks
+    assert not {"python", "g++", "nvidia-smi"} & {c for c in checks if isinstance(c, str)}
+
+
+def test_cpu_preflight_checks_viewer_assets_but_not_cuda(monkeypatch):
+    tools = load_setup_data()
+    checks = []
+    monkeypatch.setattr(tools, "verify_assets", lambda errors, names: checks.append(names))
+    monkeypatch.setattr(tools, "require_command",
+                        lambda errors, name, purpose: checks.append(name))
+    monkeypatch.setattr(tools, "check_openmp", lambda *args: None)
+    monkeypatch.setattr(tools, "check_linux_viewer_link", lambda *args: None)
+    assert tools.run_preflight("cpu") == 0
+    assert ("core", "viewer") in checks
+    assert "ccache" not in checks
+    assert not any("nvcc" in c for c in checks if isinstance(c, str))
+
+
+@pytest.mark.parametrize("mode", ["cuda", "web"])
+def test_retired_preflight_modes_are_rejected(mode):
+    result = subprocess.run(
+        [sys.executable, str(SETUP_DATA), "preflight", "--mode", mode],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    assert result.returncode == 2
+    assert "invalid choice" in result.stderr
+
 
 ENV_ROOT = REPO_ROOT / "ocean" / "fight_caves"
 RESOURCE_ROOT = REPO_ROOT / "resources" / "fight_caves"
+
+def test_config_contains_only_supported_native_settings():
+    default = configparser.ConfigParser(interpolation=None)
+    default.read(REPO_ROOT / "config" / "default.ini")
+    config = configparser.ConfigParser(interpolation=None)
+    config.read(REPO_ROOT / "config" / "fight_caves.ini")
+    assert set(config.sections()) == {"base", "env", "vec", "train", "policy", "sweep"}
+    binding = (ENV_ROOT / "binding.c").read_text()
+    env_keys = set(re.findall(r'kwargs,\s*"([^"]+)"', binding))
+    assert set(config["env"]) <= env_keys
+    for section in config.sections():
+        if section == "env":
+            continue
+        assert set(config[section]) <= set(default[section]), section
+    assert not {"reset_state", "beta1", "beta2", "eps", "prio_alpha", "prio_beta0",
+                "expansion_factor"} & {key for section in config for key in config[section]}
 
 
 def test_environment_uses_flat_implementation_headers():
@@ -319,112 +474,3 @@ def test_fight_caves_sources_do_not_reference_local_development_trees():
                 continue
             for value in forbidden:
                 assert value not in text, f"{path} contains forbidden path marker {value!r}"
-
-def fail(message: str) -> None:
-    raise AssertionError(f"puffer_contract_test: {message}")
-
-
-def puffer_main() -> int:
-    """Exercise the compiled CPU interface when explicitly invoked as a script."""
-    import ctypes
-    import numpy as np
-
-    sys.path.insert(0, str(REPO_ROOT))
-    try:
-        from pufferlib import _C
-    except ImportError as exc:
-        raise RuntimeError(
-            "Fight Caves Puffer backend is unavailable; run "
-            "'./build.sh fight_caves --cpu' first"
-        ) from exc
-    if getattr(_C, "env_name", None) != "fight_caves":
-        fail(f"backend was built for {getattr(_C, 'env_name', None)!r}")
-    if getattr(_C, "gpu", None) != 0:
-        fail("acceptance test requires the CPU backend")
-
-    from pufferlib.pufferl import load_config
-
-    previous_argv = sys.argv[:]
-    try:
-        sys.argv = ["puffer_contract_test"]
-        args = load_config("fight_caves")
-    finally:
-        sys.argv = previous_argv
-    args["vec"].update(total_agents=8, num_buffers=1, num_threads=1)
-
-    vec = _C.create_vec(args, 0)
-    try:
-        if vec.obs_size != 320:
-            fail(f"expected 320 observations, got {vec.obs_size}")
-        if vec.num_atns != 3:
-            fail(f"expected 3 action heads, got {vec.num_atns}")
-        if list(vec.act_sizes) != [17, 9, 8]:
-            fail(f"unexpected action dimensions: {list(vec.act_sizes)}")
-        if vec.obs_dtype != "FloatTensor" or vec.obs_elem_size != 4:
-            fail(
-                f"unexpected observation type: {vec.obs_dtype}/{vec.obs_elem_size}"
-            )
-
-        obs_storage = (ctypes.c_float * (vec.total_agents * vec.obs_size)).from_address(
-            vec.obs_ptr
-        )
-        reward_storage = (ctypes.c_float * vec.total_agents).from_address(
-            vec.rewards_ptr
-        )
-        terminal_storage = (ctypes.c_float * vec.total_agents).from_address(
-            vec.terminals_ptr
-        )
-        observations = np.ctypeslib.as_array(obs_storage).reshape(
-            vec.total_agents, vec.obs_size
-        )
-        rewards = np.ctypeslib.as_array(reward_storage)
-        terminals = np.ctypeslib.as_array(terminal_storage)
-
-        vec.reset()
-        if not np.isfinite(observations).all():
-            fail("reset observations contain non-finite values")
-        mask = observations[:, -34:]
-        if not np.logical_or(mask == 0.0, mask == 1.0).all():
-            fail("float action mask contains a value other than zero or one")
-        for start, stop in ((0, 17), (17, 26), (26, 34)):
-            if not (mask[:, start:stop].sum(axis=1) >= 1).all():
-                fail("an action head has no legal action")
-
-        actions = np.zeros((vec.total_agents, vec.num_atns), dtype=np.float32)
-        terminal_count = 0
-        for _ in range(6000):
-            vec.cpu_step(actions.ctypes.data)
-            if not np.isfinite(observations).all():
-                fail("step observations contain non-finite values")
-            if not np.isfinite(rewards).all():
-                fail("rewards contain non-finite values")
-            if not np.logical_or(terminals == 0.0, terminals == 1.0).all():
-                fail("terminal buffer contains a value other than zero or one")
-            terminal_count += int(terminals.sum())
-            if terminal_count:
-                break
-        if terminal_count == 0:
-            fail("no terminal/autoreset boundary was observed")
-        metrics = vec.log()
-        expected_metrics = {
-            "zero_progress_ticks", "wave_reached", "wrong_prayer_hits",
-            "reached_wave_63", "jad_kill_rate", "prayer_uptime_range",
-            "prayer_uptime_melee", "prayer_uptime_magic", "npc_healing_total",
-            "jad_healing_total", "episode_length", "n",
-        }
-        if set(metrics) != expected_metrics:
-            fail(f"unexpected episode metrics: {set(metrics) ^ expected_metrics}")
-        if metrics["n"] != terminal_count or metrics["episode_length"] <= 0:
-            fail("completed episode metrics were lost during autoreset")
-        if not all(np.isfinite(value) for value in metrics.values()):
-            fail("episode metrics contain non-finite values")
-        if vec.log():
-            fail("episode metrics were not drained after logging")
-    finally:
-        vec.close()
-
-    print(f"puffer_contract_test: passed ({terminal_count} terminal transitions)")
-    return 0
-
-if __name__ == "__main__":
-    raise SystemExit(puffer_main())

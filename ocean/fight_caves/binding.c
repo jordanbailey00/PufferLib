@@ -160,9 +160,6 @@ void puf_render(Env* env) {
         v->reward_params = env->reward_params;
         v->reward_runtime = env->reward_runtime;
         v->active_loadout = env->state.active_loadout;
-        v->obs_ablate_npc_distance = env->obs_ablate_npc_distance;
-        v->obs_ablate_incoming_aggregates = env->obs_ablate_incoming_aggregates;
-        v->obs_ablate_npc_valid = env->obs_ablate_npc_valid;
         snprintf(v->reward_config_path, sizeof(v->reward_config_path),
                  "Puffer environment configuration");
         v->reward_config_loaded = 1;
@@ -196,18 +193,12 @@ void puf_close(Env* env) {
     fc_destroy(&env->state);
 }
 
-/* Cold-path machine-readable metadata exported by the compiled FC backend. */
-
-#if defined(_WIN32)
-#define FC_CONTRACT_EXPORT __declspec(dllexport)
-#else
-#define FC_CONTRACT_EXPORT __attribute__((visibility("default")))
-#endif
+/* Cold-path metadata for C callers and the standalone --contract command. */
 
 #define FC_STRINGIFY_INNER(value) #value
 #define FC_STRINGIFY(value) FC_STRINGIFY_INNER(value)
 
-FC_CONTRACT_EXPORT const char* fc_training_contract_json(void) {
+const char* fc_training_contract_json(void) {
     static char json[2048];
     static int initialized = 0;
     if (!initialized) {

@@ -15,7 +15,7 @@
  *   Right click — context menu (dragging dismisses it and orbits)
  *
  *   * D only toggles the overlay when not being used for east movement.
- *   Policy replay mode (`--policy-pipe`) also adds 1/2/4/0 playback presets.
+ *   Policy replay mode (`./puffer eval`) also adds 1/2/4/0 playback presets.
  *   In replay mode, use Shift+4 / 5 for camera presets.
  */
 
@@ -160,9 +160,8 @@ typedef struct ViewerState {
     int dbg_flags;       /* bitmask of DBG_* flags from fc_debug_overlay.h */
     /* Debug toggles */
     int godmode;        /* 1 = player can't die */
-    int policy_pipe;    /* 1 = read actions from stdin, write obs to stdout */
-    int policy_episode_limit; /* 0 = unlimited auto-reset, >0 = stop after N episodes */
-    int policy_episode_count; /* number of completed policy-pipe episodes */
+    int policy_replay;    /* 1 = read-only presentation of native policy transitions */
+    int replay_episode_count; /* number of completed native replay episodes */
     int start_wave;     /* 0 = wave 1 (default), >0 = skip to this wave on reset */
     int initial_sharks;
     int initial_prayer_doses;
@@ -172,12 +171,6 @@ typedef struct ViewerState {
     int reward_breakdown_tick;
     int reward_config_loaded;
     char reward_config_path[FC_REWARD_CONFIG_PATH_MAX];
-    /* Obs ablation flags (matches FightCaves env). Applied AFTER fc_write_obs
-     * in write_obs_to_pipe so policy replay sees the same obs distribution it
-     * was trained on. See fc_apply_obs_ablation in the core fc_state.c. */
-    int obs_ablate_npc_distance;
-    int obs_ablate_incoming_aggregates;
-    int obs_ablate_npc_valid;
 } ViewerState;
 
 /* Forward declarations */
@@ -387,7 +380,7 @@ static void sync_fc_ui(ViewerState* v) {
 
 static void queue_player_tile_request(ViewerState* v, int tx, int ty,
                                       float screen_x, float screen_y) {
-    if (!v || v->policy_pipe || tx < 0 || tx >= FC_ARENA_WIDTH ||
+    if (!v || v->policy_replay || tx < 0 || tx >= FC_ARENA_WIDTH ||
         ty < 0 || ty >= FC_ARENA_HEIGHT)
         return;
     v->pending_tile_x = tx;
@@ -399,7 +392,7 @@ static void queue_player_tile_request(ViewerState* v, int tx, int ty,
 
 static void queue_player_attack_request(ViewerState* v, int npc_idx,
                                         float screen_x, float screen_y) {
-    if (!v || v->policy_pipe || npc_idx < 0 || npc_idx >= FC_MAX_NPCS) return;
+    if (!v || v->policy_replay || npc_idx < 0 || npc_idx >= FC_MAX_NPCS) return;
     v->pending_attack_npc = npc_idx;
     v->pending_tile_x = -1;
     v->pending_tile_y = -1;
@@ -413,7 +406,7 @@ static void show_item_result(ViewerState *v, FcItemResult result) {
 }
 
 static void use_inventory_slot(ViewerState *v, int slot) {
-    if (v->policy_pipe || slot < 0 || slot >= FC_INVENTORY_SLOTS) return;
+    if (v->policy_replay || slot < 0 || slot >= FC_INVENTORY_SLOTS) return;
     const FcItemDef *item = fc_item_definition(v->state.player.inventory[slot].item_id);
     if (!item) return;
     FcItemResult result;
@@ -443,7 +436,7 @@ static void handle_runec_ui_intent(ViewerState* v) {
             if (strcmp(intent->text, "Examine") == 0 && same_npc) {
                 snprintf(v->item_message, sizeof(v->item_message), "%s", fc_menu_npc_info(npc->npc_type).name);
                 v->item_message_seconds = 4.0f;
-            } else if (!v->policy_pipe && v->state.terminal == TERMINAL_NONE) {
+            } else if (!v->policy_replay && v->state.terminal == TERMINAL_NONE) {
                 if (strcmp(intent->text, "Attack") == 0 && same_npc)
                     queue_player_attack_request(v, slot, intent->position.x, intent->position.y);
                 else if (strcmp(intent->text, "Walk here") == 0)
@@ -474,11 +467,11 @@ static void handle_runec_ui_intent(ViewerState* v) {
             if (strcmp(intent->text, "Remove") != 0) break;
             /* fall through */
         case RUNEC_UI_INTENT_EQUIPMENT_SLOT:
-            if (!v->policy_pipe)
+            if (!v->policy_replay)
                 show_item_result(v, fc_unequip_item(&v->state, intent->primary));
             break;
         case RUNEC_UI_INTENT_INVENTORY_DRAG:
-            if (!v->policy_pipe)
+            if (!v->policy_replay)
                 show_item_result(v, fc_inventory_swap(&v->state, intent->primary, intent->secondary));
             break;
         case RUNEC_UI_INTENT_PRAYER_SLOT: {
@@ -487,17 +480,17 @@ static void handle_runec_ui_intent(ViewerState* v) {
              * prayer happens to be active when the option is selected. */
             if (intent->secondary == 1 && action == FC_PRAYER_OFF) action = 0;
             if (intent->secondary == -1 && action != FC_PRAYER_OFF) action = 0;
-            if (action && !v->policy_pipe) v->pending_prayer = action;
+            if (action && !v->policy_replay) v->pending_prayer = action;
             break;
         }
         case RUNEC_UI_INTENT_COMBAT_STYLE:
-            if (v->policy_pipe) break;
+            if (v->policy_replay) break;
             v->combat_style = intent->primary == 3 ? 2 : intent->primary;
             if (v->combat_style < 0) v->combat_style = 0;
             if (v->combat_style > 2) v->combat_style = 2;
             break;
         case RUNEC_UI_INTENT_RUN_TOGGLE:
-            if (!v->policy_pipe) {
+            if (!v->policy_replay) {
                 fc_request_set_running(&v->state, !p->is_running);
                 v->ui.run_enabled = p->is_running != 0;
             }
@@ -592,17 +585,6 @@ static void reward_params_apply_key(FcRewardParams* params,
     else if (strcmp(key, "shape_no_attack_start") == 0) params->shape_no_attack_start = (int)strtol(value, NULL, 10);
 }
 
-static void obs_ablation_apply_key(ViewerState* v,
-                                   const char* key,
-                                   const char* value) {
-    if (strcmp(key, "obs_ablate_npc_distance") == 0)
-        v->obs_ablate_npc_distance = (int)strtol(value, NULL, 10);
-    else if (strcmp(key, "obs_ablate_incoming_aggregates") == 0)
-        v->obs_ablate_incoming_aggregates = (int)strtol(value, NULL, 10);
-    else if (strcmp(key, "obs_ablate_npc_valid") == 0)
-        v->obs_ablate_npc_valid = (int)strtol(value, NULL, 10);
-}
-
 static void initial_supplies_apply_key(ViewerState* v,
                                        const char* key,
                                        const char* value) {
@@ -625,9 +607,6 @@ static void load_reward_params(ViewerState* v) {
     v->reward_params = fc_reward_default_params();
     v->initial_sharks = 0;
     v->initial_prayer_doses = 0;
-    v->obs_ablate_npc_distance = 0;
-    v->obs_ablate_incoming_aggregates = 0;
-    v->obs_ablate_npc_valid = 0;
     v->reward_config_loaded = 0;
     snprintf(v->reward_config_path, sizeof(v->reward_config_path), "%s", "defaults");
 
@@ -669,7 +648,6 @@ static void load_reward_params(ViewerState* v) {
             if (*key == '\0' || *value == '\0') continue;
 
             reward_params_apply_key(&v->reward_params, key, value);
-            obs_ablation_apply_key(v, key, value);
             initial_supplies_apply_key(v, key, value);
         }
 
@@ -744,7 +722,7 @@ static void set_viewer_tps(ViewerState* v, float tps) {
 static void set_policy_replay_speed(ViewerState* v, int multiplier) {
     int normalized = policy_replay_normalize_multiplier(multiplier);
     set_viewer_tps(v, policy_replay_multiplier_to_tps(normalized));
-    fprintf(stderr, "[policy-pipe] Replay speed set to %dx (%.2f TPS)\n",
+    fprintf(stderr, "[eval] Replay speed set to %dx (%.2f TPS)\n",
             normalized, v->tps);
 }
 
@@ -785,16 +763,16 @@ static void toggle_debug_overlay(ViewerState* v) {
 }
 
 static void toggle_godmode(ViewerState* v) {
-    if (!v || v->policy_pipe) return;
+    if (!v || v->policy_replay) return;
     v->godmode = !v->godmode;
     fprintf(stderr, "GODMODE: %s\n", v->godmode ? "ON" : "OFF");
 }
 
-static void print_policy_episode_summary(const ViewerState* v) {
+static void print_replay_episode_summary(const ViewerState* v) {
     FcEpisodeSummary summary;
     fc_episode_summary_build(&v->state, &v->reward_runtime, v->state.tick, &summary);
     fprintf(stderr,
-        "[policy-pipe] episode_summary "
+        "[eval] episode_summary "
         "{\"episode\":%d,\"seed\":%u,\"terminal\":\"%s\","
         "\"env/zero_progress_ticks\":%d,"
         "\"env/wave_reached\":%d,"
@@ -808,7 +786,7 @@ static void print_policy_episode_summary(const ViewerState* v) {
         "\"env/jad_healing_total\":%.6f,"
         "\"env/episode_length\":%d,"
         "\"env/n\":1.0}\n",
-        v->policy_episode_count + 1, v->seed, fc_terminal_name(v->state.terminal),
+        v->replay_episode_count + 1, v->seed, fc_terminal_name(v->state.terminal),
         summary.zero_progress_ticks,
         summary.wave_reached,
         summary.wrong_prayer_hits,
@@ -884,7 +862,7 @@ static void reset_ep(ViewerState* v) {
 }
 
 static void viewer_jump_to_wave(ViewerState* v, int wave) {
-    if (!v || v->policy_pipe) return;
+    if (!v || v->policy_replay) return;
     runec_ui_close_context(&v->ui);
     if (wave < 1) wave = 1;
     if (wave > FC_NUM_WAVES) wave = FC_NUM_WAVES;
@@ -1117,43 +1095,6 @@ static void build_human_actions(ViewerState* v) {
     v->pending_attack_npc = -1;
     v->pending_tile_x = -1;
     v->pending_tile_y = -1;
-}
-
-/* ======================================================================== */
-/* Policy pipe mode — read actions from stdin, write obs to stdout          */
-/* ======================================================================== */
-
-static int read_policy_actions(ViewerState* v) {
-    for (int i = 0; i < FC_PUFFER_NUM_ATNS; i++) {
-        int action;
-        if (scanf("%d", &action) != 1)
-            return 0;
-        v->actions[i] = action;
-    }
-    for (int i = FC_PUFFER_NUM_ATNS; i < FC_NUM_ACTION_HEADS; i++) v->actions[i] = 0;
-    return 1;
-}
-
-static void write_obs_to_pipe(ViewerState* v) {
-    /* Write the same policy obs + action mask contract used by Puffer training. */
-    float obs_buf[FC_OBS_SIZE];
-    fc_write_obs(&v->state, obs_buf);
-    /* Mirror training-time obs ablation so the policy sees the distribution
-     * it was trained on (no-op when all flags are 0). */
-    fc_apply_obs_ablation(obs_buf,
-                          v->obs_ablate_npc_distance,
-                          v->obs_ablate_incoming_aggregates,
-                          v->obs_ablate_npc_valid);
-    float mask_buf[FC_ACTION_MASK_SIZE];
-    fc_write_mask(&v->state, mask_buf);
-
-    /* Policy obs: first FC_POLICY_OBS_SIZE floats */
-    for (int i = 0; i < FC_POLICY_OBS_SIZE; i++)
-        printf("%.6f ", obs_buf[i]);
-    for (int i = 0; i < FC_PUFFER_MASK_SIZE; i++)
-        printf("%.6f ", mask_buf[i]);
-    printf("\n");
-    fflush(stdout);
 }
 
 /* Entity ground Y — slightly above terrain so entities stand on the flattened cracks */
@@ -1804,7 +1745,7 @@ static void draw_runec_console_controls(ViewerState* v, Rectangle body) {
              v->state.current_wave);
     draw_runec_console_button(wave, text, 0);
 
-    fc_osrs_draw_text(v->policy_pipe ? "Replay TPS" : "TPS Presets",
+    fc_osrs_draw_text(v->policy_replay ? "Replay TPS" : "TPS Presets",
              right_x, (int)body.y + 62, 8, COL_TEXT_DIM);
     for (int i = 0; i < NUM_MANUAL_TPS_PRESETS; i++) {
         draw_runec_console_button(runec_console_tps_button_rect(body, i),
@@ -2203,9 +2144,17 @@ static void fc_viewer_destroy(ViewerState* v) {
 }
 
 static ViewerState* fc_viewer_create(int replay) {
+#if defined(__linux__)
+    /* Raylib's X11 build can crash inside InitWindow without DISPLAY. */
+    const char* display = getenv("DISPLAY");
+    if (!display || !display[0]) {
+        fprintf(stderr, "error: no graphical DISPLAY is configured; provide X11 "
+                "display access, or use --headless for checkpoint evaluation\n");
+        return NULL;
+    }
+#endif
     fprintf(stderr,"=== Fight Caves Viewer (Phase 8 — Playable) ===\n");
-    /* In policy-pipe mode, suppress Raylib's INFO logs which go to stdout
-     * and would corrupt the pipe protocol. */
+    /* Keep graphical diagnostics off the native evaluator's stdout. */
     if (replay) {
         SetTraceLogCallback(viewer_trace_log_to_stderr);
         SetTraceLogLevel(LOG_WARNING);
@@ -2416,13 +2365,13 @@ static ViewerState* fc_viewer_create(int replay) {
     if (!required_resources_ready) {
         fprintf(stderr,
                 "error: viewer startup aborted instead of using reduced "
-                "graphics; restore assets with: ./build.sh fight_caves --fast\n");
+                "graphics; restore assets with: ./build.sh fight_caves --cpu\n");
         fc_viewer_destroy(v);
         return NULL;
     }
 
     v->combat_style = 1;
-    v->policy_pipe = replay;
+    v->policy_replay = replay;
     v->paused = !replay;
     return v;
 }
@@ -2479,7 +2428,6 @@ static void fc_viewer_ingest_tick(ViewerState* v) {
  * and -1 when the window closes. External evaluation never steps a copy. */
 static int fc_viewer_frame(ViewerState* v, int external) {
     if (WindowShouldClose()) return -1;
-    int quit_after_tick = 0;
     int ui_capture = 0;
     /* Age the previous click before capturing this frame's input. A newly
      * clicked cross must start at frame zero, even after a slow frame. */
@@ -2490,7 +2438,7 @@ static int fc_viewer_frame(ViewerState* v, int external) {
     if (IsKeyPressed(KEY_ESCAPE) && !v->ui.context_open) return -1;
     if (IsKeyPressed(KEY_SPACE)) v->paused = !v->paused;
     if (IsKeyPressed(KEY_RIGHT)) v->step_once = 1;
-    if (v->policy_pipe) {
+    if (v->policy_replay) {
         if (IsKeyPressed(KEY_ONE)) set_policy_replay_speed(v, 1);
         if (IsKeyPressed(KEY_TWO)) set_policy_replay_speed(v, 2);
         if (!IsKeyDown(KEY_LEFT_SHIFT) && !IsKeyDown(KEY_RIGHT_SHIFT) &&
@@ -2499,7 +2447,7 @@ static int fc_viewer_frame(ViewerState* v, int external) {
         if (IsKeyPressed(KEY_UP)) cycle_policy_replay_speed(v, +1);
         if (IsKeyPressed(KEY_DOWN)) cycle_policy_replay_speed(v, -1);
     }
-    if (!v->policy_pipe && IsKeyPressed(KEY_R)) reset_ep(v);
+    if (!v->policy_replay && IsKeyPressed(KEY_R)) reset_ep(v);
     if (IsKeyPressed(KEY_L)) {
         if (v->camera_locked) {
             v->camera.target = camera_follow_target(v);
@@ -2528,14 +2476,14 @@ static int fc_viewer_frame(ViewerState* v, int external) {
         toggle_debug_overlay(v);
     }
     /* Camera presets */
-    if ((!v->policy_pipe && IsKeyPressed(KEY_FOUR)) ||
-        (v->policy_pipe &&
+    if ((!v->policy_replay && IsKeyPressed(KEY_FOUR)) ||
+        (v->policy_replay &&
          (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) &&
          IsKeyPressed(KEY_FOUR))) {
         v->cam_yaw=0; v->cam_pitch=1.35f; v->cam_dist=120;
     }
-    if ((!v->policy_pipe && IsKeyPressed(KEY_FIVE)) ||
-        (v->policy_pipe &&
+    if ((!v->policy_replay && IsKeyPressed(KEY_FIVE)) ||
+        (v->policy_replay &&
          (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) &&
          IsKeyPressed(KEY_FIVE))) {
         v->cam_yaw=0; v->cam_pitch=0.6f; v->cam_dist=50;
@@ -2603,30 +2551,20 @@ static int fc_viewer_frame(ViewerState* v, int external) {
     /* Capture clicks and key presses EVERY frame (60fps).
      * These set routes/targets/buffers on the player struct.
      * The tick loop reads them when the next tick fires. */
-    if (!v->policy_pipe && v->state.terminal == TERMINAL_NONE) {
+    if (!v->policy_replay && v->state.terminal == TERMINAL_NONE) {
         process_human_clicks(v, ui_capture);
         process_human_keys(v);
     }
 
     if (!external && tick && v->state.terminal == TERMINAL_NONE) {
-        int used_human_actions = 0;
-        /* Build action array for this tick */
-        if (v->policy_pipe) {
-            if (!read_policy_actions(v)) {
-                fprintf(stderr, "[policy-pipe] EOF on stdin, stopping.\n");
-                return -1;
-            }
-        } else {
-            build_human_actions(v);
-            used_human_actions = 1;
-        }
+        build_human_actions(v);
 
         fc_actor_animation_capture_tick_start(&v->actor_animation,
                                               &v->state);
 
         /* Step simulation */
         fc_step(&v->state, v->actions);
-        if (used_human_actions && v->actions[5] > 0 && v->actions[6] > 0)
+        if (v->actions[5] > 0 && v->actions[6] > 0)
             fc_click_feedback_accept_move_tick(&v->click_feedback,
                                                &v->state);
         fc_click_feedback_sync(&v->click_feedback, &v->state);
@@ -2641,29 +2579,7 @@ static int fc_viewer_frame(ViewerState* v, int external) {
         update_reward_breakdown(v);
         fc_viewer_ingest_tick(v);
 
-        if (v->state.terminal != TERMINAL_NONE) {
-            if (v->policy_pipe) {
-                print_policy_episode_summary(v);
-                v->policy_episode_count++;
-                /* Write terminal obs, then auto-reset unless a fixed episode limit was requested. */
-                write_obs_to_pipe(v);
-                if (v->policy_episode_limit > 0 &&
-                    v->policy_episode_count >= v->policy_episode_limit) {
-                    quit_after_tick = 1;
-                } else {
-                    reset_ep(v);
-                }
-            } else {
-                v->paused = 1;
-            }
-        } else if (v->policy_pipe) {
-            write_obs_to_pipe(v);
-        }
-    }
-
-    if (quit_after_tick) {
-        fprintf(stderr, "[policy-pipe] Episode limit reached, exiting viewer.\n");
-        return -1;
+        if (v->state.terminal != TERMINAL_NONE) v->paused = 1;
     }
 
     float frame_dt = GetFrameTime();
@@ -2683,7 +2599,7 @@ static int fc_viewer_frame(ViewerState* v, int external) {
         v->combat_presentation, &v->state, deferred_deaths);
     fc_actor_animation_update_scene(
         &v->actor_animation, &v->state, v->anim_cache, v->tps, frame_dt,
-        !v->paused || v->policy_pipe, deferred_deaths);
+        !v->paused || v->policy_replay, deferred_deaths);
     if (v->objects)
         fc_animated_atlas_update(&v->objects->atlas, frame_dt);
     fc_combat_presentation_update(v->combat_presentation,
@@ -2737,8 +2653,8 @@ static void fc_viewer_present_pending(ViewerState* v) {
     memcpy(v->actions, v->pending_actions, sizeof(v->actions));
     fc_viewer_ingest_tick(v);
     if (fc_is_terminal(&v->state)) {
-        print_policy_episode_summary(v);
-        v->policy_episode_count++;
+        print_replay_episode_summary(v);
+        v->replay_episode_count++;
     }
     v->pending_frame = 0;
 }
@@ -2746,40 +2662,35 @@ static void fc_viewer_present_pending(ViewerState* v) {
 #endif
 
 int fc_viewer_main(int argc, char** argv) {
-    int screenshot_mode = 0;
     const char* screenshot_path = NULL;
-    int policy_pipe_flag = 0;
-    int policy_speed_flag = 1;
-    int policy_episode_limit_flag = 0;
-    int start_wave_flag = 0;
+    int start_wave = 0;
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--screenshot") == 0 && i+1 < argc) {
-            screenshot_mode = 1;
+        if (strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
             screenshot_path = argv[++i];
-        } else if (strcmp(argv[i], "--policy-pipe") == 0) {
-            policy_pipe_flag = 1;
-        } else if (strcmp(argv[i], "--speed") == 0 && i+1 < argc) {
-            policy_speed_flag = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--episodes") == 0 && i+1 < argc) {
-            policy_episode_limit_flag = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--start-wave") == 0 && i+1 < argc) {
-            start_wave_flag = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--start-wave") == 0 && i + 1 < argc) {
+            char* end;
+            long wave = strtol(argv[++i], &end, 10);
+            if (*end || wave < 1 || wave > 63) {
+                fprintf(stderr, "--start-wave requires a wave from 1 to 63.\n");
+                return EXIT_FAILURE;
+            }
+            start_wave = (int)wave;
+        } else {
+            int help = strcmp(argv[i], "--help") == 0;
+            fprintf(help ? stdout : stderr,
+                "Usage: %s [--start-wave 1..63] [--screenshot FILE]\n"
+                "For policy replay, use the native trainer: ./puffer eval CHECKPOINT\n",
+                argv[0]);
+            return help ? EXIT_SUCCESS : EXIT_FAILURE;
         }
     }
-    ViewerState* v = fc_viewer_create(policy_pipe_flag);
+    ViewerState* v = fc_viewer_create(0);
     if (!v) return EXIT_FAILURE;
-    v->policy_episode_limit = policy_episode_limit_flag;
-    v->start_wave = start_wave_flag;
-    if (v->policy_pipe) set_policy_replay_speed(v, policy_speed_flag);
+    v->start_wave = start_wave;
     reset_ep(v);
-    if (v->policy_pipe) {
-        v->paused = 0;
-        fprintf(stderr, "[policy-pipe] Mode active. Reading actions from stdin.\n");
-        write_obs_to_pipe(v);
-    }
     int frame_count = 0;
     while (fc_viewer_frame(v, 0) >= 0) {
-        if (screenshot_mode && ++frame_count == 6) {
+        if (screenshot_path && ++frame_count == 6) {
             TakeScreenshot(screenshot_path);
             break;
         }

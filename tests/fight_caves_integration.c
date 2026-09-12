@@ -93,6 +93,44 @@ static void checked_step(FightCaves* env) {
     }
 }
 
+static void native_config_test(void) {
+    Ini ini = {0};
+    puf_ini_load_env(&ini, "fight_caves", 0, NULL);
+    const struct { const char* section; const char* key; double value; } expected[] = {
+        {"base", "seed", 73}, {"base", "cudagraphs", 1},
+        {"base", "reset_every_horizon", 0}, {"base", "async", 1},
+        {"vec", "total_agents", 4096}, {"vec", "num_buffers", 2},
+        {"vec", "num_threads", 16}, {"policy", "hidden_size", 512},
+        {"policy", "num_layers", 3}, {"train", "total_timesteps", 750000000},
+        {"train", "horizon", 256}, {"train", "minibatch_size", 32768},
+        {"train", "momentum", 0.9832670364021693}, {"train", "vtrace", 1},
+        {"train", "vtrace_rho_clip", 2.0},
+        {"train", "vtrace_c_clip", 0.9746667741536915},
+    };
+    for (size_t i = 0; i < sizeof(expected) / sizeof(expected[0]); i++)
+        assert(puf_ini_get(&ini, expected[i].section, expected[i].key) == expected[i].value);
+    assert(strcmp(puf_ini_get_str(&ini, "sweep", "metric"), "jad_kill_rate") == 0);
+    int agents = (int)puf_ini_get(&ini, "vec", "total_agents");
+    int horizon = (int)puf_ini_get(&ini, "train", "horizon");
+    int minibatch = (int)puf_ini_get(&ini, "train", "minibatch_size");
+    assert(minibatch % horizon == 0 && agents % (minibatch / horizon) == 0);
+    assert(horizon % 8 == 0 && minibatch <= agents * horizon);
+    puf_ini_free(&ini);
+
+    /* Native CLI overrides must apply after the environment file. */
+    char* args[] = {"--train.total_timesteps=100_000_000", "--train.momentum=0.95",
+                   "--train.vtrace=0", "--base.reset_every_horizon=1"};
+    puf_ini_load_env(&ini, "fight_caves", 4, args);
+    assert(puf_ini_get(&ini, "train", "total_timesteps") == 100000000);
+    assert(puf_ini_get(&ini, "train", "momentum") == 0.95);
+    assert(puf_ini_get(&ini, "train", "vtrace") == 0);
+    assert(puf_ini_get(&ini, "base", "reset_every_horizon") == 1);
+    assert(puf_ini_get(&ini, "env", "w_correct_danger_prayer") == 0);
+    assert(puf_ini_get(&ini, "env", "obs_ablate_incoming_aggregates") == 1);
+    puf_ini_free(&ini);
+    puts("native config: merged settings, batch geometry and CLI precedence passed");
+}
+
 static void init_and_config_test(void) {
     Dict empty = {0};
     Env* probe = calloc(1, sizeof(*probe));
@@ -182,7 +220,30 @@ static uint32_t digest(uint32_t hash, const void* data, size_t size) {
     return hash;
 }
 
+static void replay_controls_test(FightCaves* env) {
+    ViewerState* v = env->viewer;
+    assert(v->policy_replay);
+    uint32_t hash = fc_state_hash(&v->state);
+    queue_player_tile_request(v, 20, 20, 0, 0);
+    queue_player_attack_request(v, 0, 0, 0);
+    use_inventory_slot(v, 0);
+    viewer_jump_to_wave(v, 63);
+    toggle_godmode(v);
+    assert(v->pending_tile_x == -1 && v->pending_attack_npc == -1);
+    assert(!v->godmode && fc_state_hash(&v->state) == hash);
+    v->paused = 1;
+    assert(fc_viewer_frame(v, 1) == 0);
+    v->step_once = 1;
+    assert(fc_viewer_frame(v, 1) == 1);
+    assert(fc_viewer_frame(v, 1) == 0);
+    assert(fc_state_hash(&v->state) == hash);
+    assert(fc_state_hash(&env->state) == hash);
+    v->paused = 0;
+    puts("native replay controls: read-only gameplay, pause and single-step passed");
+}
+
 int main(int argc, char** argv) {
+    native_config_test();
     init_and_config_test();
     terminal_and_log_test();
     int graphical = argc > 1 && strcmp(argv[1], "--render") == 0;
@@ -198,6 +259,7 @@ int main(int argc, char** argv) {
     int episodes = 0;
     if (graphical) {
         puf_render(rendered);
+        replay_controls_test(rendered);
         rendered->viewer->tps = 60.0f;
     } else {
         rendered->viewer = calloc(1, sizeof(*rendered->viewer));

@@ -15,7 +15,7 @@ endif()
 set(RAYLIB_ROOT "${RAYLIB_ROOT}" CACHE PATH "Raylib distribution root")
 if(NOT EXISTS "${RAYLIB_ROOT}/include/raylib.h" OR
    NOT EXISTS "${RAYLIB_ROOT}/lib/libraylib.a")
-    message(FATAL_ERROR "Raylib unavailable at ${RAYLIB_ROOT}. Run ./build.sh fight_caves --fast")
+    message(FATAL_ERROR "Raylib unavailable at ${RAYLIB_ROOT}. Run ./build.sh fight_caves --cpu")
 endif()
 
 add_executable(fc_viewer viewer.c)
@@ -35,6 +35,7 @@ endif()
 
 # Explicit graphical regression target; ordinary viewer builds do not run it.
 add_executable(fc_viewer_tests EXCLUDE_FROM_ALL "${PUFFERLIB_ROOT}/tests/fight_caves.c")
+target_compile_options(fc_viewer_tests PRIVATE -UNDEBUG)
 target_compile_definitions(fc_viewer_tests PRIVATE FC_VIEWER_TEST)
 target_include_directories(fc_viewer_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}" "${RAYLIB_ROOT}/include")
@@ -43,6 +44,15 @@ target_link_libraries(fc_viewer_tests PRIVATE ${FC_VIEWER_TEST_LIBRARIES})
 
 add_executable(fc_integration_tests EXCLUDE_FROM_ALL
     "${PUFFERLIB_ROOT}/tests/fight_caves_integration.c")
+# These tests use assert(); keep checks enabled in Release builds too.
+target_compile_options(fc_integration_tests PRIVATE -UNDEBUG)
 target_include_directories(fc_integration_tests PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}" "${RAYLIB_ROOT}/include")
+    "${PUFFERLIB_ROOT}/src" "${CMAKE_CURRENT_SOURCE_DIR}" "${RAYLIB_ROOT}/include")
 target_link_libraries(fc_integration_tests PRIVATE ${FC_VIEWER_TEST_LIBRARIES})
+
+add_executable(fc_cpu_tests EXCLUDE_FROM_ALL
+    "${PUFFERLIB_ROOT}/tests/fight_caves_cpu.c" binding.c)
+target_compile_options(fc_cpu_tests PRIVATE -UNDEBUG)
+target_include_directories(fc_cpu_tests PRIVATE
+    "${PUFFERLIB_ROOT}/src" "${CMAKE_CURRENT_SOURCE_DIR}" "${RAYLIB_ROOT}/include")
+target_link_libraries(fc_cpu_tests PRIVATE ${FC_VIEWER_TEST_LIBRARIES})

@@ -4,9 +4,8 @@ Normal users do not need a separate setup command. Every standard Fight Caves
 build installs/verifies the pinned bundles automatically:
 
 ```bash
-./build.sh fight_caves          # Native CUDA backend, also ready for puffer eval
-./build.sh fight_caves --cpu    # CPU/PyTorch backend
-./build.sh fight_caves --fast   # Playable ./fight_caves executable
+./build.sh fight_caves          # Native ./puffer train/eval executable
+./build.sh fight_caves --cpu    # Manual play/CPU replay via ./fight_caves (no CUDA)
 ```
 
 The first build downloads the archives named in `asset_manifest.json` from the
