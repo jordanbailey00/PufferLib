@@ -4,8 +4,9 @@ A native C Fight Caves environment for PufferLib 5.0, with all 63 waves,
 a playable Raylib viewer, and native checkpoint replay. Training and the viewer
 share the same simulation.
 
-Build, training, checkpoint replay and clean-checkout setup have been tested in
-official PufferTank 5.0. Full-length learning benchmarks for 5.0 are still pending.
+The current configuration is `c303_0056`: a 500M-step native training run selected
+for Jad completion and consistency. See [baseline.md](../../baseline.md) for
+multi-seed results, the frozen study runtime, and current-upstream validation.
 
 ## Build and assets
 
@@ -34,15 +35,11 @@ The executable has Fight Caves compiled in and reads `config/fight_caves.ini`.
 Rebuild when selecting a different environment. Old Python trainer and W&B
 commands are not supported by this port.
 
-The configuration uses 750M timesteps, seed 73, 4,096 agents, two buffers,
-16 threads, a 256-step horizon, 32,768-step minibatches, and a 512-wide,
-three-layer policy. Supported learning/reward settings are retained from the
-previous configuration. Native 5.0 uses `momentum`, explicit `vtrace=1`,
-episode-boundary recurrent resets (`reset_every_horizon=0`), and
-actor/learner pipelining (`async=1`). This is a migrated starting configuration,
-not a claim of identical learning results or a newly tuned 5.0 configuration.
-Override the budget without editing the INI with, for example,
-`./puffer train --train.total_timesteps=100000000`.
+The main INI pins the selected hyperparameters, 4,096 agents, a 256-step horizon,
+32,768-step minibatches, and a 512-wide, three-layer policy. Native training uses
+`momentum`, V-trace, synchronous execution (`async=0`), and recurrent-state resets
+at each horizon (`reset_every_horizon=1`). The requested 500M budget becomes
+499,122,176 steps after rounding down to complete rollouts.
 
 The environment reports episode averages for `zero_progress_ticks`,
 `wave_reached`, `wrong_prayer_hits`, `reached_wave_63`, `jad_kill_rate`,
@@ -153,8 +150,8 @@ batched. No W&B integration or legacy Python trainer has been added.
 ## Official PufferTank 5.0
 
 Use [PufferTank's 5.0 branch](https://github.com/PufferAI/PufferTank/tree/5.0),
-not the 4.0 image. At validation time the 5.0 image tag was not published; build
-the official Dockerfile locally:
+with the official Dockerfile. The following is the source-build procedure used
+for the recorded validation:
 
 ```bash
 git clone --branch 5.0 https://github.com/PufferAI/PufferTank.git PufferTank-5.0
@@ -200,104 +197,87 @@ python3 ocean/fight_caves/tools.py setup --all
 python3 ocean/fight_caves/tools.py setup --all --verify-only
 ```
 
+The installed asset directories are ignored by Git. For an explicit reinstall,
+use `python3 ocean/fight_caves/tools.py setup --all --force`.
+Development overrides are `FC_COLLISION_PATH`, `FC_MOVEMENT_PATH`, `FC_LOS_PATH`,
+`FC_ASSET_ROOT`, and `FC_REPO_ROOT`; standard commands run from the repository root.
+
 OSRS assets are distributed separately and are not covered by PufferLib's
 software license; see `resources/fight_caves/ASSET_NOTICE.md`.
 
-## Maintainer checks
+## Tests and maintenance
 
-`./fight_caves --benchmark` runs a headless random-action smoke test.
-The following diagnostics are optional; normal builds still install/verify
-assets automatically.
+With pytest and the normal CPU build dependencies installed:
 
 ```bash
-python3 ocean/fight_caves/tools.py preflight --mode cpu
-python3 ocean/fight_caves/tools.py preflight --mode native
+python3 -m pytest -q tests/test_fight_caves_integration.py
+# Include graphical regressions (requires DISPLAY or xvfb-run):
+FC_TEST_RENDER=1 python3 -m pytest -q tests/test_fight_caves_integration.py
+```
+
+The suite builds a fresh CPU executable in pytest's temporary directory and
+installs/verifies assets through the standard build. It checks the asset installer,
+reproducible release bundles, compiled metadata, invalid checkpoints, CPU replay,
+and three C suites: simulation/adapter, CPU inference, and independent C/C++
+linkage. The simulation suite includes wave/equipment/analytics fixtures,
+observations, masks, terminal rewards, autoreset, metrics and viewer snapshots.
+The CPU suite checks recurrent-state carry and reset. Graphical checks also cover
+replay controls, picking/click feedback and equipment appearance.
+
+CC/CXX select the C and C++ compilers (defaults: clang/clang++). Requested native
+or graphical checks fail when prerequisites are missing. Only the graphical
+case is skipped by default; set `FC_TEST_RENDER=1` to require it. No GPU training
+runs in pytest. CMake and the old shell runner are no longer needed. The
+stdlib acceptance runner below and pytest share the same C compilation recipe.
+
+Useful standalone diagnostics:
+
+```bash
+./fight_caves --benchmark
 ./fight_caves --contract
 python3 ocean/fight_caves/tools.py contract
 ```
 
-`cpu` checks the C/OpenMP and graphics build prerequisites; `native` also
-checks for NVCC and ccache. Native preflight is a compiler/assets check, not a
-replacement for a complete CUDA/NCCL build or GPU runtime test. Neither mode
-requires Torch, NumPy, pybind11, a Python Puffer package, or a graphical session.
-`viewer-runtime` separately checks installed assets and display access.
-That optional diagnostic uses `xdpyinfo` (`x11-utils` on Ubuntu); it is not a
-runtime dependency. The full acceptance test checks the actual viewer window
-instead, so it works with the official PufferTank dependencies alone.
+The Python contract command validates the compiled CPU executable's dimensions,
+versions and loadout, and reports its SHA-256 and metadata fingerprint. Use
+`--executable PATH` or `--active-loadout NAME` when needed. This describes that
+executable, not an arbitrary CUDA trainer or checkpoint. Builds and tests now
+check dependencies directly; the separate `preflight` command has been removed.
 
-The contract command needs the CPU executable built above. It reports its
-compiled observation/action dimensions, version identifiers and loadout without
-loading assets or opening a window. The Python helper adds consistency checks,
-an exact metadata fingerprint, and the executable's path/SHA-256. Use
-`--executable PATH` to inspect a different Fight Caves CPU build, or
-`--active-loadout FC_LOADOUT_SOTA_TBOW` to assert the expected compiled loadout.
-This describes **that executable**, not an arbitrary `./puffer` build or
-checkpoint. It does not certify old checkpoint compatibility.
+Release bundles can still be generated reproducibly with
+`python3 ocean/fight_caves/tools.py bundle --help`. The installer, bundle generator,
+and compiled-contract inspection remain in this one helper.
 
-With pytest installed, run the explicit maintenance tests:
+### Disposable-checkout acceptance
 
-```bash
-bash tests/fight_caves.sh test --core
-bash tests/fight_caves.sh test --adapter
-bash tests/fight_caves.sh test --all
-```
-
-`--core` covers asset/tooling fixtures and core regressions. `--adapter` also
-builds the CPU executable, checks its contract and checkpoint failures, and
-tests native CPU inference/reset plumbing and the 5.0 adapter.
-`--all` additionally needs CMake and a working display (or xvfb-run) for the
-graphical regressions. The adapter tests also require CMake. These commands
-do not train, and they are not run automatically on ordinary builds.
-
-The old Python backend tests, checkpoint-sidecar compatibility helpers, and
-Python clean-clone installer have been removed. Release bundles are still built with
-`python3 ocean/fight_caves/tools.py bundle`; see `bundle --help` for its
-source/output arguments. No asset republishing is required for this migration.
-
-### Clean-clone acceptance
-
-From a Fight Caves-enabled checkout in official PufferTank 5.0 (or an equivalent
-Linux/CUDA environment with display access):
+In a Linux/CUDA environment with graphics access, run explicitly:
 
 ```bash
 unset __GLX_VENDOR_LIBRARY_NAME
-bash tests/fight_caves.sh clean-clone
+python3 -S tests/fight_caves_e2e.py clean-clone
+# Include this checkout's uncommitted source changes:
+python3 -S tests/fight_caves_e2e.py clean-clone --working-tree
 ```
 
-This clones the local committed revision into a retained temporary directory.
-It does not install Python packages or change the source checkout. It downloads
-assets/Raylib through the normal build, builds both executables, runs the C and
-graphical regressions, captures the manual viewer, trains four full batches
-(4,194,304 steps with this INI), and reloads checkpoints on CPU and GPU. It also
-checks native logs and clear failures for missing maps, a missing viewer asset,
-a missing compiler/display, and missing/truncated checkpoints. The training
-budget, output paths, checkpoint interval and final-evaluation switch are the
-only training overrides. This is an integration test, not a policy benchmark.
+This stdlib-only runner clones into a retained temporary directory, downloads
+assets/Raylib, builds the native and CPU executables, runs the C suites (including
+NVCC/C linkage), and exercises the graphical viewer. It trains four full batches
+(4,194,304 steps with this INI), verifies native logs and two checkpoints, then
+reloads them on CPU and GPU. It checks clear failures for missing assets,
+compiler/display and missing/truncated checkpoints. This is a functional
+integration check, not a policy-performance benchmark.
 
-No GPU/display/build check is silently skipped. Missing requirements or a timeout
-fail the command; command logs and `build/fight-caves-e2e/report.json` are kept in
-the disposable clone on success or failure. Screenshots and checkpoints stay
-there too. The source/configuration digest must remain unchanged; only upstream's
-tracked prebuilt `puffer` is excluded because the normal build replaces it.
-This acceptance command uses Python's standard library, not pytest.
+No GPU, display or build check is silently skipped. Logs, screenshots, checkpoints
+and `build/fight-caves-e2e/report.json` remain in the disposable checkout on success
+or failure. The source/configuration digest must remain unchanged; upstream's
+tracked prebuilt `puffer` is excluded because building replaces it.
 
-Before publishing uncommitted changes, opt into testing them explicitly:
+A dirty local source is rejected unless `--working-tree` is explicit. That option
+applies the tracked diff and copies non-ignored untracked sources, then verifies
+the source digest. Existing builds, assets, virtualenvs and historical experiment
+outputs are not copied. It does not commit or push.
 
-```bash
-bash tests/fight_caves.sh clean-clone --working-tree
-```
-
-That makes a real Git clone, then applies the current tracked diff and copies
-non-ignored untracked source files. It verifies their content digest against the
-source. It does not copy installed assets, ignored build outputs, or a virtualenv,
-and it makes no commits. Its `source.json` records that a working-tree snapshot
-was applied; this is not a claim that the remote branch already contains it.
-Without this flag, a dirty local source is rejected rather than silently testing
-an older commit.
-
-`--source PATH_OR_GIT_URL --ref BRANCH_OR_COMMIT` selects another committed source.
-`--prepare-only` stops after cloning, useful for moving the isolated checkout
-into PufferTank. Inside that **fresh disposable copy**, run
-`bash tests/fight_caves.sh checkout`. This refuses existing build/asset/virtualenv
-directories and must not be used to validate the development tree in place.
-All these checks are explicitly invoked; ordinary builds do not run them.
+`--source PATH_OR_GIT_URL --ref REF` selects another committed source.
+`--prepare-only` prepares the clone for validation elsewhere, such as PufferTank.
+Inside that fresh disposable copy, run `python3 -S tests/fight_caves_e2e.py checkout`.
+It refuses a checkout with existing build/assets/virtualenv directories.

@@ -1,6 +1,6 @@
 """Explicit native 5.0 acceptance test; stdlib only, no dependency installation.
 
-Run via tests/fight_caves.sh. All downloads, builds and faults belong to an
+Run python3 -S tests/fight_caves_e2e.py clean-clone. Downloads, builds and faults belong to an
 isolated checkout. Keep its logs/checkpoints on success AND failure.
 """
 import argparse
@@ -101,6 +101,52 @@ def read_run(path, steps):
     return ini, metrics
 
 
+def build_native_tests(root, output, run, *, cuda=False):
+    """Shared compiler recipe for pytest and stdlib-only checkout acceptance."""
+    root, output = Path(root).resolve(), Path(output).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    cc = shlex.split(os.environ.get("CC", "clang"))
+    cxx = shlex.split(os.environ.get("CXX", "clang++"))
+    for compiler in (cc, cxx):
+        require(compiler and shutil.which(compiler[0]), "Install clang/clang++ or set CC/CXX")
+    raylib = root / ("raylib-5.5_macos" if sys.platform == "darwin" else "raylib-5.5_linux_amd64")
+    require((raylib / "lib/libraylib.a").is_file(), "Run ./build.sh fight_caves --cpu to install Raylib")
+    flags = ["-O2", "-Wall", "-UNDEBUG", "-D_POSIX_C_SOURCE=200809L",
+             "-DPLATFORM_DESKTOP", f"-I{root / 'src'}", f"-I{root / 'ocean/fight_caves'}",
+             f"-I{raylib / 'include'}"]
+    libs = [str(raylib / "lib/libraylib.a"), "-lm", "-lpthread"]
+    if sys.platform == "darwin":
+        for framework in ("Cocoa", "IOKit", "CoreVideo", "OpenGL"):
+            libs += ["-framework", framework]
+    else:
+        libs += ["-ldl", "-lGL"]
+    binding, probe, driver = (output / name for name in ("binding.o", "layout.o", "driver.o"))
+    linkage = root / "tests/fight_caves_linkage.c"
+    run("binding-build", *cc, "-std=c11", *flags, "-c",
+        root / "ocean/fight_caves/binding.c", "-o", binding)
+    run("layout-build", *cc, "-std=c11", *flags, "-c", linkage, "-o", probe)
+    run("driver-build", *cxx, "-x", "c++", "-std=c++17", *flags,
+        "-DFC_LINKAGE_DRIVER", "-c", linkage, "-o", driver)
+    suites = {name: output / name for name in ("simulation", "cpu", "linkage")}
+    run("simulation-build", *cc, "-std=c11", *flags,
+        root / "tests/test_fight_caves_simulation.c", *libs, "-o", suites["simulation"])
+    run("cpu-build", *cc, "-std=c11", *flags, root / "tests/fight_caves_cpu.c",
+        binding, *libs, "-o", suites["cpu"])
+    run("linkage-build", *cxx, driver, probe, binding, *libs, "-o", suites["linkage"])
+    if cuda:
+        cuda_home = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH")
+        nvcc = str(Path(cuda_home) / "bin/nvcc") if cuda_home else "nvcc"
+        require(shutil.which(nvcc), "NVCC is required for native checkout acceptance")
+        cuda_driver = output / "cuda-driver.o"
+        suites["cuda-linkage"] = output / "cuda-linkage"
+        nvcc_flags = [flag for flag in flags if flag != "-Wall"]
+        run("cuda-driver-build", nvcc, "-x", "cu", "-std=c++17", *nvcc_flags,
+            "-DFC_LINKAGE_DRIVER", "-c", linkage, "-o", cuda_driver)
+        run("cuda-linkage-build", nvcc, cuda_driver, probe, binding, *libs,
+            "-o", suites["cuda-linkage"])
+    return suites
+
+
 class Acceptance:
     def __init__(self, root):
         self.root = root
@@ -150,18 +196,17 @@ class Acceptance:
 
     def validate(self):
         require(sys.platform == "linux", "full native acceptance requires Linux/CUDA (use PufferTank 5.0)")
-        for command in ("git", "clang", "cmake", "ccache", "python3", "curl", "tar"):
+        for command in ("git", "ccache", "python3", "curl", "tar"):
             require(shutil.which(command), f"missing {command}; use official PufferTank 5.0 dependencies")
         require(self.env.get("DISPLAY"), "DISPLAY is required; provide X11 access or explicitly use xvfb-run")
         # No core dumps for deliberate native assertion failures in this test process.
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         tool = [sys.executable, "-S", "ocean/fight_caves/tools.py"]
-        self.run("missing-assets", *tool, "preflight", "--mode", "core",
-                 expected="Install assets with:")
+        self.run("missing-assets", *tool, "setup", "--all", "--verify-only",
+                 expected="missing runtime/")
         self.run("build-native", "./build.sh", "fight_caves", timeout=1800)
         self.run("build-cpu", "./build.sh", "fight_caves", "--cpu", timeout=600)
         self.run("assets-verified", *tool, "setup", "--all", "--verify-only")
-        self.run("native-preflight", *tool, "preflight", "--mode", "native")
         self.run("contract", *tool, "contract")
         # Test the real window; do not require the optional xdpyinfo diagnostic.
         # Raylib TakeScreenshot writes a basename in the current directory.
@@ -170,17 +215,11 @@ class Acceptance:
         require(screenshot.is_file() and screenshot.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"),
                 "manual viewer did not save its screenshot")
         screenshot.rename(self.output / screenshot.name)
-        self.run("core-build", "clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
-                 "-Iocean/fight_caves", "tests/fight_caves.c", "-lm", "-o", self.output / "core")
-        self.run("core", self.output / "core")
-        cmake = self.output / "cmake"
-        self.run("cmake", "cmake", "-S", "ocean/fight_caves", "-B", cmake, "-DCMAKE_BUILD_TYPE=Release")
-        self.run("test-build", "cmake", "--build", cmake, "--target", "fc_integration_tests",
-                 "fc_cpu_tests", "fc_viewer_tests", "--parallel", "2", timeout=600)
-        for name in ("fc_integration_tests", "fc_cpu_tests", "fc_viewer_tests"):
-            self.run(name, cmake / name)
-        (self.root / "equipment-appearance.png").rename(self.output / "equipment-appearance.png")
-        self.run("render-integration", cmake / "fc_integration_tests", "--render")
+        suites = build_native_tests(self.root, self.output, self.run, cuda=True)
+        for name, binary in suites.items():
+            self.run(name, binary)
+        render_env = dict(self.env, FC_TEST_OUTPUT=str(self.output / "equipment-appearance.png"))
+        self.run("render", suites["simulation"], "--render", env=render_env)
 
         for name in ("collision", "movement", "los"):
             asset = self.root / f"resources/fight_caves/runtime/fightcaves.{name}"
@@ -200,8 +239,8 @@ class Acceptance:
         finally:
             saved.rename(asset)
         missing_cc = dict(self.env, CC="fight-caves-intentionally-missing-compiler")
-        self.run("missing-compiler", *tool, "preflight", "--mode", "core", env=missing_cc,
-                 expected="required command 'fight-caves-intentionally-missing-compiler' is unavailable")
+        self.run("missing-compiler", "./build.sh", "fight_caves", "--cpu", env=missing_cc,
+                 expected="fight-caves-intentionally-missing-compiler")
         self.run("missing-display", "./fight_caves", env=dict(self.env, DISPLAY=""),
                  expected="no graphical DISPLAY is configured")
 

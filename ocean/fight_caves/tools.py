@@ -8,9 +8,7 @@ from dataclasses import dataclass
 import gzip
 import hashlib
 import json
-import os
 from pathlib import Path, PurePosixPath
-import shlex
 import shutil
 import subprocess
 import sys
@@ -430,203 +428,6 @@ def bundle_main() -> int:
     return 0
 
 
-# Dependency preflight
-
-def command_name(value: str | None, default: str) -> str:
-    words = shlex.split(value or default)
-    return words[0] if words else default
-
-
-def command_words(value: str | None, default: str) -> list[str]:
-    words = shlex.split(value or default)
-    return words or [default]
-
-
-def require_command(errors: list[str], name: str, purpose: str) -> None:
-    if shutil.which(name) is None:
-        errors.append(f"required command '{name}' is unavailable ({purpose})")
-
-
-def verify_assets(errors: list[str], names: tuple[str, ...]) -> None:
-    try:
-        manifest = load_manifest(DEFAULT_MANIFEST)
-        for name in names:
-            bundle = manifest["bundles"].get(name)
-            if not isinstance(bundle, dict):
-                errors.append(f"asset manifest has no {name} bundle")
-                continue
-            failures = verify_tree(
-                RESOURCE_ROOT, bundle, exact=False
-            )
-            if failures:
-                errors.append(f"{name} asset bundle is invalid: {failures[0]}")
-    except Exception as exc:
-        errors.append(f"could not verify Fight Caves assets: {exc}")
-
-
-def check_linux_viewer_link(
-    errors: list[str], compiler_value: str | None
-) -> None:
-    if sys.platform != "linux":
-        return
-    x11_header = Path("/usr/include/X11/Xlib.h")
-    if not x11_header.is_file():
-        errors.append(
-            "X11 development headers are unavailable; on Ubuntu install "
-            "libx11-dev libxrandr-dev libxi-dev libxcursor-dev libxinerama-dev"
-        )
-        return
-    compiler = command_words(compiler_value, "clang")
-    source = "int main(void) { return 0; }\n"
-    try:
-        with tempfile.TemporaryDirectory(prefix="fight-caves-preflight-") as value:
-            root = Path(value)
-            result = subprocess.run(
-                [*compiler, "-x", "c", "-", "-o", str(root / "link-test"),
-                 "-lGL", "-lX11"],
-                input=source,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-            )
-    except OSError as exc:
-        errors.append(
-            f"could not run viewer link check with {' '.join(compiler)}: {exc}"
-        )
-        return
-    if result.returncode != 0:
-        detail = result.stderr.strip().splitlines()
-        suffix = f": {detail[-1]}" if detail else ""
-        errors.append(
-            "OpenGL/X11 development libraries cannot be linked; on Ubuntu "
-            "install libgl1-mesa-dev and the X11 development packages"
-            f"{suffix}"
-        )
-
-
-def check_openmp(errors: list[str], compiler_value: str | None) -> None:
-    compiler = command_words(compiler_value, "clang")
-    flags = ["-fopenmp"]
-    try:
-        if sys.platform == "darwin":
-            prefix = subprocess.check_output(
-                ["brew", "--prefix", "libomp"], text=True, stderr=subprocess.PIPE
-            ).strip()
-            flags = ["-Xclang", "-fopenmp", f"-I{prefix}/include",
-                     f"-L{prefix}/lib", "-lomp"]
-        with tempfile.TemporaryDirectory(prefix="fight-caves-openmp-") as value:
-            result = subprocess.run(
-                [*compiler, "-x", "c", "-", *flags, "-o", str(Path(value) / "test")],
-                input="#include <omp.h>\nint main(void) { return omp_get_max_threads() < 1; }\n",
-                text=True, capture_output=True, check=False,
-            )
-    except (OSError, subprocess.CalledProcessError) as exc:
-        errors.append(f"could not run C OpenMP check: {exc}")
-        return
-    if result.returncode != 0:
-        errors.append(
-            "C compiler cannot build and link OpenMP; install libomp-dev "
-            "(Ubuntu) or brew install libomp (macOS), or select a compatible CC:\n"
-            + result.stderr.strip()
-        )
-
-
-def check_graphical_display(errors: list[str]) -> None:
-    if sys.platform != "linux":
-        return
-    display = os.environ.get("DISPLAY")
-    if not display:
-        errors.append(
-            "no graphical DISPLAY is configured; run under xvfb-run for "
-            "headless validation or launch from a graphical session"
-        )
-        return
-    xdpyinfo = shutil.which("xdpyinfo")
-    if xdpyinfo is None:
-        errors.append(
-            "'xdpyinfo' is required to validate the X11 display; on Ubuntu "
-            "install x11-utils"
-        )
-        return
-    result = subprocess.run(
-        [xdpyinfo, "-display", display],
-        text=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    if result.returncode != 0:
-        errors.append(
-            f"X11 display {display!r} is not accessible; run under xvfb-run "
-            "for headless validation or fix the display authorization"
-        )
-
-
-def preflight_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Check Fight Caves build dependencies and installed assets."
-    )
-    parser.add_argument(
-        "--mode",
-        choices=("core", "cpu", "native", "viewer", "viewer-runtime"),
-        required=True,
-        help="build path to validate",
-    )
-    return parser.parse_args()
-
-
-def preflight_main() -> int:
-    return run_preflight(preflight_args().mode)
-
-
-def run_preflight(mode: str) -> int:
-    errors: list[str] = []
-    if sys.version_info < (3, 10):
-        errors.append(
-            f"Python 3.10 or newer is required; found {sys.version.split()[0]}"
-        )
-
-    if mode not in ("core", "cpu", "native", "viewer", "viewer-runtime"):
-        raise ValueError(f"unsupported preflight mode: {mode}")
-    compiler = command_name(os.environ.get("CC"), "clang")
-    if mode != "viewer-runtime":
-        require_command(errors, compiler, "C compilation")
-
-    verify_assets(errors, ("core",) if mode == "core" else ("core", "viewer"))
-    if mode in ("cpu", "native"):
-        check_openmp(errors, os.environ.get("CC"))
-    if mode in ("cpu", "native", "viewer"):
-        check_linux_viewer_link(errors, os.environ.get("CC"))
-    if mode == "native":
-        cuda_home = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH")
-        nvcc = str(Path(cuda_home) / "bin" / "nvcc") if cuda_home else "nvcc"
-        require_command(errors, nvcc, "native CUDA compilation; set CUDA_HOME if needed")
-        require_command(errors, "ccache", "native build.sh compiler wrapper")
-    if mode == "viewer":
-        require_command(errors, "cmake", "optional standalone viewer/test build")
-    if mode == "viewer-runtime":
-        check_graphical_display(errors)
-
-    if errors:
-        print("Fight Caves preflight failed:", file=sys.stderr)
-        for error in errors:
-            print(f"  - {error}", file=sys.stderr)
-        if any("asset bundle" in error or "verify Fight Caves assets" in error
-               for error in errors):
-            print(
-                "Install assets with: python3 ocean/fight_caves/tools.py setup --all",
-                file=sys.stderr,
-            )
-        return 1
-
-    print(f"Fight Caves {mode} preflight passed.")
-    if mode == "native":
-        print("Compiler/assets checks only. Run ./build.sh fight_caves to verify "
-              "the complete CUDA/NCCL build; this check does not test GPU runtime access.")
-    return 0
-
-
 # Compiled environment inspection (not checkpoint compatibility)
 
 class ContractError(RuntimeError):
@@ -744,10 +545,10 @@ def contract_main() -> int:
 
 def main() -> int:
     commands = {"setup": setup_main, "bundle": bundle_main,
-                "preflight": preflight_main, "contract": contract_main}
+                "contract": contract_main}
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
         print("Usage: python3 ocean/fight_caves/tools.py "
-              "{setup,bundle,preflight,contract} [options]\n"
+              "{setup,bundle,contract} [options]\n"
               "Use COMMAND --help for command options.")
         return 0 if len(sys.argv) > 1 else 2
     command = sys.argv.pop(1)

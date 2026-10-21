@@ -1,3 +1,10 @@
+"""Fight Caves maintenance suite: assets, native C/C++ and CPU replay.
+
+Run python3 -m pytest -q tests/test_fight_caves_integration.py.
+Set FC_TEST_RENDER=1 to require the graphical checks too (DISPLAY or xvfb-run).
+Native prerequisites are required, never silently skipped. GPU training is
+reserved for the explicit disposable-checkout acceptance runner.
+"""
 from __future__ import annotations
 
 import configparser
@@ -8,6 +15,8 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import struct
 import subprocess
 import sys
 import tarfile
@@ -17,6 +26,50 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SETUP_DATA = REPO_ROOT / "ocean" / "fight_caves" / "tools.py"
+
+
+def native_command(label, *args, timeout=180, env=None):
+    result = subprocess.run(list(map(str, args)), cwd=REPO_ROOT,
+                            capture_output=True, text=True, timeout=timeout, env=env)
+    assert result.returncode == 0, f"{label}:\n{result.stdout}\n{result.stderr}"
+    return result.stdout
+
+
+@pytest.fixture(scope="module")
+def executable(tmp_path_factory):
+    path = tmp_path_factory.mktemp("fight-caves-cpu") / "fight_caves"
+    native_command("CPU build", "./build.sh", "fight_caves", path, "--cpu", timeout=600)
+    return path
+
+
+@pytest.fixture(scope="module")
+def native_suites(executable, tmp_path_factory):
+    output = tmp_path_factory.mktemp("fight-caves-native")
+    return load_e2e().build_native_tests(REPO_ROOT, output, native_command)
+
+
+@pytest.mark.parametrize("suite", ["simulation", "cpu", "linkage"])
+def test_native_suite(native_suites, suite):
+    native_command(suite, native_suites[suite])
+
+
+@pytest.mark.skipif(os.environ.get("FC_TEST_RENDER") != "1",
+                    reason="Set FC_TEST_RENDER=1 to require graphical validation")
+def test_graphical_suite(native_suites, tmp_path):
+    prefix = ["xvfb-run", "-a"] if shutil.which("xvfb-run") else []
+    assert prefix or os.environ.get("DISPLAY"), "Graphical tests require DISPLAY or xvfb-run"
+    screenshot = tmp_path / "equipment-appearance.png"
+    env = dict(os.environ, FC_TEST_OUTPUT=str(screenshot))
+    native_command("graphics", *prefix, native_suites["simulation"], "--render", env=env)
+    assert screenshot.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_built_executable_contract(executable):
+    tools = load_setup_data()
+    contract = tools.load_compiled_contract(executable)
+    tools.validate_compiled_contract(contract)
+    assert (contract["policy_obs_size"], contract["puffer_obs_size"],
+            contract["puffer_mask_size"], contract["puffer_action_dims"]) == (286, 320, 34, [17, 9, 8])
 
 
 def load_setup_data():
@@ -133,8 +186,12 @@ def test_install_bundle_is_verified_and_transactional(tmp_path, monkeypatch):
     assert installed.read_bytes() == payload
     assert setup_data.verify_tree(install_root, bundle, exact=True) == []
 
-    installed.write_bytes(b"corrupt")
-    assert "wrong size" in setup_data.verify_tree(install_root, bundle, exact=True)[0]
+    installed.write_bytes(b"x" * len(payload))
+    assert "checksum mismatch" in setup_data.verify_tree(install_root, bundle, exact=True)[0]
+    setup_data.install_bundle("core", bundle, force=False)
+    assert installed.read_bytes() == payload
+    monkeypatch.setattr(setup_data, "download", lambda *args: pytest.fail("valid assets must work offline"))
+    setup_data.install_bundle("core", bundle, force=False)
 
 
 def test_bad_archive_checksum_does_not_replace_existing_assets(tmp_path, monkeypatch):
@@ -213,43 +270,6 @@ def test_release_bundle_is_reproducible_and_installs(tmp_path, monkeypatch):
     tools.install_bundle("core", bundle, force=False)
     assert tools.verify_tree(root, bundle, exact=True) == []
     assert (root / "runtime/test.map").read_bytes() == source.read_bytes()
-
-
-@pytest.mark.parametrize("mode, missing", [("core", "clang"), ("cpu", "clang"), ("native", "ccache")])
-def test_preflight_reports_missing_commands_instead_of_continuing(mode, missing):
-    preflight = REPO_ROOT / "ocean" / "fight_caves" / "tools.py"
-    environment = os.environ.copy()
-    environment["PATH"] = ""
-    environment.pop("CC", None)
-    environment.pop("CXX", None)
-    result = subprocess.run(
-        [sys.executable, str(preflight), "preflight", "--mode", mode],
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    assert result.returncode != 0
-    assert f"required command '{missing}' is unavailable" in result.stderr
-
-@pytest.mark.parametrize("command", ["build-viewer", "play", "eval"])
-def test_retired_python_launch_commands_are_rejected(command):
-    result = subprocess.run(
-        [sys.executable, str(SETUP_DATA), command], cwd=REPO_ROOT,
-        capture_output=True, text=True,
-    )
-    assert result.returncode == 2
-    assert f"Unknown Fight Caves command: {command}" in result.stderr
-
-
-def test_standard_build_prepares_both_asset_bundles():
-    build = (REPO_ROOT / "build.sh").read_text()
-    branch = build.split('elif [ "$ENV" = "fight_caves" ]; then', 1)[1].split("elif ", 1)[0]
-    assert 'tools.py" setup --all' in branch
-    assert 'osrs_*|nethack|fight_caves)' in build
-    assert '-c "$SRC_DIR/binding.c" -o build/fight_caves_binding.o' in build
 
 
 @pytest.mark.parametrize("broken", [False, True])
@@ -360,46 +380,6 @@ def test_contract_identity_is_exact_not_a_legacy_migration(compiled_contract):
         assert tools.contract_identity(changed) != tools.contract_identity(compiled_contract)
 
 
-def test_native_preflight_checks_both_bundles_without_python_packages(monkeypatch):
-    tools = load_setup_data()
-    monkeypatch.setenv("CUDA_HOME", "/example/cuda")
-    checks = []
-    monkeypatch.setattr(tools, "verify_assets", lambda errors, names: checks.append(names))
-    monkeypatch.setattr(tools, "require_command",
-                        lambda errors, name, purpose: checks.append(name))
-    monkeypatch.setattr(tools, "check_openmp", lambda *args: None)
-    monkeypatch.setattr(tools, "check_linux_viewer_link", lambda *args: None)
-    assert tools.run_preflight("native") == 0
-    assert ("core", "viewer") in checks
-    assert "/example/cuda/bin/nvcc" in checks
-    assert "ccache" in checks
-    assert not {"python", "g++", "nvidia-smi"} & {c for c in checks if isinstance(c, str)}
-
-
-def test_cpu_preflight_checks_viewer_assets_but_not_cuda(monkeypatch):
-    tools = load_setup_data()
-    checks = []
-    monkeypatch.setattr(tools, "verify_assets", lambda errors, names: checks.append(names))
-    monkeypatch.setattr(tools, "require_command",
-                        lambda errors, name, purpose: checks.append(name))
-    monkeypatch.setattr(tools, "check_openmp", lambda *args: None)
-    monkeypatch.setattr(tools, "check_linux_viewer_link", lambda *args: None)
-    assert tools.run_preflight("cpu") == 0
-    assert ("core", "viewer") in checks
-    assert "ccache" not in checks
-    assert not any("nvcc" in c for c in checks if isinstance(c, str))
-
-
-@pytest.mark.parametrize("mode", ["cuda", "web"])
-def test_retired_preflight_modes_are_rejected(mode):
-    result = subprocess.run(
-        [sys.executable, str(SETUP_DATA), "preflight", "--mode", mode],
-        cwd=REPO_ROOT, capture_output=True, text=True,
-    )
-    assert result.returncode == 2
-    assert "invalid choice" in result.stderr
-
-
 ENV_ROOT = REPO_ROOT / "ocean" / "fight_caves"
 RESOURCE_ROOT = REPO_ROOT / "resources" / "fight_caves"
 
@@ -418,15 +398,6 @@ def test_config_contains_only_supported_native_settings():
         assert set(config[section]) <= set(default[section]), section
     assert not {"reset_state", "beta1", "beta2", "eps", "prio_alpha", "prio_beta0",
                 "expansion_factor"} & {key for section in config for key in config[section]}
-
-
-def test_environment_uses_flat_implementation_headers():
-    for name in ("simulation.h", "fight_caves.h", "assets.h", "ui.h", "render.h",
-                 "binding.c", "fight_caves.c", "viewer.c", "tools.py", "CMakeLists.txt"):
-        assert (ENV_ROOT / name).is_file()
-    assert not (ENV_ROOT / "sources.txt").exists()
-    assert '#include "simulation.h"' in (ENV_ROOT / "fight_caves.h").read_text()
-    assert 'void fc_step(' in (ENV_ROOT / "simulation.h").read_text()
 
 
 def test_asset_manifest_is_complete_and_pinned():
@@ -474,3 +445,77 @@ def test_fight_caves_sources_do_not_reference_local_development_trees():
                 continue
             for value in forbidden:
                 assert value not in text, f"{path} contains forbidden path marker {value!r}"
+
+
+FLOATS = 8 * (320 + 35) + 2 * 3 * 8 * 8
+
+def run(executable, *args):
+    return subprocess.run(
+        [str(executable), *map(str, args)], cwd=REPO_ROOT,
+        capture_output=True, text=True, timeout=30,
+    )
+
+
+def check(executable, path, *args):
+    return run(executable, "check", path, "--policy.hidden_size=8",
+               "--policy.num_layers=2", *args)
+
+
+def test_valid_cpu_checkpoint_and_two_episodes(executable, tmp_path):
+    path = tmp_path / "valid.bin"
+    path.write_bytes(b"\0" * (FLOATS * 4))
+    result = check(executable, path)
+    assert result.returncode == 0, result.stderr
+    assert f"file_floats={FLOATS}" in result.stdout
+    result = run(executable, "eval", path, "--headless", "--policy.hidden_size=8",
+                 "--policy.num_layers=2", "--base.eval_episodes=2")
+    assert result.returncode == 0, result.stderr
+    assert "CPU_EVAL env=fight_caves" in result.stdout
+    assert "games=2 " in result.stdout
+
+
+def test_manual_viewer_without_display_exits_cleanly(executable):
+    result = subprocess.run([str(executable)], cwd=REPO_ROOT,
+                            env=dict(os.environ, DISPLAY=""),
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 1, result.stderr
+    assert "no graphical DISPLAY is configured" in result.stderr
+    assert "Initializing raylib" not in result.stdout
+
+
+@pytest.mark.parametrize("kind", ["missing", "short", "long", "zip", "nan", "inf", "shape"])
+def test_invalid_checkpoints_fail_without_opening_viewer(executable, tmp_path, kind):
+    path = tmp_path / "invalid.bin"
+    data = b"\0" * (FLOATS * 4)
+    if kind == "short":
+        data = data[:-1]
+    elif kind == "long":
+        data += b"\0"
+    elif kind == "zip":
+        data = b"PK\x03\x04pytorch"
+    elif kind in ("nan", "inf"):
+        data = struct.pack("f", float(kind)) + data[4:]
+    elif kind == "shape":
+        data = data * 2
+    if kind != "missing":
+        path.write_bytes(data)
+    for mode in ("check", "eval"):
+        result = run(executable, mode, path, "--policy.hidden_size=8", "--policy.num_layers=2")
+        assert result.returncode != 0
+        assert "checkpoint rejected:" in result.stderr
+        assert "Fight Caves Viewer" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("args", [
+    [], ["latest"], ["missing.bin", "--policy.hidden_size=7"],
+    ["missing.bin", "--policy.hidden_size=999999999999"],
+    ["missing.bin", "--policy.hidden_size=8.5"],
+    ["missing.bin", "--policy.num_layers=0"],
+    ["missing.bin", "--headless", "--base.eval_episodes=0"],
+    ["missing.bin", "--base.seed=-1"], ["missing.bin", "--wandb"],
+])
+def test_invalid_cpu_replay_requests_fail(executable, args):
+    result = run(executable, "eval", *args)
+    assert result.returncode != 0
+    assert result.stderr
+    assert "CPU_EVAL" not in result.stdout
