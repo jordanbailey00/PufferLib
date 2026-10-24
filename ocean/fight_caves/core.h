@@ -871,20 +871,7 @@ typedef struct {
 #define FC_MOVE_DIM             17
 #define FC_MOVE_IDLE             0
 #define FC_MOVE_WALK_N           1
-#define FC_MOVE_WALK_NE          2
-#define FC_MOVE_WALK_E           3
-#define FC_MOVE_WALK_SE          4
-#define FC_MOVE_WALK_S           5
-#define FC_MOVE_WALK_SW          6
-#define FC_MOVE_WALK_W           7
-#define FC_MOVE_WALK_NW          8
 #define FC_MOVE_RUN_N            9
-#define FC_MOVE_RUN_NE          10
-#define FC_MOVE_RUN_E           11
-#define FC_MOVE_RUN_SE          12
-#define FC_MOVE_RUN_S           13
-#define FC_MOVE_RUN_SW          14
-#define FC_MOVE_RUN_W           15
 #define FC_MOVE_RUN_NW          16
 
 /* Direction offset tables (dx, dy) for walk actions 1-8 */
@@ -957,11 +944,9 @@ static const int FC_MOVE_DY[17] = {
  * the best reachable endpoint within ten tiles. If none exists, it is a no-op.
  */
 #define FC_MOVE_TARGET_X_DIM    65  /* 0=no-op, 1-64=tile x 0-63 */
-#define FC_MOVE_TARGET_X_NONE    0
 
 /* Head 6: MOVE_TARGET_Y — BFS pathfinding target Y coordinate */
 #define FC_MOVE_TARGET_Y_DIM    65  /* 0=no-op, 1-64=tile y 0-63 */
-#define FC_MOVE_TARGET_Y_NONE    0
 
 /* Head dimension array (for binding.c) */
 #define FC_ACT_SIZES { FC_MOVE_DIM, FC_ATTACK_DIM, FC_PRAYER_DIM, FC_EAT_DIM, FC_DRINK_DIM, FC_MOVE_TARGET_X_DIM, FC_MOVE_TARGET_Y_DIM }

@@ -2220,7 +2220,6 @@ void fc_model_animation_update(NpcModelEntry *entry,
  * non-textured faces use HSL vertex color + white atlas pixel.
  */
 
-#define OANM_FLAG_DYNAMIC_BASE 1u
 #define OANM_FLAG_DYNAMIC_REPLACEMENT 2u
 
 typedef struct {
@@ -2937,15 +2936,6 @@ void fc_player_appearance_free(FcPlayerAppearance *appearance) {
  * hand-tuned gameframe coordinates.
  */
 
-#define RUNEC_IFACE_TOPLEVEL_OSRS_STRETCH 161
-#define RUNEC_IFACE_ORBS 160
-#define RUNEC_IFACE_INVENTORY 149
-#define RUNEC_IFACE_STATS 320
-#define RUNEC_IFACE_WORNITEMS 387
-#define RUNEC_IFACE_PRAYERBOOK 541
-#define RUNEC_IFACE_MAGIC_SPELLBOOK 218
-#define RUNEC_IFACE_COMBAT_INTERFACE 593
-
 #define RUNEC_OSRS_MAP_CONTAINER_W 211.0f
 #define RUNEC_OSRS_MAP_CONTAINER_H 207.0f
 #define RUNEC_OSRS_MINIMAP_X 53.0f
@@ -2963,8 +2953,6 @@ void fc_player_appearance_free(FcPlayerAppearance *appearance) {
 
 #define RUNEC_OSRS_ORBS_X 0.0f
 #define RUNEC_OSRS_ORBS_Y 10.0f
-#define RUNEC_OSRS_ORBS_W 207.0f
-#define RUNEC_OSRS_ORBS_H 197.0f
 #define RUNEC_OSRS_HP_X 0.0f
 #define RUNEC_OSRS_HP_Y 37.0f
 #define RUNEC_OSRS_PRAYER_X 0.0f
@@ -2987,8 +2975,6 @@ void fc_player_appearance_free(FcPlayerAppearance *appearance) {
 #define RUNEC_OSRS_SIDE_TOP_Y 0.0f
 #define RUNEC_OSRS_SIDE_BOTTOM_Y 298.0f
 
-#define RUNEC_OSRS_INVENTORY_SLOT_COLS 4
-#define RUNEC_OSRS_INVENTORY_SLOT_COUNT 28
 #define RUNEC_OSRS_INVENTORY_SLOT_X 14.0f
 #define RUNEC_OSRS_INVENTORY_SLOT_Y 8.0f
 #define RUNEC_OSRS_INVENTORY_SLOT_STEP_X 42.0f
@@ -3106,8 +3092,6 @@ typedef struct RuneCUiAssets {
     Font small_font;
     int font_loaded;
     int small_font_loaded;
-    int loaded_count;
-    int missing_count;
     int required_count;
     int missing_required_count;
     int missing_optional_count;
@@ -3126,12 +3110,6 @@ static const RuneCUiAssetSpec g_ui_asset_specs[] = {
     UI_ASSET("tradebacking_dark"),
     UI_ASSET("chatbox_bg"),
     UI_ASSET("main_stones_bottom"),
-    UI_ASSET("side_background"),
-    UI_ASSET("side_background_bottom"),
-    UI_ASSET("side_background_left1"),
-    UI_ASSET("side_background_left2"),
-    UI_ASSET("side_background_right"),
-    UI_ASSET("side_background_top"),
     UI_ASSET("side_stone_highlights_0"),
     UI_ASSET("side_stone_highlights_1"),
     UI_ASSET("side_stone_highlights_2"),
@@ -3142,19 +3120,8 @@ static const RuneCUiAssetSpec g_ui_asset_specs[] = {
     UI_ASSET("osrs_stretch_side_columns_0"),
     UI_ASSET("osrs_stretch_side_columns_1"),
     UI_ASSET("compass"),
-    UI_ASSET("mini_left"),
-    UI_ASSET("mini_right"),
-    UI_ASSET("mini_topright"),
     UI_ASSET("osrs_stretch_mapsurround"),
-    UI_ASSET("resize_map_mask"),
     UI_ASSET("resize_compass_mask"),
-    UI_ASSET("fixed_minimap_cover"),
-    UI_ASSET("fixed_map_mask"),
-    UI_ASSET("fixed_compass_mask"),
-    UI_ASSET("fixed_map_clickmask"),
-    UI_ASSET("mini_bottom"),
-    UI_ASSET("compass_outline"),
-    UI_ASSET("border_map_compass"),
     UI_ASSET("side_icon_combat"),
     UI_ASSET("side_icon_stats"),
     UI_ASSET("side_icon_quests"),
@@ -3169,14 +3136,12 @@ static const RuneCUiAssetSpec g_ui_asset_specs[] = {
     UI_ASSET("side_icon_emotes"),
     UI_ASSET("side_icon_music"),
     UI_ASSET("side_icon_grouping"),
-    UI_ASSET("side_icon_logout_modern"),
     UI_ASSET("options_icons_16"),
     UI_ASSET("options_icons_18"),
     UI_ASSET("options_icons_28"),
     UI_ASSET("whistle"),
     UI_ASSET("orb_frame_0"),
     UI_ASSET("orb_frame_1"),
-    UI_ASSET("orb_frame_2"),
     UI_ASSET("orb_filler_0"),
     UI_ASSET("orb_filler_1"),
     UI_ASSET("orb_filler_4"),
@@ -3188,9 +3153,6 @@ static const RuneCUiAssetSpec g_ui_asset_specs[] = {
     UI_ASSET("orb_icon_2"),
     UI_ASSET("orb_icon_3"),
     UI_ASSET("orb_icon_6"),
-    UI_ASSET("tli_button01_orbinfo_65x34_0"),
-    UI_ASSET("tli_button01_orbinfo_65x34_1"),
-    UI_ASSET("tli_button01_orbinfo_65x34_2"),
     UI_ASSET("ring_30"),
     UI_ASSET("worldmap_icon_0"),
     UI_ASSET("chat_tab_button_0"),
@@ -3210,12 +3172,6 @@ static const RuneCUiAssetSpec g_ui_asset_specs[] = {
     UI_ASSET("miscgraphics_3"),
     UI_ASSET("combatboxes_0"),
     UI_ASSET("combatboxes_1"),
-    UI_ASSET("combatboxes_2"),
-    UI_ASSET("combatboxes_3"),
-    UI_ASSET("combatboxes_large_0"),
-    UI_ASSET("combatboxes_large_1"),
-    UI_ASSET("combatboxes_very_large_0"),
-    UI_ASSET("combatboxes_very_large_1"),
     UI_ASSET("combatboxes_special_attack"),
     UI_ASSET("combat_shield"),
     UI_ASSET("combaticons_0"),
@@ -3242,7 +3198,6 @@ static const RuneCUiAssetSpec g_ui_asset_specs[] = {
     UI_ASSET("combaticons2_1"),
     UI_ASSET("combaticons2_2"),
     UI_ASSET("combaticons2_3"),
-    UI_ASSET("combaticons2_4"),
     UI_ASSET("combaticons2_5"),
     UI_ASSET("combaticons2_6"),
     UI_ASSET("combaticons2_7"),
@@ -3277,24 +3232,10 @@ static const RuneCUiAssetSpec g_ui_asset_specs[] = {
     UI_ASSET("combaticons3_16"),
     UI_ASSET("combaticons3_17"),
     UI_ASSET("combaticons3_18"),
-    UI_ASSET("combaticons3_19"),
     UI_ASSET("sideicons_interface_0"),
     UI_ASSET("sideicons_interface_1"),
     UI_ASSET("sideicons_interface_2"),
     UI_ASSET("sideicons_interface_3"),
-    UI_ASSET("sideicons_interface_4"),
-    UI_ASSET("sideicons_interface_5"),
-    UI_ASSET("sideicons_interface_6"),
-    UI_ASSET("sideicons_interface_7"),
-    UI_ASSET("sideicons_interface_8"),
-    UI_ASSET("sideicons_interface_9"),
-    UI_ASSET("sideicons_interface_10"),
-    UI_ASSET("sideicons_interface_11"),
-    UI_ASSET("sideicons_interface_12"),
-    UI_ASSET("sideicons_interface_13"),
-    UI_ASSET("sideicons_interface_14"),
-    UI_ASSET("sideicons_interface_15"),
-    UI_ASSET("sideicons_interface_16"),
     UI_OPTIONAL_ASSET("item_995", "../items/item_995.png"),
     UI_OPTIONAL_ASSET("item_995_1", "../items/item_995_1.png"),
     UI_OPTIONAL_ASSET("item_995_2", "../items/item_995_2.png"),
@@ -3382,31 +3323,6 @@ static const RuneCUiAssetSpec g_ui_asset_specs[] = {
     UI_ASSET("prayeroff_22"),
     UI_ASSET("prayeroff_23"),
     UI_ASSET("prayeroff_24"),
-    UI_ASSET("magicon_0"),
-    UI_ASSET("magicon_1"),
-    UI_ASSET("magicon_2"),
-    UI_ASSET("magicon_3"),
-    UI_ASSET("magicon_4"),
-    UI_ASSET("magicon_5"),
-    UI_ASSET("magicon_6"),
-    UI_ASSET("magicon_7"),
-    UI_ASSET("magicon_8"),
-    UI_ASSET("magicon_9"),
-    UI_ASSET("magicon_10"),
-    UI_ASSET("magicon_11"),
-    UI_ASSET("magicon_12"),
-    UI_ASSET("magicon_13"),
-    UI_ASSET("magicon_14"),
-    UI_ASSET("magicon_15"),
-    UI_ASSET("magicon_16"),
-    UI_ASSET("magicon_17"),
-    UI_ASSET("magicon_18"),
-    UI_ASSET("magicon_19"),
-    UI_ASSET("magicon_20"),
-    UI_ASSET("magicon_21"),
-    UI_ASSET("magicon_22"),
-    UI_ASSET("magicon_23"),
-    UI_ASSET("magicon_24"),
     UI_ASSET("standard_spell_on_0"),
     UI_ASSET("standard_spell_on_1"),
     UI_ASSET("standard_spell_on_2"),
@@ -3466,7 +3382,6 @@ static const RuneCUiAssetSpec g_ui_asset_specs[] = {
     UI_ASSET("standard_spell_on_56"),
     UI_ASSET("standard_spell_on_57"),
     UI_ASSET("standard_spell_on_58"),
-    UI_ASSET("standard_spell_on_59"),
     UI_ASSET("standard_spell_on_60"),
     UI_ASSET("standard_spell_on_61"),
     UI_ASSET("standard_spell_on_62"),
@@ -3546,7 +3461,6 @@ void runec_ui_assets_load(RuneCUiAssets *assets) {
         if (g_ui_asset_specs[i].required)
             assets->required_count++;
         if (!fc_asset_exists(path)) {
-            assets->missing_count++;
             if (g_ui_asset_specs[i].required) {
                 assets->missing_required_count++;
                 fprintf(stderr, "ui_assets: missing required sprite %s (%s)\n",
@@ -3560,7 +3474,6 @@ void runec_ui_assets_load(RuneCUiAssets *assets) {
             ? load_compass_texture(path)
             : fc_load_texture_asset(path);
         if (tex.id == 0) {
-            assets->missing_count++;
             if (g_ui_asset_specs[i].required) {
                 assets->missing_required_count++;
                 fprintf(stderr, "ui_assets: failed to load required sprite %s (%s)\n",
@@ -3573,7 +3486,6 @@ void runec_ui_assets_load(RuneCUiAssets *assets) {
         SetTextureFilter(tex, TEXTURE_FILTER_POINT);
         assets->textures[i] = tex;
         assets->loaded[i] = 1;
-        assets->loaded_count++;
     }
     fprintf(stderr,
             "ui_assets: loaded %d/%d required sprites, %d optional sprites missing\n",
@@ -3631,8 +3543,6 @@ void runec_ui_assets_unload(RuneCUiAssets *assets) {
         UnloadFont(assets->small_font);
         assets->small_font_loaded = 0;
     }
-    assets->loaded_count = 0;
-    assets->missing_count = 0;
     assets->required_count = 0;
     assets->missing_required_count = 0;
     assets->missing_optional_count = 0;
@@ -4141,8 +4051,6 @@ int fc_menu_action_at(FcMenuLayout menu, int rows, int x, int y) {
 
 /* Ui */
 
-#define RUNEC_UI_INV_SLOT_COUNT 28
-#define RUNEC_UI_EQUIP_SLOT_COUNT 14
 #define RUNEC_UI_CHAT_INPUT_MAX 128
 #define RUNEC_UI_CONTEXT_ACTIONS 5
 #define RUNEC_UI_MINIMAP_DOTS 256
@@ -4270,13 +4178,12 @@ typedef struct RuneCUiState {
     RuneCUiIntent last_intent;
     float tab_press_timer[RUNEC_UI_TAB_COUNT];
 
-    RuneCUiSlot inventory[RUNEC_UI_INV_SLOT_COUNT];
-    RuneCUiSlot equipment[RUNEC_UI_EQUIP_SLOT_COUNT];
+    RuneCUiSlot inventory[FC_INVENTORY_SLOTS];
+    RuneCUiSlot equipment[FC_EQUIPMENT_SLOTS];
     int selected_combat_style;
     int auto_retaliate;
     int special_attack_enabled;
     int special_attack_energy;
-    int combat_weapon_category;
     char combat_weapon_name[64];
     RuneCUiCombatStyleOption combat_styles[RUNEC_UI_COMBAT_STYLE_COUNT];
 
@@ -4345,7 +4252,6 @@ typedef struct RuneCUiLayout {
     Rectangle run_orb;
     Rectangle spec_orb;
     Rectangle side;
-    Rectangle side_bg;
     Rectangle side_content;
     Rectangle tab[RUNEC_UI_TAB_COUNT];
 } RuneCUiLayout;
@@ -4458,12 +4364,7 @@ static const char *spell_name(int slot) {
     return TextFormat("Spell %d", slot + 1);
 }
 
-static const char *g_equipment_names[RUNEC_UI_EQUIP_SLOT_COUNT] = {
-    "Head", "Cape", "Neck", "Weapon", "Body", "Shield", "Unused",
-    "Legs", "Unused", "Hands", "Feet", "Unused", "Ring", "Ammo",
-};
-
-static const Rectangle g_equipment_offsets[RUNEC_UI_EQUIP_SLOT_COUNT] = {
+static const Rectangle g_equipment_offsets[FC_EQUIPMENT_SLOTS] = {
     {77, 4, 36, 36},
     {36, 43, 36, 36},
     {77, 43, 36, 36},
@@ -4480,7 +4381,7 @@ static const Rectangle g_equipment_offsets[RUNEC_UI_EQUIP_SLOT_COUNT] = {
     {133, 43, 36, 36},
 };
 
-static const char *g_worn_icon_names[RUNEC_UI_EQUIP_SLOT_COUNT] = {
+static const char *g_worn_icon_names[FC_EQUIPMENT_SLOTS] = {
     "wornicons_0", "wornicons_1", "wornicons_2", "wornicons_3",
     "wornicons_4", "wornicons_5", "wornicons_10", "wornicons_6",
     NULL, "wornicons_7", "wornicons_8", NULL, "wornicons_9", "wornicons_11",
@@ -4798,7 +4699,6 @@ void runec_ui_set_combat_weapon_name(RuneCUiState *ui, const char *name) {
 void runec_ui_set_combat_style_profile(RuneCUiState *ui, int core_weapon_category) {
     if (!ui)
         return;
-    ui->combat_weapon_category = core_weapon_category;
     int osrs_category = osrs_combat_category_from_core_weapon(core_weapon_category);
     const RuneCUiCombatProfile *profile =
         combat_profile_for_osrs_category(osrs_category);
@@ -4872,7 +4772,6 @@ static void ui_layout(int screen_w, int screen_h, RuneCUiLayout *out) {
     out->side = (Rectangle){(float)screen_w - RUNEC_OSRS_SIDE_MENU_W,
                             (float)screen_h - RUNEC_OSRS_SIDE_MENU_H,
                             RUNEC_OSRS_SIDE_MENU_W, RUNEC_OSRS_SIDE_MENU_H};
-    out->side_bg = out->side;
     out->side_content = (Rectangle){out->side.x + RUNEC_OSRS_SIDE_CONTENT_X,
                                     out->side.y + RUNEC_OSRS_SIDE_CONTENT_Y,
                                     RUNEC_OSRS_SIDE_CONTENT_W,
@@ -4890,15 +4789,9 @@ static void ui_layout(int screen_w, int screen_h, RuneCUiLayout *out) {
 }
 
 static int mouse_over_ui(const RuneCUiLayout *layout, Vector2 mouse) {
-    if (CheckCollisionPointRec(mouse, layout->chat)
+    return CheckCollisionPointRec(mouse, layout->chat)
         || CheckCollisionPointRec(mouse, layout->side)
-        || CheckCollisionPointRec(mouse, layout->map))
-        return 1;
-    for (int i = 0; i < RUNEC_UI_TAB_COUNT; i++) {
-        if (CheckCollisionPointRec(mouse, layout->tab[i]))
-            return 1;
-    }
-    return 0;
+        || CheckCollisionPointRec(mouse, layout->map);
 }
 
 static void clear_intent(RuneCUiState *ui) {
@@ -5000,7 +4893,7 @@ static FcMenuLayout context_layout(const RuneCUiState *ui) {
 }
 
 static void set_selected_item_target(RuneCUiState *ui, int slot) {
-    if (!ui || slot < 0 || slot >= RUNEC_UI_INV_SLOT_COUNT
+    if (!ui || slot < 0 || slot >= FC_INVENTORY_SLOTS
             || !ui->inventory[slot].enabled)
         return;
     ui->selected_target.kind = RUNEC_UI_SELECTED_ITEM;
@@ -5028,26 +4921,6 @@ void runec_ui_init(RuneCUiState *ui) {
     ui->context_source_slot = -1;
     ui->selected_target.source_slot = -1;
     ui->drag.source_slot = -1;
-    ui->selected_combat_style = 0;
-    ui->auto_retaliate = 1;
-    ui->special_attack_enabled = 0;
-    ui->special_attack_energy = 100;
-    runec_ui_set_combat_weapon_name(ui, "Abyssal whip");
-    runec_ui_set_combat_style_profile(ui, 10);
-    ui->hitpoints = 99;
-    ui->hitpoints_max = 99;
-    ui->prayer_points = 77;
-    ui->prayer_points_max = 77;
-    ui->run_energy = 100;
-    ui->run_enabled = 1;
-    ui->combat_level = 126;
-    for (int i = 0; i < RUNEC_UI_SKILL_COUNT; i++) {
-        ui->skill_current[i] = 1;
-        ui->skill_base[i] = 1;
-    }
-    ui->skill_current[8] = 10;
-    ui->skill_base[8] = 10;
-    ui->skill_total = 33;
     const char *start_tab = getenv("RUNEC_UI_START_TAB");
     if (start_tab && start_tab[0]) {
         for (int i = 0; i < RUNEC_UI_TAB_COUNT; i++) {
@@ -5071,8 +4944,6 @@ void runec_ui_init(RuneCUiState *ui) {
         SetTextureFilter(ui->minimap_texture, TEXTURE_FILTER_POINT);
         ui->minimap_texture_ready = 1;
     }
-
-
 }
 
 void runec_ui_shutdown(RuneCUiState *ui) {
@@ -5223,7 +5094,7 @@ static Rectangle inv_slot_rect(const RuneCUiLayout *layout, int slot) {
 }
 
 static int inv_slot_at(const RuneCUiLayout *layout, Vector2 mouse) {
-    for (int i = 0; i < RUNEC_UI_INV_SLOT_COUNT; i++) {
+    for (int i = 0; i < FC_INVENTORY_SLOTS; i++) {
         if (CheckCollisionPointRec(mouse, inv_slot_rect(layout, i)))
             return i;
     }
@@ -5231,7 +5102,7 @@ static int inv_slot_at(const RuneCUiLayout *layout, Vector2 mouse) {
 }
 
 static Rectangle equip_slot_rect(const RuneCUiLayout *layout, int slot) {
-    if (slot < 0 || slot >= RUNEC_UI_EQUIP_SLOT_COUNT)
+    if (slot < 0 || slot >= FC_EQUIPMENT_SLOTS)
         return (Rectangle){0, 0, 0, 0};
     Rectangle off = g_equipment_offsets[slot];
     if (off.width <= 0 || off.height <= 0)
@@ -5245,7 +5116,7 @@ static Rectangle equip_slot_rect(const RuneCUiLayout *layout, int slot) {
 }
 
 static int equipment_slot_at(const RuneCUiLayout *layout, Vector2 mouse) {
-    for (int i = 0; i < RUNEC_UI_EQUIP_SLOT_COUNT; i++) {
+    for (int i = 0; i < FC_EQUIPMENT_SLOTS; i++) {
         Rectangle r = equip_slot_rect(layout, i);
         if (r.width > 0 && CheckCollisionPointRec(mouse, r))
             return i;
@@ -6164,7 +6035,7 @@ static void draw_inventory_item(const RuneCUiState *ui, const RuneCUiSlot *slot,
 }
 
 static void draw_inventory(const RuneCUiState *ui, const RuneCUiLayout *layout) {
-    for (int i = 0; i < RUNEC_UI_INV_SLOT_COUNT; i++) {
+    for (int i = 0; i < FC_INVENTORY_SLOTS; i++) {
         Rectangle r = inv_slot_rect(layout, i);
         if (ui->inventory[i].enabled) {
             draw_inventory_item(ui, &ui->inventory[i], r);
@@ -6190,7 +6061,7 @@ static void draw_equipment(const RuneCUiState *ui, const RuneCUiLayout *layout) 
     draw_asset_tiled(ui, "miscgraphics_3",
                      side_ref_rect(layout, (Rectangle){71, 42, 48, 36}), WHITE);
 
-    for (int i = 0; i < RUNEC_UI_EQUIP_SLOT_COUNT; i++) {
+    for (int i = 0; i < FC_EQUIPMENT_SLOTS; i++) {
         Rectangle r = equip_slot_rect(layout, i);
         if (r.width <= 0)
             continue;
@@ -6385,11 +6256,6 @@ static void draw_placeholder_tab(const RuneCUiState *ui, const RuneCUiLayout *la
 static void draw_side(RuneCUiState *ui, const RuneCUiLayout *layout) {
     draw_side_chrome(ui, layout);
 
-    if (ui->active_tab == RUNEC_UI_TAB_COMBAT) {
-        draw_combat(ui, layout);
-        return;
-    }
-
     switch (ui->active_tab) {
     case RUNEC_UI_TAB_INVENTORY:
         draw_inventory(ui, layout);
@@ -6469,7 +6335,7 @@ void runec_ui_draw_context(const RuneCUiState *ui) {
 static void draw_selected_target(const RuneCUiState *ui) {
     if (ui->drag.active && ui->drag.source_kind == RUNEC_UI_CONTEXT_INVENTORY
             && ui->drag.source_slot >= 0
-            && ui->drag.source_slot < RUNEC_UI_INV_SLOT_COUNT
+            && ui->drag.source_slot < FC_INVENTORY_SLOTS
             && ui->inventory[ui->drag.source_slot].enabled) {
         Vector2 mouse = GetMousePosition();
         Rectangle r = {mouse.x - 16, mouse.y - 16,
@@ -9782,7 +9648,6 @@ int dbg_draw_panel_tabs(const FcState* state,
 #define DEFAULT_WINDOW_H 1064
 #define MAX_TPS         60.0f
 #define MIN_TPS         0.25f
-#define HALF_TPS        0.50f
 
 #define FC_UI_ITEM_VIAL          229u
 #define FC_UI_ITEM_SHARK         385u
@@ -9807,8 +9672,6 @@ int dbg_draw_panel_tabs(const FcState* state,
 #define COL_GRID        CLITERAL(Color){  30,  30,  30, 80  }
 #define COL_BLOCKED     CLITERAL(Color){ 180,  30,  30, 60  }
 #define COL_WALKABLE    CLITERAL(Color){  30, 120,  30, 30  }
-#define COL_HIT_RED     CLITERAL(Color){ 255,  50,  50, 255 }
-#define COL_HIT_BLUE    CLITERAL(Color){  50, 100, 255, 255 }
 
 #define FC_REWARD_CONFIG_PATH_MAX 256
 #define FC_WORLD_ORIGIN_X 2368
