@@ -1407,38 +1407,19 @@ static int fc_ranged_hit_delay(int distance) {
     return travel / 30 + 1;
 }
 
-/*
- * Per-NPC-type hit delay — uses exact projectile timing from Void 634 gfx.toml.
- * Called from NPC attack code for precise parity with RSPS.
- */
+/* Per-NPC-type hit delay from the Void 634 projectile timing above. Jad's
+ * magic lands no sooner than 3 ticks after the attack, one tick after the
+ * player's prayer locks for it. */
 static int fc_npc_hit_delay(int npc_type, int attack_style, int distance) {
     if (attack_style == ATTACK_MELEE) return 1;
-
-    switch (npc_type) {
-        case NPC_TOK_XIL:
-            /* tok_xil_shoot: default mult=5, no offset */
-            return (5 * distance) / 30 + 1;
-
-        case NPC_KET_ZEK:
-            /* ket_zek_travel: offset=8, mult=8 */
-            return (8 + 8 * distance) / 30 + 1;
-
-        case NPC_TZTOK_JAD:
-            if (attack_style == ATTACK_MAGIC) {
-                /* Keep at least one full policy decision tick between Jad's
-                 * tell and impact, including when Magic is selected in melee. */
-                int delay = (8 * distance) / 30 + 1;
-                return delay < 2 ? 2 : delay;
-            } else {
-                /* Jad ranged: no projectile, fixed client delay=120 */
-                return 120 / 30 + 1;  /* = 5 game ticks */
-            }
-
-        default:
-            /* Fallback for any other ranged/magic NPC */
-            if (attack_style == ATTACK_RANGED) return (5 * distance) / 30 + 1;
-            return (8 + 8 * distance) / 30 + 1;
+    if (npc_type == NPC_KET_ZEK) return (8 + 8 * distance) / 30 + 1;
+    if (npc_type == NPC_TZTOK_JAD && attack_style == ATTACK_RANGED)
+        return 120 / 30 + 1;
+    if (npc_type == NPC_TZTOK_JAD) {
+        int delay = (8 * distance) / 30 + 1;
+        return delay < 3 ? 3 : delay;
     }
+    return (5 * distance) / 30 + 1;  /* Tok-Xil */
 }
 
 /* Queue a pending hit; returns 0 when the queue is full. */
@@ -2843,48 +2824,37 @@ static void npc_naive_player_chase_destination(const FcNpc* npc,
     }
 }
 
-/* True when the NPC could attack the player if its top-left footprint stood
- * at candidate_x,candidate_y. This checks attack style, range, melee contact,
- * and static LOS. */
-static int fc_npc_position_can_attack_player(const FcState* state, const FcNpc* npc,
-                                             int candidate_x, int candidate_y) {
-    if (!state || !npc || !npc->active || npc->is_dead) return 0;
-
+/* Which of its attacks an NPC could make from where it stands: melee needs
+ * open cardinal contact, and its ranged or magic primary style needs the
+ * player within attack range and in projectile line of sight. */
+static void npc_reach(const FcState* state, const FcNpc* npc,
+                      int* melee, int* distant) {
     const FcNpcStats* stats = fc_npc_get_stats(npc->npc_type);
     const FcPlayer* p = &state->player;
-
-    int can_melee = fc_npc_can_melee_player(p->x, p->y,
-                                            candidate_x, candidate_y,
-                                            npc->size, state->walkable,
-                                            state->movement_flags);
-    if (can_melee &&
-        (stats->max_hit[ATTACK_MELEE] > 0 ||
-         npc->attack_style == ATTACK_MELEE)) {
-        return 1;
-    }
-
-    int distance = fc_distance_between_areas(
-        p->x, p->y, 1, candidate_x, candidate_y, npc->size);
-    if (npc->attack_style != ATTACK_MELEE && distance > 0 &&
-        distance <= npc->attack_range) {
-        return fc_has_los_between_areas(
-            candidate_x, candidate_y, npc->size,
-            p->x, p->y, 1, state->los_flags);
-    }
-
-    return 0;
+    int dist = fc_distance_to_npc(p->x, p->y, npc);
+    *melee = stats->max_hit[ATTACK_MELEE] > 0 &&
+        fc_npc_can_melee_player(p->x, p->y, npc->x, npc->y, npc->size,
+                                state->walkable, state->movement_flags);
+    *distant = npc->attack_style != ATTACK_MELEE &&
+        dist > 0 && dist <= npc->attack_range &&
+        fc_has_los_between_areas(npc->x, npc->y, npc->size,
+                                 p->x, p->y, 1, state->los_flags);
 }
 
-static int npc_dynamic_step_toward_player_bounds(FcState* state, int npc_idx) {
+/* Walk toward the player, at most movement_speed steps, unless the NPC can
+ * already attack from its tile. */
+static void npc_chase_player(FcState* state, int npc_idx) {
     FcNpc* npc = &state->npcs[npc_idx];
-    int target_x;
-    int target_y;
-
-    npc_naive_player_chase_destination(npc, &state->player,
-                                       &target_x, &target_y);
-    if (target_x == npc->x && target_y == npc->y) return 0;
-
-    return npc_dynamic_step_toward(state, npc_idx, target_x, target_y);
+    int melee, distant;
+    npc_reach(state, npc, &melee, &distant);
+    if (melee || distant) return;
+    for (int step = 0; step < npc->movement_speed; step++) {
+        int target_x, target_y;
+        npc_naive_player_chase_destination(npc, &state->player,
+                                           &target_x, &target_y);
+        if (target_x == npc->x && target_y == npc->y) break;
+        if (!npc_dynamic_step_toward(state, npc_idx, target_x, target_y)) break;
+    }
 }
 
 /* Tz-Kek splits on death into two small Tz-Kek. */
@@ -2935,90 +2905,67 @@ static void record_npc_attack(FcState* state, const FcNpc* npc, int npc_idx,
     attack->hit_queued = hit_queued;
 }
 
-/* Roll an attack of the given style and queue it on the player. */
-static void launch_npc_attack(FcState* state, FcNpc* npc, int npc_idx,
-                              int attack_style, int hit_delay_ticks,
-                              int prayer_drain, int prayer_lock_delay_ticks) {
+/* Attack once the timer is ready and the player is in reach. At melee
+ * contact an NPC uses melee, except that Ket-Zek may also pick its magic, and
+ * Jad its magic or ranged, with equal weight when those could hit too. At a
+ * distance it uses its primary style, and Jad picks magic or ranged. */
+static void npc_attack(FcState* state, FcNpc* npc, int npc_idx) {
+    if (npc->attack_timer > 0) return;
+    int melee, distant;
+    npc_reach(state, npc, &melee, &distant);
+    int jad = npc->npc_type == NPC_TZTOK_JAD;
+    int style;
+    if (melee && distant && jad) {
+        int choice = fc_rng_int(state, 3);
+        style = choice == 0 ? ATTACK_MELEE :
+                choice == 1 ? ATTACK_MAGIC : ATTACK_RANGED;
+    } else if (melee && distant && npc->npc_type == NPC_KET_ZEK) {
+        style = fc_rng_int(state, 2) == 0 ? npc->attack_style : ATTACK_MELEE;
+    } else if (melee) {
+        style = ATTACK_MELEE;
+    } else if (distant && jad) {
+        style = fc_rng_int(state, 2) == 0 ? ATTACK_MAGIC : ATTACK_RANGED;
+    } else if (distant) {
+        style = npc->attack_style;
+    } else {
+        return;
+    }
+
     const FcNpcStats* stats = fc_npc_get_stats(npc->npc_type);
     FcPlayer* player = &state->player;
-    int max_hit_hp = stats->max_hit[attack_style];
-    int attack_roll = fc_npc_roll(stats->attack_level[attack_style],
-                                  stats->attack_bonus[attack_style]);
     FcAttackType attack_type =
-        attack_style == ATTACK_MELEE ? (FcAttackType)stats->melee_attack_type :
-        attack_style == ATTACK_RANGED ? FC_ATTACK_TYPE_RANGED : FC_ATTACK_TYPE_MAGIC;
-    int defence_roll = fc_player_def_roll(player, attack_type);
-    float hit_chance = fc_hit_chance(attack_roll, defence_roll);
+        style == ATTACK_MELEE ? (FcAttackType)stats->melee_attack_type :
+        style == ATTACK_RANGED ? FC_ATTACK_TYPE_RANGED : FC_ATTACK_TYPE_MAGIC;
+    int attack_roll = fc_npc_roll(stats->attack_level[style],
+                                  stats->attack_bonus[style]);
+    float hit_chance = fc_hit_chance(attack_roll,
+                                     fc_player_def_roll(player, attack_type));
     int hit = fc_rng_float(state) < hit_chance;
-    int damage = hit ? fc_roll_npc_damage_tenths(state, max_hit_hp) : 0;
+    int damage = hit ? fc_roll_npc_damage_tenths(state, stats->max_hit[style]) : 0;
+    int delay = fc_npc_hit_delay(npc->npc_type, style,
+                                 fc_distance_to_npc(player->x, player->y, npc));
 
+    /* Jad's ranged and magic lock the player's prayer two ticks after the
+     * attack; every other attack locks the prayer the tick started with. */
+    int prayer_lock_tick = -1;
     int hit_queued = fc_queue_pending_hit(
         player->pending_hits, &player->num_pending_hits, FC_MAX_PENDING_HITS,
-        damage, hit_delay_ticks, attack_style, npc_idx, prayer_drain);
-    int prayer_lock_tick = -1;
+        damage, delay, style, npc_idx, stats->prayer_drain);
     if (hit_queued) {
         FcPendingHit* queued =
             &player->pending_hits[player->num_pending_hits - 1];
-        if (prayer_lock_delay_ticks > 0) {
+        if (jad && style != ATTACK_MELEE) {
             queued->prayer_snapshot = -1;
-            queued->prayer_lock_tick =
-                state->tick + prayer_lock_delay_ticks;
+            queued->prayer_lock_tick = state->tick + 2;
             prayer_lock_tick = queued->prayer_lock_tick;
         } else {
             queued->prayer_snapshot = player->prayer_at_tick_start;
         }
     }
 
-    record_npc_attack(state, npc, npc_idx, attack_style, hit_delay_ticks,
+    record_npc_attack(state, npc, npc_idx, style, delay,
                       prayer_lock_tick, hit_queued);
     npc->attack_timer = npc->attack_speed;
-}
-
-/* Jad picks its style as it attacks: any of its three at melee contact,
- * magic or ranged at a distance. */
-static void jad_attack(FcState* state, FcNpc* npc, int npc_idx) {
-    const FcNpcStats* stats = fc_npc_get_stats(npc->npc_type);
-    FcPlayer* p = &state->player;
-    int dist = fc_distance_to_npc(p->x, p->y, npc);
-    int can_melee = fc_npc_can_melee_player(p->x, p->y, npc->x, npc->y,
-                                            npc->size, state->walkable,
-                                            state->movement_flags);
-
-    if (npc->attack_timer > 0) return;
-
-    int use_style = ATTACK_NONE;
-    int in_range = 0;
-
-    int can_use_distance_styles =
-        dist > 0 && dist <= npc->attack_range &&
-        fc_has_los_between_areas(
-            npc->x, npc->y, npc->size,
-            p->x, p->y, 1, state->los_flags);
-
-    if (can_melee && stats->max_hit[ATTACK_MELEE] > 0) {
-        /* In melee range Jad can still choose Magic or Ranged. All three
-         * configured attacks have equal selection weight. */
-        int choice = can_use_distance_styles ? fc_rng_int(state, 3) : 0;
-        if (choice == 0) {
-            use_style = ATTACK_MELEE;
-        } else if (choice == 1) {
-            use_style = ATTACK_MAGIC;
-        } else {
-            use_style = ATTACK_RANGED;
-        }
-        in_range = 1;
-    } else if (can_use_distance_styles) {
-        use_style = (fc_rng_int(state, 2) == 0) ? ATTACK_MAGIC : ATTACK_RANGED;
-        in_range = 1;
-    }
-
-    if (!in_range) return;
-
-    int delay = fc_npc_hit_delay(npc->npc_type, use_style, dist);
-    if (use_style != ATTACK_MELEE && delay < 3) delay = 3;
-    int prayer_lock_delay = use_style == ATTACK_MELEE ? 0 : 2;
-    launch_npc_attack(state, npc, npc_idx, use_style, delay, 0,
-                      prayer_lock_delay);
 }
 
 /* Heal target by up to amount (capped at its max HP) and record the heal for
@@ -3096,7 +3043,6 @@ static int yt_mejkot_try_heal(FcState* state, FcNpc* npc) {
 
 /* Yt-HurKot heals Jad until a player hit tags it onto the player for good. */
 #define FC_HURKOT_HEAL_RANGE 5
-static void npc_generic_attack(FcState* state, FcNpc* npc, int npc_idx);
 
 static int find_active_jad(const FcState* state) {
     for (int i = 0; i < FC_MAX_NPCS; i++) {
@@ -3126,124 +3072,38 @@ static void yt_hurkot_heal_cycle(FcState* state, FcNpc* npc, FcNpc* jad) {
     }
 }
 
-static void yt_hurkot_tick(FcState* state, FcNpc* npc, int npc_idx) {
-    /* Once tagged, a healer permanently pursues the player using the same
-     * local, non-routing movement as every other NPC. It no longer heals Jad. */
-    if (npc->healer_distracted) {
-        npc->heal_target_idx = -1;
-        if (!fc_npc_position_can_attack_player(state, npc, npc->x, npc->y)) {
-            for (int step = 0; step < npc->movement_speed; step++) {
-                if (!npc_dynamic_step_toward_player_bounds(state, npc_idx)) break;
-            }
-        }
-        npc_generic_attack(state, npc, npc_idx);
-        return;
-    }
-
+static void yt_hurkot_follow_jad(FcState* state, FcNpc* npc, int npc_idx) {
     int jad_idx = find_active_jad(state);
-    FcNpc* jad = jad_idx >= 0 ? &state->npcs[jad_idx] : NULL;
     npc->heal_target_idx = jad_idx;
-    if (jad) yt_hurkot_heal_cycle(state, npc, jad);
+    if (jad_idx < 0) return;
 
-    if (jad && npc_anchor_distance(npc, jad) > FC_HURKOT_HEAL_RANGE) {
+    FcNpc* jad = &state->npcs[jad_idx];
+    yt_hurkot_heal_cycle(state, npc, jad);
+    if (npc_anchor_distance(npc, jad) > FC_HURKOT_HEAL_RANGE) {
         npc_dynamic_step_toward(state, npc_idx, jad->x, jad->y);
     }
-}
-
-/*
- * Tok-Xil switches to its weaker melee attack at contact. Ket-Zek keeps both
- * its Magic and Melee attacks valid at contact and samples between them.
- */
-static void npc_generic_attack(FcState* state, FcNpc* npc, int npc_idx) {
-    const FcNpcStats* stats = fc_npc_get_stats(npc->npc_type);
-    FcPlayer* p = &state->player;
-    int dist = fc_distance_to_npc(p->x, p->y, npc);
-    int can_melee = fc_npc_can_melee_player(p->x, p->y, npc->x, npc->y,
-                                            npc->size, state->walkable,
-                                            state->movement_flags);
-
-    if (npc->attack_timer > 0) return;
-
-    /* Determine attack style and max hit based on distance */
-    int use_style = npc->attack_style;  /* primary style */
-    int in_range = 0;
-    int primary_in_range =
-        npc->attack_style != ATTACK_MELEE &&
-        dist > 0 && dist <= npc->attack_range &&
-        fc_has_los_between_areas(
-            npc->x, npc->y, npc->size,
-            p->x, p->y, 1, state->los_flags);
-
-    if (can_melee && stats->max_hit[ATTACK_MELEE] > 0) {
-        if (npc->npc_type == NPC_KET_ZEK && primary_in_range &&
-            fc_rng_int(state, 2) == 0) {
-            use_style = npc->attack_style;
-        } else {
-            use_style = ATTACK_MELEE;
-        }
-        in_range = 1;
-    } else if (can_melee && npc->attack_style == ATTACK_MELEE) {
-        /* Pure melee NPC, in range */
-        in_range = 1;
-    } else if (primary_in_range) {
-        in_range = 1;
-    }
-
-    if (!in_range) return;
-
-    int delay = fc_npc_hit_delay(npc->npc_type, use_style, dist);
-    launch_npc_attack(state, npc, npc_idx, use_style, delay,
-                      stats->prayer_drain, 0);
-}
-
-static int npc_has_attack_position(FcState* state, FcNpc* npc) {
-    return fc_npc_position_can_attack_player(state, npc, npc->x, npc->y);
 }
 
 /* One tick of NPC AI: movement, then an attack or a Yt-MejKot heal. */
 static void fc_npc_tick(FcState* state, int npc_idx) {
     FcNpc* npc = &state->npcs[npc_idx];
     if (!npc->active || npc->is_dead) return;
-
-    if (npc->npc_type != NPC_YT_HURKOT) npc->heal_target_idx = -1;
-
-    /* Decrement attack timer */
     if (npc->attack_timer > 0) npc->attack_timer--;
 
-    /* --- Type-specific pre-attack behavior --- */
-
-    /* Yt-HurKot either heals/follows Jad or permanently targets the player. */
-    if (npc->npc_type == NPC_YT_HURKOT) {
-        yt_hurkot_tick(state, npc, npc_idx);
+    /* Until a player hit tags it, a Yt-HurKot follows and heals Jad. Once
+     * tagged it chases and attacks the player like every other NPC. */
+    if (npc->npc_type == NPC_YT_HURKOT && !npc->healer_distracted) {
+        yt_hurkot_follow_jad(state, npc, npc_idx);
         return;
     }
+    npc->heal_target_idx = -1;
+    npc_chase_player(state, npc_idx);
 
-    /* Jad: move into range, then choose its attack style when the hit is queued */
-    if (npc->npc_type == NPC_TZTOK_JAD) {
-        if (!npc_has_attack_position(state, npc)) {
-            for (int step = 0; step < npc->movement_speed; step++) {
-                if (!npc_dynamic_step_toward_player_bounds(state, npc_idx)) break;
-            }
-        }
-        jad_attack(state, npc, npc_idx);
-        return;
-    }
-
-    /* --- Generic movement + attack for all other types --- */
-
-    /* Movement: keep walking until this tile can actually attack. */
-    if (!npc_has_attack_position(state, npc)) {
-        for (int step = 0; step < npc->movement_speed; step++) {
-            if (!npc_dynamic_step_toward_player_bounds(state, npc_idx)) break;
-        }
-    }
-
-    /* A MejKot heal is an attack-cycle choice, not a parallel action. */
+    /* A Yt-MejKot heal is an attack-cycle choice, not a parallel action. */
     if (npc->npc_type == NPC_YT_MEJKOT && yt_mejkot_try_heal(state, npc)) {
         return;
     }
-
-    npc_generic_attack(state, npc, npc_idx);
+    npc_attack(state, npc, npc_idx);
 }
 
 #undef FC_HURKOT_HEAL_RANGE
@@ -4970,10 +4830,7 @@ static int npc_telegraph_style(const FcState* state, const FcNpc* npc) {
      * both adjacent styles remain possible. Pure melee NPCs (Yt-MejKot,
      * Tz-Kih, Tz-Kek) telegraph MELEE even when far
      * — they'll close the gap and that's what they'll hit with. */
-    if (can_melee && (stats->max_hit[ATTACK_MELEE] > 0 ||
-                      npc->attack_style == ATTACK_MELEE)) {
-        return ATTACK_MELEE;
-    }
+    if (can_melee && stats->max_hit[ATTACK_MELEE] > 0) return ATTACK_MELEE;
     return npc->attack_style;
 }
 
