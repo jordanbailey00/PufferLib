@@ -2345,31 +2345,6 @@ static const char *const g_ui_asset_names[] = {
     "skill_icon_21",
     "skill_icon_22",
     "skill_icon_23",
-    "prayeroff_0",
-    "prayeroff_1",
-    "prayeroff_2",
-    "prayeroff_3",
-    "prayeroff_4",
-    "prayeroff_5",
-    "prayeroff_6",
-    "prayeroff_7",
-    "prayeroff_8",
-    "prayeroff_9",
-    "prayeroff_10",
-    "prayeroff_11",
-    "prayeroff_12",
-    "prayeroff_13",
-    "prayeroff_14",
-    "prayeroff_15",
-    "prayeroff_16",
-    "prayeroff_17",
-    "prayeroff_18",
-    "prayeroff_19",
-    "prayeroff_20",
-    "prayeroff_21",
-    "prayeroff_22",
-    "prayeroff_23",
-    "prayeroff_24",
     "standard_spell_on_0",
     "standard_spell_on_1",
     "standard_spell_on_2",
@@ -3057,7 +3032,6 @@ typedef enum RuneCUiIntentKind {
     RUNEC_UI_INTENT_INVENTORY_SLOT,
     RUNEC_UI_INTENT_EQUIPMENT_SLOT,
     RUNEC_UI_INTENT_PRAYER_SLOT,
-    RUNEC_UI_INTENT_QUICK_PRAYER_SLOT,
     RUNEC_UI_INTENT_QUICK_PRAYER_TOGGLE,
     RUNEC_UI_INTENT_AUTOCAST_SPELL,
     RUNEC_UI_INTENT_SKILL_SLOT,
@@ -3167,7 +3141,6 @@ typedef struct RuneCUiState {
     int hitpoints_max;
     int prayer_points;
     int prayer_points_max;
-    uint32_t active_prayers;
     int run_energy;
     int run_enabled;
     int combat_level;
@@ -3228,16 +3201,6 @@ typedef struct RuneCUiLayout {
     Rectangle side_content;
     Rectangle tab[RUNEC_UI_TAB_COUNT];
 } RuneCUiLayout;
-
-static const char *g_prayer_names[25] = {
-    "Thick Skin", "Burst of Strength", "Clarity of Thought", "Sharp Eye",
-    "Mystic Will", "Rock Skin", "Superhuman Strength", "Improved Reflexes",
-    "Rapid Restore", "Rapid Heal", "Protect Item", "Hawk Eye",
-    "Mystic Lore", "Steel Skin", "Ultimate Strength", "Incredible Reflexes",
-    "Protect from Magic", "Protect from Missiles", "Protect from Melee",
-    "Eagle Eye", "Mystic Might", "Retribution", "Redemption",
-    "Smite", "Preserve",
-};
 
 typedef struct RuneCUiSpellSlotRef {
     const char *name;
@@ -3638,10 +3601,12 @@ void runec_ui_open_world_context(RuneCUiState *ui, Vector2 pos, int npc_type, in
     runec_ui_clear_selected_target(ui);
 }
 
-void runec_ui_open_prayer_context(RuneCUiState *ui, Vector2 pos, int slot) {
-    if (slot < 0 || slot >= 25) return;
-    const char *actions[] = {ui->active_prayers & (1u << slot) ? "Deactivate" : "Activate", "Cancel"};
-    set_context(ui, pos, g_prayer_names[slot], actions, 2);
+/* Menu for one of the viewer's prayer buttons; picking the verb reports
+ * RUNEC_UI_INTENT_PRAYER_SLOT with this slot. */
+void runec_ui_open_prayer_context(RuneCUiState *ui, Vector2 pos, int slot,
+                                  const char *name, int active) {
+    const char *actions[] = {active ? "Deactivate" : "Activate", "Cancel"};
+    set_context(ui, pos, name, actions, 2);
     set_context_source(ui, RUNEC_UI_CONTEXT_PRAYER, slot, 0);
 }
 
@@ -3805,24 +3770,13 @@ static int handle_context_click(RuneCUiState *ui, Vector2 mouse) {
                 ui->last_intent.primary = ui->context_source_slot;
                 ui->last_intent.secondary = i;
             } else if (ui->context_source_kind == RUNEC_UI_CONTEXT_PRAYER) {
-                if (strcmp(action, "Activate") == 0 || strcmp(action, "Deactivate") == 0) {
-                    ui->last_intent.kind = RUNEC_UI_INTENT_PRAYER_SLOT;
-                    ui->last_intent.primary = ui->context_source_slot;
-                    ui->last_intent.secondary = strcmp(action, "Deactivate") == 0 ? -1 : 1;
-                    copy_text(ui->last_intent.text,
-                              sizeof(ui->last_intent.text),
-                              ui->context_title);
-                } else if (strcmp(action, "Quick-prayer") == 0) {
-                    ui->last_intent.kind = RUNEC_UI_INTENT_QUICK_PRAYER_SLOT;
-                    ui->last_intent.primary = ui->context_source_slot;
-                    copy_text(ui->last_intent.text,
-                              sizeof(ui->last_intent.text),
-                              ui->context_title);
-                } else {
-                    ui->last_intent.kind = RUNEC_UI_INTENT_CONTEXT_ACTION;
-                    ui->last_intent.primary = i;
-                    ui->last_intent.secondary = ui->context_source_slot;
-                }
+                /* Prayer menus offer Activate or Deactivate, then Cancel. */
+                ui->last_intent.kind = RUNEC_UI_INTENT_PRAYER_SLOT;
+                ui->last_intent.primary = ui->context_source_slot;
+                ui->last_intent.secondary = strcmp(action, "Deactivate") == 0 ? -1 : 1;
+                copy_text(ui->last_intent.text,
+                          sizeof(ui->last_intent.text),
+                          ui->context_title);
             } else if (ui->context_source_kind == RUNEC_UI_CONTEXT_SPELL
                     && strcmp(action, "Cast") == 0) {
                 set_selected_spell_target(ui, ui->context_source_slot,
@@ -4175,20 +4129,6 @@ static int handle_equipment_click(RuneCUiState *ui,
     return 1;
 }
 
-static int handle_prayer_click(RuneCUiState *ui,
-                               const RuneCUiLayout *layout,
-                               Vector2 mouse) {
-    int slot = grid_index_at(layout, mouse, 25, 5, 8, 8, 36, 36, 34, 34);
-    if (slot < 0)
-        return 0;
-    ui->last_intent.kind = RUNEC_UI_INTENT_PRAYER_SLOT;
-    ui->last_intent.primary = slot;
-    ui->last_intent.position = mouse;
-    copy_text(ui->last_intent.text, sizeof(ui->last_intent.text),
-              g_prayer_names[slot]);
-    return 1;
-}
-
 static int handle_spellbook_click(RuneCUiState *ui,
                                   const RuneCUiLayout *layout,
                                   Vector2 mouse) {
@@ -4233,8 +4173,6 @@ static int handle_active_tab_click(RuneCUiState *ui,
         return handle_inventory_click(ui, layout, mouse);
     case RUNEC_UI_TAB_EQUIPMENT:
         return handle_equipment_click(ui, layout, mouse);
-    case RUNEC_UI_TAB_PRAYER:
-        return handle_prayer_click(ui, layout, mouse);
     case RUNEC_UI_TAB_SPELLBOOK:
         return handle_spellbook_click(ui, layout, mouse);
     case RUNEC_UI_TAB_SKILLS:
@@ -4318,18 +4256,6 @@ static int handle_context_menu_open(RuneCUiState *ui,
             return 1;
         }
     }
-    if (ui->active_tab == RUNEC_UI_TAB_PRAYER) {
-        int slot = grid_index_at(layout, mouse, 25, 5,
-                                 8, 8, 36, 36, 34, 34);
-        if (slot >= 0) {
-            static const char *actions[] = {
-                "Activate", "Quick-prayer", "Examine"
-            };
-            set_context(ui, mouse, g_prayer_names[slot], actions, 3);
-            set_context_source(ui, RUNEC_UI_CONTEXT_PRAYER, slot, 0);
-            return 1;
-        }
-    }
     if (ui->active_tab == RUNEC_UI_TAB_SPELLBOOK) {
         int slot = grid_index_at(layout, mouse, RUNEC_UI_SPELL_COUNT,
             RUNEC_UI_SPELL_COLS, RUNEC_UI_SPELL_X0, RUNEC_UI_SPELL_Y0,
@@ -4393,11 +4319,11 @@ static void draw_centered_text(const RuneCUiState *ui, const char *text,
                      rect.y + (rect.height - m.y) * 0.5f, size, color);
 }
 
-static int draw_asset_centered(const RuneCUiState *ui, const char *name,
-                               Rectangle rect, float max_w, float max_h, Color tint) {
+static void draw_asset_centered(const RuneCUiState *ui, const char *name,
+                                Rectangle rect, float max_w, float max_h, Color tint) {
     const Texture2D *tex = runec_ui_asset(&ui->assets, name);
     if (!tex)
-        return 0;
+        return;
     float scale = fmin2(max_w / (float)tex->width, max_h / (float)tex->height);
     if (scale > 1.0f)
         scale = 1.0f;
@@ -4408,7 +4334,6 @@ static int draw_asset_centered(const RuneCUiState *ui, const char *name,
         tex->height * scale,
     };
     runec_ui_draw_asset(&ui->assets, name, dst, tint);
-    return 1;
 }
 
 static void draw_asset_tiled(const RuneCUiState *ui, const char *name,
@@ -4706,18 +4631,6 @@ static void draw_equipment(const RuneCUiState *ui, const RuneCUiLayout *layout) 
     }
 }
 
-static void draw_prayer(const RuneCUiState *ui, const RuneCUiLayout *layout) {
-    for (int i = 0; i < 25; i++) {
-        Rectangle r = grid_cell_rect(layout, i, 5, 8, 8, 36, 36, 34, 34);
-        DrawRectangleRec(r, (Color){16, 13, 10, 95});
-        char name[32];
-        snprintf(name, sizeof(name), "prayer%s_%d",
-                 (ui->active_prayers & (1u << i)) ? "on" : "off", i);
-        if (!draw_asset_centered(ui, name, r, 30, 30, WHITE))
-            draw_centered_text(ui, TextFormat("%d", i + 1), r, 10, OSRS_ORANGE);
-    }
-}
-
 static void draw_spellbook(const RuneCUiState *ui, const RuneCUiLayout *layout) {
     for (int i = 0; i < RUNEC_UI_SPELL_COUNT; i++) {
         Rectangle r = grid_cell_rect(layout, i, RUNEC_UI_SPELL_COLS,
@@ -4867,7 +4780,7 @@ static void draw_side(RuneCUiState *ui, const RuneCUiLayout *layout) {
         draw_equipment(ui, layout);
         break;
     case RUNEC_UI_TAB_PRAYER:
-        draw_prayer(ui, layout);
+        /* The viewer draws its protection-prayer tab over the content. */
         break;
     case RUNEC_UI_TAB_SPELLBOOK:
         draw_spellbook(ui, layout);
@@ -8285,6 +8198,30 @@ static const Color NPC_COLORS[] = {
     {60,200,200,255},  /* 8: Yt-HurKot (cyan) */
 };
 
+/* The protection prayers the simulator models, in Prayer tab order. Each row
+ * drives its hotkey, tab button, menu and overhead icon; sprite is the
+ * prayeron_N / prayeroff_N frame. */
+typedef struct {
+    int prayer;           /* PRAYER_PROTECT_* */
+    int action;           /* FC_PRAYER_* request that switches it on */
+    int key;
+    const char* name;     /* menu title */
+    const char* label;    /* tab button text */
+    Color color;
+    int sprite;
+} FcProtectionPrayer;
+
+static const FcProtectionPrayer FC_PROTECTION_PRAYERS[] = {
+    {PRAYER_PROTECT_MELEE, FC_PRAYER_MELEE, KEY_ONE, "Protect from Melee",
+     "Prot. Melee", COL_TEXT_YELLOW, 14},
+    {PRAYER_PROTECT_RANGE, FC_PRAYER_RANGE, KEY_TWO, "Protect from Missiles",
+     "Prot. Range", COL_TEXT_GREEN, 13},
+    {PRAYER_PROTECT_MAGIC, FC_PRAYER_MAGIC, KEY_THREE, "Protect from Magic",
+     "Prot. Magic", COL_PRAY_BLUE, 12},
+};
+#define FC_PROTECTION_PRAYER_COUNT \
+    ((int)(sizeof(FC_PROTECTION_PRAYERS) / sizeof(FC_PROTECTION_PRAYERS[0])))
+
 /* Viewer state */
 typedef struct ViewerState {
     FcState state;
@@ -8339,15 +8276,13 @@ typedef struct ViewerState {
     int console_wave_dropdown_open;
     int console_scroll[4];        /* player/obs/mask/reward vertical offsets */
     int console_content_height[4];
-    /* Prayer overhead icon textures */
-    Texture2D pray_melee_tex, pray_missiles_tex, pray_magic_tex;
+    /* prayeron/prayeroff sprites per FC_PROTECTION_PRAYERS row, for the
+     * Prayer tab and (on) the overhead icon. */
+    Texture2D prayer_on[FC_PROTECTION_PRAYER_COUNT];
+    Texture2D prayer_off[FC_PROTECTION_PRAYER_COUNT];
     Texture2D click_cross_tex[FC_CLICK_CROSS_FRAME_COUNT * 2];
     int active_loadout; /* index into FC_LOADOUTS[] */
     int combat_style;   /* 0=accurate, 1=rapid, 2=long range */
-    /* Prayer-tab sprites used by the active RuneC side interface. */
-    Texture2D tex_pray_melee_on, tex_pray_melee_off;
-    Texture2D tex_pray_range_on, tex_pray_range_off;
-    Texture2D tex_pray_magic_on, tex_pray_magic_off;
     /* Debug overlay — toggled with O key */
     int dbg_flags;       /* bitmask of DBG_* flags */
     /* Debug toggles */
@@ -8383,40 +8318,28 @@ static void set_ui_slot(RuneCUiSlot* slot, uint32_t item_id, int quantity,
     slot->enabled = 1;
 }
 
-static uint32_t fc_ui_active_prayer_bits(int prayer) {
-    switch (prayer) {
-        case PRAYER_PROTECT_MAGIC: return 1u << 16;
-        case PRAYER_PROTECT_RANGE: return 1u << 17;
-        case PRAYER_PROTECT_MELEE: return 1u << 18;
-        default: return 0;
+/* The FC_PROTECTION_PRAYERS row of a PRAYER_PROTECT_* value, or -1. */
+static int protection_prayer_index(int prayer) {
+    for (int i = 0; i < FC_PROTECTION_PRAYER_COUNT; i++) {
+        if (FC_PROTECTION_PRAYERS[i].prayer == prayer)
+            return i;
     }
+    return -1;
 }
 
-static int fc_ui_prayer_action_for_slot(const FcPlayer* p, int slot) {
-    int prayer = PRAYER_NONE;
-    int action = FC_PRAYER_OFF;
-    if (slot == 16) {
-        prayer = PRAYER_PROTECT_MAGIC;
-        action = FC_PRAYER_MAGIC;
-    } else if (slot == 17) {
-        prayer = PRAYER_PROTECT_RANGE;
-        action = FC_PRAYER_RANGE;
-    } else if (slot == 18) {
-        prayer = PRAYER_PROTECT_MELEE;
-        action = FC_PRAYER_MELEE;
-    } else {
-        return 0;
-    }
-    if (!p || p->current_prayer <= 0) return 0;
-    return p->prayer == prayer ? FC_PRAYER_OFF : action;
+/* The prayer request that toggles this protection prayer. */
+static int protection_prayer_toggle(const FcPlayer* p,
+                                    const FcProtectionPrayer* row) {
+    return p->prayer == row->prayer ? FC_PRAYER_OFF : row->action;
 }
 
-static void queue_viewer_prayer_button(ViewerState* v, int prayer, int action) {
+static void queue_viewer_prayer_button(ViewerState* v,
+                                       const FcProtectionPrayer* row) {
     if (!v) return;
     FcPlayer* p = &v->state.player;
     if (p->current_prayer <= 0)
         return;
-    v->pending_prayer = (p->prayer == prayer) ? FC_PRAYER_OFF : action;
+    v->pending_prayer = protection_prayer_toggle(p, row);
 }
 
 static int load_ui_item_icon(RuneCUiState* ui, uint32_t item_id) {
@@ -8474,8 +8397,6 @@ static void sync_fc_ui_status(ViewerState* v) {
     v->ui.hitpoints_max = p->max_hp > 0 ? (p->max_hp + 9) / 10 : 0;
     v->ui.prayer_points = p->current_prayer > 0 ? (p->current_prayer + 9) / 10 : 0;
     v->ui.prayer_points_max = p->max_prayer > 0 ? (p->max_prayer + 9) / 10 : 0;
-    v->ui.active_prayers = fc_ui_active_prayer_bits(
-        fc_actor_animation_render_prayer(&v->actor_animation, &v->state));
     v->ui.run_energy = p->run_energy / 100;
     if (v->ui.run_energy < 0) v->ui.run_energy = 0;
     if (v->ui.run_energy > 100) v->ui.run_energy = 100;
@@ -8659,7 +8580,11 @@ static void handle_runec_ui_intent(ViewerState* v) {
                 show_item_result(v, fc_inventory_swap(&v->state, intent->primary, intent->secondary));
             break;
         case RUNEC_UI_INTENT_PRAYER_SLOT: {
-            int action = fc_ui_prayer_action_for_slot(p, intent->primary);
+            int row = intent->primary;
+            if (row < 0 || row >= FC_PROTECTION_PRAYER_COUNT ||
+                p->current_prayer <= 0)
+                break;
+            int action = protection_prayer_toggle(p, &FC_PROTECTION_PRAYERS[row]);
             /* A context-menu verb is explicit, not a toggle of whatever
              * prayer happens to be active when the option is selected. */
             if (intent->secondary == 1 && action == FC_PRAYER_OFF) action = 0;
@@ -9179,9 +9104,10 @@ static void process_human_clicks(ViewerState* v, int ui_capture) {
 /* Called EVERY FRAME for key presses. Buffers actions for next tick. */
 static void process_human_keys(ViewerState* v) {
     FcPlayer* p = &v->state.player;
-    if (IsKeyPressed(KEY_ONE))   v->pending_prayer = (p->prayer == PRAYER_PROTECT_MELEE) ? FC_PRAYER_OFF : FC_PRAYER_MELEE;
-    if (IsKeyPressed(KEY_TWO))   v->pending_prayer = (p->prayer == PRAYER_PROTECT_RANGE) ? FC_PRAYER_OFF : FC_PRAYER_RANGE;
-    if (IsKeyPressed(KEY_THREE)) v->pending_prayer = (p->prayer == PRAYER_PROTECT_MAGIC) ? FC_PRAYER_OFF : FC_PRAYER_MAGIC;
+    for (int i = 0; i < FC_PROTECTION_PRAYER_COUNT; i++) {
+        if (IsKeyPressed(FC_PROTECTION_PRAYERS[i].key))
+            v->pending_prayer = protection_prayer_toggle(p, &FC_PROTECTION_PRAYERS[i]);
+    }
     if (IsKeyPressed(KEY_F))     v->pending_eat = FC_EAT_SHARK;
     if (IsKeyPressed(KEY_P))     v->pending_drink = FC_DRINK_PRAYER_POT;
     if (IsKeyPressed(KEY_X))
@@ -9651,41 +9577,22 @@ static void draw_scene(ViewerState* v) {
                                           &combat_draw_context);
 
     /* Prayer overhead icon — 2D projected from player head position */
-    int rendered_prayer = fc_actor_animation_render_prayer(
-        &v->actor_animation, &v->state);
-    if (v->entity_count > 0 && rendered_prayer != PRAYER_NONE) {
+    int prayer_row = protection_prayer_index(fc_actor_animation_render_prayer(
+        &v->actor_animation, &v->state));
+    if (v->entity_count > 0 && prayer_row >= 0) {
         EntityRenderPose pose = entity_render_pose(v, &v->entities[0]);
         float p_gy = ground_y_smooth(v, pose.x, pose.y);
         Vector3 head_pos = {pose.x, p_gy + 3.0f, -pose.y};
         Vector2 scr = GetWorldToScreen(head_pos, v->camera);
         int px = (int)scr.x, py = (int)scr.y;
 
-        /* Draw actual prayer sprite texture */
-        Texture2D tex = {0};
-        if (rendered_prayer == PRAYER_PROTECT_MELEE && v->pray_melee_tex.id > 0)
-            tex = v->pray_melee_tex;
-        else if (rendered_prayer == PRAYER_PROTECT_RANGE && v->pray_missiles_tex.id > 0)
-            tex = v->pray_missiles_tex;
-        else if (rendered_prayer == PRAYER_PROTECT_MAGIC && v->pray_magic_tex.id > 0)
-            tex = v->pray_magic_tex;
-
-        if (tex.id > 0) {
-            /* Scale sprite to ~28x28 pixels and center on projected position */
-            float scale = 28.0f / (float)tex.width;
-            int dw = (int)(tex.width * scale);
-            int dh = (int)(tex.height * scale);
-            DrawTextureEx(tex, (Vector2){(float)(px - dw/2), (float)(py - dh/2)},
-                          0.0f, scale, WHITE);
-        } else {
-            /* Fallback: letter if textures not loaded */
-            const char* icon_txt;
-            if (rendered_prayer == PRAYER_PROTECT_MELEE) icon_txt = "M";
-            else if (rendered_prayer == PRAYER_PROTECT_RANGE) icon_txt = "R";
-            else icon_txt = "W";
-            DrawCircle(px, py, 14, (Color){255,255,255,220});
-            int itw = fc_osrs_measure_text(icon_txt, 18);
-            fc_osrs_draw_text(icon_txt, px - itw/2, py - 9, 18, (Color){0,0,0,255});
-        }
+        /* Scale sprite to ~28x28 pixels and center on projected position */
+        Texture2D tex = v->prayer_on[prayer_row];
+        float scale = 28.0f / (float)tex.width;
+        int dw = (int)(tex.width * scale);
+        int dh = (int)(tex.height * scale);
+        DrawTextureEx(tex, (Vector2){(float)(px - dw/2), (float)(py - dh/2)},
+                      0.0f, scale, WHITE);
     }
 }
 
@@ -10147,29 +10054,16 @@ static void draw_runec_prayer_tab(ViewerState* v, Rectangle content) {
 
     DrawLine((int)content.x + 4, by - 2, right, by - 2, COL_PANEL_BORDER);
 
-    static const char* pray_names[] = {
-        "Prot. Melee", "Prot. Range", "Prot. Magic"
-    };
-    static const int pray_vals[] = {
-        PRAYER_PROTECT_MELEE, PRAYER_PROTECT_RANGE, PRAYER_PROTECT_MAGIC
-    };
-    Color pray_colors[] = { COL_TEXT_YELLOW, COL_TEXT_GREEN, COL_PRAY_BLUE };
-    Texture2D tex_on[] = {
-        v->tex_pray_melee_on, v->tex_pray_range_on, v->tex_pray_magic_on
-    };
-    Texture2D tex_off[] = {
-        v->tex_pray_melee_off, v->tex_pray_range_off, v->tex_pray_magic_off
-    };
-
     int no_points = (p->current_prayer <= 0);
     Vector2 mouse = GetMousePosition();
     const Color slot_empty = CLITERAL(Color){30, 26, 20, 255};
     const Color pray_active = CLITERAL(Color){60, 120, 200, 200};
     const Color tab_hover = CLITERAL(Color){72, 63, 51, 255};
     const Color pray_button = CLITERAL(Color){50, 44, 36, 255};
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < FC_PROTECTION_PRAYER_COUNT; i++) {
+        const FcProtectionPrayer* row = &FC_PROTECTION_PRAYERS[i];
         Rectangle br = runec_prayer_button_rect(content, i);
-        int is_active = (rendered_prayer == pray_vals[i]);
+        int is_active = (rendered_prayer == row->prayer);
         int hovered = CheckCollisionPointRec(mouse, br);
 
         Color bg;
@@ -10184,15 +10078,15 @@ static void draw_runec_prayer_tab(ViewerState* v, Rectangle content) {
         }
         DrawRectangleRec(br, bg);
         DrawRectangleLinesEx(br, is_active ? 2 : 1,
-                             is_active ? pray_colors[i] : COL_PANEL_BORDER);
+                             is_active ? row->color : COL_PANEL_BORDER);
 
-        Texture2D icon = is_active ? tex_on[i] : tex_off[i];
+        Texture2D icon = is_active ? v->prayer_on[i] : v->prayer_off[i];
         Color icon_tint = no_points ? CLITERAL(Color){80,80,80,255} : WHITE;
         draw_tex_fit(icon, (int)br.x + 4, (int)br.y + 2, 30, 30, icon_tint);
 
         Color tc = no_points ? COL_TEXT_DIM
-            : (is_active ? COL_TEXT_WHITE : pray_colors[i]);
-        text_s(pray_names[i], (int)br.x + 38, (int)br.y + 7, 10, tc);
+            : (is_active ? COL_TEXT_WHITE : row->color);
+        text_s(row->label, (int)br.x + 38, (int)br.y + 7, 10, tc);
 
         snprintf(b, sizeof(b), "[%d]", i + 1);
         text_s(b, (int)br.x + 38, (int)br.y + 21, 8, COL_TEXT_DIM);
@@ -10202,7 +10096,8 @@ static void draw_runec_prayer_tab(ViewerState* v, Rectangle content) {
         }
     }
 
-    by = (int)runec_prayer_button_rect(content, 2).y + 34 + 9;
+    by = (int)runec_prayer_button_rect(
+        content, FC_PROTECTION_PRAYER_COUNT - 1).y + 34 + 9;
     snprintf(b, sizeof(b), "Prayer bonus: +%d", p->prayer_bonus);
     text_s(b, x, by, 8, COL_TEXT_DIM);
 
@@ -10228,24 +10123,18 @@ static int process_runec_prayer_click(ViewerState* v) {
     if (!CheckCollisionPointRec(mouse, content))
         return 0;
 
-    static const struct {
-        int prayer;
-        int action;
-        int ui_slot;
-    } buttons[] = {
-        {PRAYER_PROTECT_MELEE, FC_PRAYER_MELEE, 18},
-        {PRAYER_PROTECT_RANGE, FC_PRAYER_RANGE, 17},
-        {PRAYER_PROTECT_MAGIC, FC_PRAYER_MAGIC, 16},
-    };
-
-    for (int i = 0; i < (int)(sizeof(buttons) / sizeof(buttons[0])); i++) {
+    for (int i = 0; i < FC_PROTECTION_PRAYER_COUNT; i++) {
+        const FcProtectionPrayer* row = &FC_PROTECTION_PRAYERS[i];
         Rectangle r = runec_prayer_button_rect(content, i);
         if (!CheckCollisionPointRec(mouse, r))
             continue;
-        if (right_click)
-            runec_ui_open_prayer_context(&v->ui, mouse, buttons[i].ui_slot);
-        else
-            queue_viewer_prayer_button(v, buttons[i].prayer, buttons[i].action);
+        if (right_click) {
+            int active = fc_actor_animation_render_prayer(
+                &v->actor_animation, &v->state) == row->prayer;
+            runec_ui_open_prayer_context(&v->ui, mouse, i, row->name, active);
+        } else {
+            queue_viewer_prayer_button(v, row);
+        }
         return 1;
     }
 
@@ -10259,19 +10148,14 @@ static int process_runec_prayer_click(ViewerState* v) {
  * replay, and Puffer's puf_render(). No graphics are allocated by training. */
 static void fc_viewer_destroy(ViewerState* v) {
     if (!v) return;
-    if (v->pray_melee_tex.id > 0) UnloadTexture(v->pray_melee_tex);
-    if (v->pray_missiles_tex.id > 0) UnloadTexture(v->pray_missiles_tex);
-    if (v->pray_magic_tex.id > 0) UnloadTexture(v->pray_magic_tex);
+    for (int i = 0; i < FC_PROTECTION_PRAYER_COUNT; i++) {
+        if (v->prayer_on[i].id > 0) UnloadTexture(v->prayer_on[i]);
+        if (v->prayer_off[i].id > 0) UnloadTexture(v->prayer_off[i]);
+    }
     for (int i = 0; i < FC_CLICK_CROSS_FRAME_COUNT * 2; i++) {
         if (v->click_cross_tex[i].id > 0)
             UnloadTexture(v->click_cross_tex[i]);
     }
-    if (v->tex_pray_melee_on.id > 0) UnloadTexture(v->tex_pray_melee_on);
-    if (v->tex_pray_melee_off.id > 0) UnloadTexture(v->tex_pray_melee_off);
-    if (v->tex_pray_range_on.id > 0) UnloadTexture(v->tex_pray_range_on);
-    if (v->tex_pray_range_off.id > 0) UnloadTexture(v->tex_pray_range_off);
-    if (v->tex_pray_magic_on.id > 0) UnloadTexture(v->tex_pray_magic_on);
-    if (v->tex_pray_magic_off.id > 0) UnloadTexture(v->tex_pray_magic_off);
     fc_combat_presentation_destroy(v->combat_presentation);
     fc_actor_animation_shutdown(&v->actor_animation);
     if (v->object_anim_runtimes) {
@@ -10413,18 +10297,20 @@ static ViewerState* fc_viewer_create(int replay) {
     if (!v->combat_presentation)
         fprintf(stderr, "error: combat presentation initialization failed\n");
 
-    /* Load prayer overhead icon textures */
-    {
-        if (fc_asset_exists("data/sprites/ui/prayeron_14.png")) {
-            v->pray_melee_tex = fc_load_texture_asset("data/sprites/ui/prayeron_14.png");
-            v->pray_missiles_tex = fc_load_texture_asset("data/sprites/ui/prayeron_13.png");
-            v->pray_magic_tex = fc_load_texture_asset("data/sprites/ui/prayeron_12.png");
-            fprintf(stderr, "Prayer icons loaded from %s\n", fc_asset_root());
-        } else {
-            fprintf(stderr, "error: prayer icons not found under asset root %s\n",
-                    fc_asset_root());
-        }
+    /* Protection prayer sprites for the Prayer tab and the overhead icon. */
+    int prayer_icons_loaded = 0;
+    for (int i = 0; i < FC_PROTECTION_PRAYER_COUNT; i++) {
+        char path[64];
+        snprintf(path, sizeof(path), "data/sprites/ui/prayeron_%d.png",
+                 FC_PROTECTION_PRAYERS[i].sprite);
+        v->prayer_on[i] = fc_load_texture_asset(path);
+        snprintf(path, sizeof(path), "data/sprites/ui/prayeroff_%d.png",
+                 FC_PROTECTION_PRAYERS[i].sprite);
+        v->prayer_off[i] = fc_load_texture_asset(path);
+        prayer_icons_loaded += (v->prayer_on[i].id > 0) + (v->prayer_off[i].id > 0);
     }
+    fprintf(stderr, "Prayer icons loaded: %d/%d\n", prayer_icons_loaded,
+            2 * FC_PROTECTION_PRAYER_COUNT);
 
     /* Native b237 click crosses: frames 0-3 are movement (yellow), frames
      * 4-7 are interaction (red). RuneC advances one frame every 100 ms. */
@@ -10444,22 +10330,6 @@ static ViewerState* fc_viewer_create(int replay) {
                 click_cross_loaded);
         if (click_cross_loaded != FC_CLICK_CROSS_FRAME_COUNT * 2)
             fprintf(stderr, "error: required click cross sprites failed to load\n");
-    }
-
-    /* Load prayer icons used by the active RuneC prayer override. */
-    {
-        v->tex_pray_melee_on = fc_load_texture_asset(
-            "data/sprites/ui/prayeron_14.png");
-        v->tex_pray_melee_off = fc_load_texture_asset(
-            "data/sprites/ui/prayeroff_14.png");
-        v->tex_pray_range_on = fc_load_texture_asset(
-            "data/sprites/ui/prayeron_13.png");
-        v->tex_pray_range_off = fc_load_texture_asset(
-            "data/sprites/ui/prayeroff_13.png");
-        v->tex_pray_magic_on = fc_load_texture_asset(
-            "data/sprites/ui/prayeron_12.png");
-        v->tex_pray_magic_off = fc_load_texture_asset(
-            "data/sprites/ui/prayeroff_12.png");
     }
 
     int required_resources_ready = 1;
@@ -10495,20 +10365,11 @@ static ViewerState* fc_viewer_create(int replay) {
     REQUIRE_VIEWER_RESOURCE(
         fc_combat_presentation_ready(v->combat_presentation),
         "projectile, spot-animation, healthbar, and hitsplat data");
-    REQUIRE_VIEWER_RESOURCE(v->pray_melee_tex.id > 0 &&
-                            v->pray_missiles_tex.id > 0 &&
-                            v->pray_magic_tex.id > 0,
-                            "overhead Prayer icons");
+    REQUIRE_VIEWER_RESOURCE(prayer_icons_loaded == 2 * FC_PROTECTION_PRAYER_COUNT,
+                            "Prayer tab and overhead icons");
     REQUIRE_VIEWER_RESOURCE(
         click_cross_loaded == FC_CLICK_CROSS_FRAME_COUNT * 2,
         "click cross sprites");
-    REQUIRE_VIEWER_RESOURCE(v->tex_pray_melee_on.id > 0 &&
-                            v->tex_pray_melee_off.id > 0 &&
-                            v->tex_pray_range_on.id > 0 &&
-                            v->tex_pray_range_off.id > 0 &&
-                            v->tex_pray_magic_on.id > 0 &&
-                            v->tex_pray_magic_off.id > 0,
-                            "Prayer interface icons");
 #undef REQUIRE_VIEWER_RESOURCE
     if (!required_resources_ready) {
         fprintf(stderr,
