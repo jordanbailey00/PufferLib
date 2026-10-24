@@ -527,33 +527,12 @@ typedef struct {
 _Static_assert(sizeof(FcTextureAnimRow) == 16,
                "TANM rows must retain their 16-byte file layout");
 
-static int fc_companion_path(char* out, size_t cap, const char* path,
-                             const char* extension) {
-    char* dot;
-    int written;
-    size_t offset;
-    size_t remaining;
-    if (!out || cap == 0 || !path || !extension) return 0;
-    written = snprintf(out, cap, "%s", path);
-    if (written < 0 || (size_t)written >= cap) return 0;
-    dot = strrchr(out, '.');
-    if (dot) {
-        offset = (size_t)(dot - out);
-    } else {
-        offset = strlen(out);
-    }
-    remaining = cap - offset;
-    written = snprintf(out + offset, remaining, "%s", extension);
-    return written >= 0 && (size_t)written < remaining;
-}
-
+/* The animation table is optional: without it the atlas stays static. */
 static void fc_animated_atlas_load_anims(FcAnimatedAtlas* atlas,
-                                         const char* atlas_path) {
-    char path[FC_ASSET_PATH_MAX];
+                                         const char* path) {
     FcReader r;
 
-    if (!fc_companion_path(path, sizeof(path), atlas_path, ".tanim")
-            || !fc_asset_exists(path) || !fc_reader_open(&r, path))
+    if (!fc_asset_exists(path) || !fc_reader_open(&r, path))
         return;
     uint32_t magic = fc_read_u32(&r);
     uint32_t version = fc_read_u32(&r);
@@ -579,7 +558,8 @@ static void fc_animated_atlas_load_anims(FcAnimatedAtlas* atlas,
             atlas->anim_count, path);
 }
 
-int fc_animated_atlas_load(FcAnimatedAtlas* atlas, const char* atlas_path) {
+int fc_animated_atlas_load(FcAnimatedAtlas* atlas, const char* atlas_path,
+                           const char* anim_path) {
     FcAnimatedAtlas loaded = {0};
     FcReader r;
     Image image;
@@ -611,7 +591,7 @@ int fc_animated_atlas_load(FcAnimatedAtlas* atlas, const char* atlas_path) {
     SetTextureFilter(loaded.texture, TEXTURE_FILTER_POINT);
     loaded.width = (int)width;
     loaded.height = (int)height;
-    fc_animated_atlas_load_anims(&loaded, atlas_path);
+    fc_animated_atlas_load_anims(&loaded, anim_path);
     *atlas = loaded;
     fprintf(stderr, "animated atlas: %ux%u loaded from %s\n",
             width, height, atlas_path);
@@ -741,20 +721,13 @@ typedef struct {
     uint8_t interleave_count;
     uint8_t *interleave_order;
     int16_t frame_step;
-    int8_t preanim_move;
     int8_t postanim_move;
-    uint8_t forced_priority;
-    uint8_t max_loops;
-    int8_t reply_mode;
-    uint8_t stretches;
-    int8_t walk_flag;
     AnimSequenceFrame *frames;
 } AnimSequence;
 
 typedef struct {
     AnimFrameBase *bases;
     int base_count;
-    uint16_t *base_ids;
     AnimSequence *sequences;
     int seq_count;
 } AnimCache;
@@ -771,7 +744,6 @@ typedef struct {
 #define ANIM2_MIN_VERSION 2
 #define ANIM2_VERSION 3
 #define ANIM2_HEADER_SIZE 24
-#define ANIM_MAX_SLOTS 256
 #define ANIM_SINE_COUNT 2048
 
 /* ======================================================================== */
@@ -809,7 +781,6 @@ void anim_cache_free(AnimCache* cache) {
         free(fb->frame_maps);
     }
     free(cache->bases);
-    free(cache->base_ids);
 
     for (int i = 0; i < cache->seq_count; i++) {
         AnimSequence* seq = &cache->sequences[i];
@@ -848,24 +819,15 @@ static void anim_read_sequence(FcReader* r, AnimSequence* seq,
 
     if (format_version >= 3) {
         seq->frame_step = fc_read_i16(r);
-        seq->preanim_move = (int8_t)fc_read_u8(r);
+        fc_reader_skip(r, 1); /* pre-animation movement: unused */
         seq->postanim_move = (int8_t)fc_read_u8(r);
-        seq->forced_priority = fc_read_u8(r);
-        seq->max_loops = fc_read_u8(r);
-        seq->reply_mode = (int8_t)fc_read_u8(r);
-        seq->stretches = fc_read_u8(r);
-        seq->walk_flag = seq->postanim_move;
+        fc_reader_skip(r, 4); /* priority, loops, reply mode, stretch: unused */
     } else {
-        seq->walk_flag = (int8_t)fc_read_u8(r);
+        int8_t walk_flag = (int8_t)fc_read_u8(r);
         seq->frame_step = -1;
-        seq->preanim_move = seq->interleave_count > 0 ? 2 : 0;
-        seq->postanim_move = seq->walk_flag >= 0
-            ? seq->walk_flag
+        seq->postanim_move = walk_flag >= 0
+            ? walk_flag
             : (seq->interleave_count > 0 ? 2 : 0);
-        seq->forced_priority = 5;
-        seq->max_loops = 99;
-        seq->reply_mode = -1;
-        seq->stretches = 0;
     }
 
     seq->frames = fc_alloc_array(r, frame_count, sizeof(AnimSequenceFrame));
@@ -925,12 +887,9 @@ AnimCache* anim_cache_load(const char* path) {
                       "unreasonable framebase or sequence count");
 
     cache->bases = fc_alloc_array(&r, base_count, sizeof(AnimFrameBase));
-    cache->base_ids = fc_alloc_array(&r, base_count, sizeof(uint16_t));
     if (r.ok) cache->base_count = (int)base_count;
-    for (int i = 0; r.ok && i < cache->base_count; i++) {
+    for (int i = 0; r.ok && i < cache->base_count; i++)
         anim_read_framebase(&r, &cache->bases[i]);
-        cache->base_ids[i] = cache->bases[i].base_id;
-    }
 
     cache->sequences = fc_alloc_array(&r, seq_count, sizeof(AnimSequence));
     if (r.ok) cache->seq_count = (int)seq_count;
@@ -1384,47 +1343,6 @@ int anim_mix_pose_action(
     return 0;
 }
 
-/* ======================================================================== */
-/* mesh re-expansion (apply animated base verts → expanded rendering verts)   */
-/* ======================================================================== */
-
-/**
- * Re-expand animated base vertices into the raylib mesh's expanded vertex buffer.
- * This mirrors expand_model from the Python exporter but in-place, using
- * face_indices to map from base to expanded vertices.
- *
- * The mesh has face_count*3 expanded vertices. Each triplet (i*3, i*3+1, i*3+2)
- * corresponds to face_indices[i*3], face_indices[i*3+1], face_indices[i*3+2]
- * pointing into base_vertices.
- *
- * OSRS Y is negated for rendering (negative-up → positive-up).
- */
-void anim_update_mesh(
-    float* mesh_vertices,
-    const AnimModelState* state,
-    const uint16_t* face_indices,
-    int face_count
-) {
-    for (int fi = 0; fi < face_count; fi++) {
-        int a = face_indices[fi * 3];
-        int b = face_indices[fi * 3 + 1];
-        int c = face_indices[fi * 3 + 2];
-
-        int vi = fi * 9; /* 3 verts * 3 coords */
-        mesh_vertices[vi]     = (float)state->verts[a * 3];
-        mesh_vertices[vi + 1] = (float)(-state->verts[a * 3 + 1]); /* negate Y */
-        mesh_vertices[vi + 2] = (float)state->verts[a * 3 + 2];
-
-        mesh_vertices[vi + 3] = (float)state->verts[b * 3];
-        mesh_vertices[vi + 4] = (float)(-state->verts[b * 3 + 1]);
-        mesh_vertices[vi + 5] = (float)state->verts[b * 3 + 2];
-
-        mesh_vertices[vi + 6] = (float)state->verts[c * 3];
-        mesh_vertices[vi + 7] = (float)(-state->verts[c * 3 + 1]);
-        mesh_vertices[vi + 8] = (float)state->verts[c * 3 + 2];
-    }
-}
-
 /* Models */
 // Loads models from .models MDL2/MDL3 binary for Raylib rendering.
 // Fight Caves raylib model loader.
@@ -1444,13 +1362,10 @@ typedef struct {
 typedef struct {
     uint32_t model_id;
     Model model;
-    int loaded;
     float *rest_verts;
-    float *rest_texcoords;
     int16_t *base_verts;
     uint8_t *vertex_skins;
     uint16_t *face_indices;
-    uint8_t *face_priorities;
     ModelFaceUvInfo *face_uvs;
     int base_vert_count;
     int face_count;
@@ -1458,34 +1373,19 @@ typedef struct {
 
 typedef struct {
     ModelEntry *entries;
-    int *index_by_id;
     int count;
-    int index_limit;
     int has_textures;
-    int loaded;
 } ModelSet;
 
 #define MDL2_MAGIC 0x4D444C32
 #define MDL3_MAGIC 0x4D444C33
 #define MUV1_MAGIC 0x3156554D
-#define MODEL_ID_INDEX_MAX 20000
 
-static int model_id_filter_contains(const uint32_t *ids, int id_count, uint32_t id) {
-    if (!ids) return 1;
-    if (id_count <= 0) return 0;
-    for (int i = 0; i < id_count; i++)
-        if (ids[i] == id) return 1;
-    return 0;
-}
-
+/* Sets hold at most a few dozen models, so a linear search is enough. */
 ModelEntry *model_find(ModelSet *set, uint32_t id) {
     if (!set) return NULL;
-    if (id < (uint32_t)set->index_limit && set->index_by_id) {
-        int idx = set->index_by_id[id];
-        if (idx >= 0 && idx < set->count) return &set->entries[idx];
-    }
     for (int i = 0; i < set->count; i++)
-        if (set->entries[i].model_id == id && set->entries[i].loaded) return &set->entries[i];
+        if (set->entries[i].model_id == id) return &set->entries[i];
     return NULL;
 }
 
@@ -1495,7 +1395,7 @@ ModelEntry *model_find(ModelSet *set, uint32_t id) {
 float models_pick_depth(const ModelEntry *entry, const int16_t *posed_vertices,
                          Vector3 position, float yaw_degrees, Camera3D camera,
                          Vector2 mouse, int screen_width, int screen_height) {
-    if (!entry || !entry->loaded || !entry->rest_verts) return -1;
+    if (!entry || !entry->rest_verts) return -1;
     /* Same model -> yaw -> translation order as DrawModelEx. Never read the
      * shared uploaded mesh: another NPC of this type may have a different pose. */
     Matrix transform = MatrixMultiply(entry->model.transform,
@@ -1607,7 +1507,7 @@ static void model_project_uvs_for_face(const int16_t *verts,
 
 void models_recompute_texture_uvs_from_vertices(ModelEntry *entry,
                                                 const int16_t *verts) {
-    if (!entry || !entry->loaded || !entry->face_uvs || !verts)
+    if (!entry || !entry->face_uvs || !verts)
         return;
     Mesh *mesh = &entry->model.meshes[0];
     if (!mesh->texcoords || !entry->face_indices)
@@ -1645,29 +1545,73 @@ void models_recompute_texture_uvs_from_vertices(ModelEntry *entry,
 void models_free(ModelSet *set) {
     if (!set) return;
     for (int i = 0; i < set->count; i++) {
-        if (set->entries[i].loaded) {
-            UnloadModel(set->entries[i].model);
-        }
-        free(set->entries[i].base_verts);
-        free(set->entries[i].rest_verts);
-        free(set->entries[i].rest_texcoords);
-        free(set->entries[i].vertex_skins);
-        free(set->entries[i].face_indices);
-        free(set->entries[i].face_priorities);
-        free(set->entries[i].face_uvs);
+        ModelEntry *entry = &set->entries[i];
+        if (entry->model.meshes) UnloadModel(entry->model);
+        free(entry->base_verts);
+        free(entry->rest_verts);
+        free(entry->vertex_skins);
+        free(entry->face_indices);
+        free(entry->face_uvs);
     }
     free(set->entries);
-    free(set->index_by_id);
     free(set);
 }
 
-/* Reads the rest of one model record (its id is already read); end is where
- * the next record starts. Textured files may follow the base data with a MUV1
- * block holding each face's UV projection, used to re-texture posed vertices.
- * Arrays go straight into the entry so models_free releases them on failure. */
-static void model_entry_read(FcReader *r, ModelEntry *entry, uint32_t id,
-                             int has_textures, size_t end,
-                             Texture2D atlas_texture) {
+/* World tile that becomes the arena's (0, 0): the terrain, objects and object
+ * animations are stored in world tiles and loaded in arena tiles. */
+#define FC_WORLD_ORIGIN_X 2368
+#define FC_WORLD_ORIGIN_Y 5056
+
+static void fc_mesh_free_arrays(Mesh *mesh) {
+    free(mesh->vertices);
+    free(mesh->texcoords);
+    free(mesh->normals);
+    free(mesh->colors);
+}
+
+/* Uploads a triangle list read from an asset (three vertices per face) as a
+ * one-mesh model. Flat face normals come from the vertices as read; arena
+ * meshes are then moved from world tiles to arena tiles (Z is negated world
+ * Y). Loaders allocate the zeroed normals array while reading, so a failed
+ * allocation fails the load. */
+static Model fc_mesh_upload(Mesh mesh, int world_to_arena) {
+    const float *v = mesh.vertices;
+    for (int i = 0; i < mesh.triangleCount; i++) {
+        int base = i * 9;
+        float e1x = v[base + 3] - v[base + 0];
+        float e1y = v[base + 4] - v[base + 1];
+        float e1z = v[base + 5] - v[base + 2];
+        float e2x = v[base + 6] - v[base + 0];
+        float e2y = v[base + 7] - v[base + 1];
+        float e2z = v[base + 8] - v[base + 2];
+        float nx = e1y * e2z - e1z * e2y;
+        float ny = e1z * e2x - e1x * e2z;
+        float nz = e1x * e2y - e1y * e2x;
+        float len = sqrtf(nx * nx + ny * ny + nz * nz);
+        if (len > 0.0001f) { nx /= len; ny /= len; nz /= len; }
+        for (int k = 0; k < 3; k++) {
+            mesh.normals[base + k * 3 + 0] = nx;
+            mesh.normals[base + k * 3 + 1] = ny;
+            mesh.normals[base + k * 3 + 2] = nz;
+        }
+    }
+    if (world_to_arena) {
+        for (int i = 0; i < mesh.vertexCount; i++) {
+            mesh.vertices[i * 3 + 0] -= (float)FC_WORLD_ORIGIN_X;
+            mesh.vertices[i * 3 + 2] += (float)FC_WORLD_ORIGIN_Y;
+        }
+    }
+    UploadMesh(&mesh, false);
+    return LoadModelFromMesh(mesh);
+}
+
+/* Reads one model record; end is where the next record starts. Textured files
+ * may follow the base data with a MUV1 block holding each face's UV
+ * projection, used to re-texture posed vertices. Arrays go straight into the
+ * entry so models_free releases them on failure. */
+static void model_entry_read(FcReader *r, ModelEntry *entry, int has_textures,
+                             size_t end, Texture2D atlas_texture) {
+    uint32_t id = fc_read_u32(r);
     int vertex_count = fc_read_u16(r);
     int face_count = fc_read_u16(r);
     int base_count = fc_read_u16(r);
@@ -1682,7 +1626,7 @@ static void model_entry_read(FcReader *r, ModelEntry *entry, uint32_t id,
     entry->vertex_skins = fc_read_array(r, base_count, 1);
     entry->face_indices = fc_read_array(r, (size_t)face_count * 3,
                                         sizeof(uint16_t));
-    entry->face_priorities = fc_read_array(r, face_count, 1);
+    fc_reader_skip(r, face_count); /* face render priorities: unused */
     if (r->ok && has_textures && end >= r->pos + 8) {
         uint32_t uv_magic = fc_read_u32(r);
         uint32_t uv_count = fc_read_u32(r);
@@ -1707,54 +1651,30 @@ static void model_entry_read(FcReader *r, ModelEntry *entry, uint32_t id,
                                        sizeof(float));
     mesh.normals = fc_alloc_array(r, (size_t)vertex_count * 3, sizeof(float));
     if (!r->ok) {
-        free(mesh.vertices);
-        free(mesh.colors);
-        free(mesh.texcoords);
-        free(mesh.normals);
+        fc_mesh_free_arrays(&mesh);
         return;
     }
 
-    // OSRS units -> tile units, flip Z for Raylib
-    float *verts = mesh.vertices;
+    /* OSRS units -> tile units, flip Z for Raylib */
     for (int i = 0; i < vertex_count; i++) {
-        verts[i*3]   /=  128.0f;
-        verts[i*3+1] /=  128.0f;
-        verts[i*3+2] /= -128.0f;
+        mesh.vertices[i * 3] /= 128.0f;
+        mesh.vertices[i * 3 + 1] /= 128.0f;
+        mesh.vertices[i * 3 + 2] /= -128.0f;
     }
-    memcpy(entry->rest_verts, verts, (size_t)vertex_count * 3 * sizeof(float));
-
-    for (int i = 0; i < face_count; i++) {
-        int i0 = i*3, i1 = i*3+1, i2 = i*3+2;
-        float ax = verts[i1*3]-verts[i0*3], ay = verts[i1*3+1]-verts[i0*3+1], az = verts[i1*3+2]-verts[i0*3+2];
-        float bx = verts[i2*3]-verts[i0*3], by = verts[i2*3+1]-verts[i0*3+1], bz = verts[i2*3+2]-verts[i0*3+2];
-        float nx = ay*bz-az*by, ny = az*bx-ax*bz, nz = ax*by-ay*bx;
-        float len = sqrtf(nx*nx+ny*ny+nz*nz);
-        if (len > 1e-4f) { nx/=len; ny/=len; nz/=len; }
-        for (int j = 0; j < 3; j++) {
-            mesh.normals[(i*3+j)*3] = nx; mesh.normals[(i*3+j)*3+1] = ny; mesh.normals[(i*3+j)*3+2] = nz;
-        }
-    }
-    UploadMesh(&mesh, false);
-
+    memcpy(entry->rest_verts, mesh.vertices,
+           (size_t)vertex_count * 3 * sizeof(float));
     entry->model_id = id;
-    entry->model = LoadModelFromMesh(mesh);
+    entry->model = fc_mesh_upload(mesh, 0);
     if (has_textures)
         entry->model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture =
             atlas_texture;
-    entry->loaded = 1;
-    entry->rest_texcoords = mesh.texcoords && vertex_count > 0
-        ? malloc((size_t)vertex_count * 2 * sizeof(float)) : NULL;
-    if (entry->rest_texcoords)
-        memcpy(entry->rest_texcoords, mesh.texcoords,
-               (size_t)vertex_count * 2 * sizeof(float));
     entry->base_vert_count = base_count;
     entry->face_count = face_count;
     fprintf(stderr, "  model %u: %d tris, %d base verts\n", id, face_count,
             base_count);
 }
 
-static ModelSet *models_load_filtered(const char *path, const uint32_t *ids,
-                                      int id_count, Texture2D atlas_texture) {
+ModelSet *models_load(const char *path, Texture2D atlas_texture) {
     ModelSet *set = calloc(1, sizeof(ModelSet));
     FcReader r;
     if (!set || !fc_reader_open(&r, path)) {
@@ -1771,24 +1691,12 @@ static ModelSet *models_load_filtered(const char *path, const uint32_t *ids,
                       "textured models need the shared atlas");
     uint32_t *offsets = fc_read_array(&r, count, sizeof(uint32_t));
     set->entries = fc_alloc_array(&r, count, sizeof(ModelEntry));
-    set->index_by_id = fc_alloc_array(&r, MODEL_ID_INDEX_MAX, sizeof(int));
-    if (r.ok) {
-        set->count = (int)count;
-        set->index_limit = MODEL_ID_INDEX_MAX;
-        for (int i = 0; i < set->index_limit; i++) set->index_by_id[i] = -1;
-    }
-
-    int loaded_count = 0;
+    if (r.ok) set->count = (int)count;
     for (int m = 0; r.ok && m < set->count; m++) {
         fc_reader_seek(&r, offsets[m]);
         size_t end = m + 1 < set->count ? offsets[m + 1] : r.size;
-        uint32_t id = fc_read_u32(&r);
-        if (!model_id_filter_contains(ids, id_count, id)) continue;
-        model_entry_read(&r, &set->entries[m], id, set->has_textures, end,
+        model_entry_read(&r, &set->entries[m], set->has_textures, end,
                          atlas_texture);
-        if (!r.ok) break;
-        if (id < (uint32_t)set->index_limit) set->index_by_id[id] = m;
-        loaded_count++;
     }
     free(offsets);
     fc_reader_close(&r);
@@ -1796,90 +1704,45 @@ static ModelSet *models_load_filtered(const char *path, const uint32_t *ids,
         models_free(set);
         return NULL;
     }
-    set->loaded = 1;
-    fprintf(stderr, "models: loaded %d from %s\n", loaded_count, path);
+    fprintf(stderr, "models: loaded %d from %s\n", set->count, path);
     return set;
 }
 
-ModelSet *models_load(const char *path, Texture2D atlas_texture) {
-    return models_load_filtered(path, NULL, 0, atlas_texture);
-}
-
 /* Npc Models */
-/*
- * Fight Caves model compatibility wrapper.
- *
- * The viewer historically used NpcModelSet/NpcModelEntry names for every
- * runtime model file. Keep those names while routing all NPC/player/projectile
- * files through the generalized MDL2/MDL3 model loader.
- */
 
-#define FC_B237_TZ_KIH 3116u
-#define FC_B237_TZ_KEK 3118u
-#define FC_B237_TZ_KEK_SM 3120u
-#define FC_B237_TOK_XIL 3121u
-#define FC_B237_YT_MEJKOT 3123u
-#define FC_B237_KET_ZEK 3125u
-#define FC_B237_TZTOK_JAD 3127u
-#define FC_B237_YT_HURKOT 3128u
+/* Model id of each NPC type in fc_npcs.models. */
+static const uint32_t NPC_MODEL_IDS[NPC_TYPE_COUNT] = {
+    [NPC_TZ_KIH] = 3116, [NPC_TZ_KEK] = 3118, [NPC_TZ_KEK_SM] = 3120,
+    [NPC_TOK_XIL] = 3121, [NPC_YT_MEJKOT] = 3123, [NPC_KET_ZEK] = 3125,
+    [NPC_TZTOK_JAD] = 3127, [NPC_YT_HURKOT] = 3128,
+};
 
-typedef ModelEntry NpcModelEntry;
-typedef ModelSet NpcModelSet;
-
-uint32_t fc_npc_type_to_model_id(int npc_type) {
-    switch (npc_type) {
-        case 1: return FC_B237_TZ_KIH;
-        case 2: return FC_B237_TZ_KEK;
-        case 3: return FC_B237_TZ_KEK_SM;
-        case 4: return FC_B237_TOK_XIL;
-        case 5: return FC_B237_YT_MEJKOT;
-        case 6: return FC_B237_KET_ZEK;
-        case 7: return FC_B237_TZTOK_JAD;
-        case 8: return FC_B237_YT_HURKOT;
-        default: return 0;
-    }
-}
-
-NpcModelEntry* fc_npc_model_find(NpcModelSet* set, uint32_t model_id) {
-    return model_find(set, model_id);
-}
-
-NpcModelSet* fc_npc_models_load(const char* path, Texture2D atlas_texture) {
-    return models_load(path, atlas_texture);
-}
-
-void fc_npc_models_unload(NpcModelSet* set) {
-    models_free(set);
+ModelEntry *npc_model_find(ModelSet *set, int npc_type) {
+    if (npc_type <= NPC_NONE || npc_type >= NPC_TYPE_COUNT) return NULL;
+    return model_find(set, NPC_MODEL_IDS[npc_type]);
 }
 
 /* Model Animation */
 
-void fc_model_animation_upload(NpcModelEntry *entry, AnimModelState *state) {
-    if (!entry || !entry->loaded || !state) return;
+/* Re-expands posed base vertices into the uploaded mesh, like the exporter's
+ * expand_model: the mesh has three vertices per face, taken from base vertices
+ * through face_indices, in the units models_load uses (tiles, with OSRS's
+ * downward Y negated and Z flipped). */
+void fc_model_animation_upload(ModelEntry *entry, AnimModelState *state) {
+    if (!entry || !state) return;
     models_recompute_texture_uvs_from_vertices(entry, state->verts);
-    float *mesh_vertices = entry->model.meshes[0].vertices;
-    anim_update_mesh(mesh_vertices, state, entry->face_indices,
-                     entry->face_count);
-    int expanded_vertices = entry->face_count * 3;
-    for (int i = 0; i < expanded_vertices; i++) {
-        mesh_vertices[i * 3] /= 128.0f;
-        mesh_vertices[i * 3 + 1] /= 128.0f;
-        mesh_vertices[i * 3 + 2] /= -128.0f;
+    Mesh *mesh = &entry->model.meshes[0];
+    for (int i = 0; i < entry->face_count * 3; i++) {
+        const int16_t *vertex = &state->verts[entry->face_indices[i] * 3];
+        mesh->vertices[i * 3] = (float)vertex[0] / 128.0f;
+        mesh->vertices[i * 3 + 1] = (float)(-vertex[1]) / 128.0f;
+        mesh->vertices[i * 3 + 2] = (float)vertex[2] / -128.0f;
     }
-    UpdateMeshBuffer(entry->model.meshes[0], 0, mesh_vertices,
-                     expanded_vertices * 3 * sizeof(float), 0);
+    UpdateMeshBuffer(*mesh, 0, mesh->vertices,
+                     entry->face_count * 9 * sizeof(float), 0);
 }
 
-static void apply_frame(NpcModelEntry *entry,
-                        AnimModelState *state,
-                        const AnimFrameData *frame,
-                        const AnimFrameBase *framebase) {
-    if (!entry || !entry->loaded || !state || !frame || !framebase) return;
-    anim_apply_frame(state, entry->base_verts, frame, framebase);
-    fc_model_animation_upload(entry, state);
-}
-
-void fc_model_animation_update(NpcModelEntry *entry,
+void fc_model_animation_update(ModelEntry *entry,
                                AnimCache *cache,
                                AnimModelState **state,
                                uint16_t *current_sequence,
@@ -1888,7 +1751,7 @@ void fc_model_animation_update(NpcModelEntry *entry,
                                int animation_id,
                                float dt,
                                float phase_ticks) {
-    if (!entry || !entry->loaded || !cache || animation_id < 0 ||
+    if (!entry || !cache || animation_id < 0 ||
         !entry->vertex_skins || !state || !current_sequence ||
         !frame_index || !frame_timer) return;
     AnimSequence *sequence = anim_get_sequence(cache, (uint16_t)animation_id);
@@ -1918,7 +1781,10 @@ void fc_model_animation_update(NpcModelEntry *entry,
     }
     AnimFrameData *frame = &sequence->frames[*frame_index].frame;
     AnimFrameBase *framebase = anim_get_framebase(cache, frame->framebase_id);
-    if (framebase) apply_frame(entry, *state, frame, framebase);
+    if (framebase) {
+        anim_apply_frame(*state, entry->base_verts, frame, framebase);
+        fc_model_animation_upload(entry, *state);
+    }
 }
 
 /* Objects Loader */
@@ -1939,12 +1805,7 @@ void fc_model_animation_update(NpcModelEntry *entry,
 
 typedef struct {
     Model model;
-    int placement_count;
-    int total_vertex_count;
-    int min_world_x;
-    int min_world_y;
     int has_textures;
-    int loaded;
 } ObjectMesh;
 
 typedef struct {
@@ -1966,7 +1827,6 @@ typedef struct {
 typedef struct {
     ObjectAnimPlacement *rows;
     int count;
-    int loaded;
 } ObjectAnimSet;
 
 #define OBJS_MAGIC 0x4F424A53  /* "OBJS" v1 */
@@ -1984,10 +1844,9 @@ ObjectMesh* objects_load(const char* path, Texture2D atlas_texture) {
     uint32_t magic = fc_read_u32(&r);
     fc_reader_require(&r, magic == OBJ2_MAGIC || magic == OBJS_MAGIC,
                       "not an objects file");
-    int has_textures = magic == OBJ2_MAGIC;
+    om->has_textures = magic == OBJ2_MAGIC;
     uint32_t placement_count = fc_read_u32(&r);
-    int32_t min_wx = fc_read_i32(&r);
-    int32_t min_wy = fc_read_i32(&r);
+    fc_reader_skip(&r, 8); /* minimum world x and y: unused */
     uint32_t total_verts = fc_read_u32(&r);
 
     Mesh mesh = { 0 };
@@ -1996,58 +1855,30 @@ ObjectMesh* objects_load(const char* path, Texture2D atlas_texture) {
     mesh.vertices = fc_read_array(&r, (size_t)total_verts * 3, sizeof(float));
     mesh.colors = fc_read_array(&r, (size_t)total_verts * 4, 1);
     /* texture coordinates (v2 only) */
-    if (has_textures)
+    if (om->has_textures)
         mesh.texcoords = fc_read_array(&r, (size_t)total_verts * 2,
                                        sizeof(float));
     mesh.normals = fc_alloc_array(&r, (size_t)total_verts * 3, sizeof(float));
     fc_reader_close(&r);
     if (!r.ok) {
-        free(mesh.vertices);
-        free(mesh.colors);
-        free(mesh.texcoords);
-        free(mesh.normals);
+        fc_mesh_free_arrays(&mesh);
         free(om);
         return NULL;
     }
     fprintf(stderr, "objects_load: %u placements, %u verts, format=%s\n",
-            placement_count, total_verts, has_textures ? "OBJ2" : "OBJS");
+            placement_count, total_verts, om->has_textures ? "OBJ2" : "OBJS");
 
-    /* compute normals */
-    float* raw_verts = mesh.vertices;
-    for (int i = 0; i < mesh.triangleCount; i++) {
-        int base = i * 9;
-        float ax = raw_verts[base + 0], ay = raw_verts[base + 1], az = raw_verts[base + 2];
-        float bx = raw_verts[base + 3], by = raw_verts[base + 4], bz = raw_verts[base + 5];
-        float cx = raw_verts[base + 6], cy = raw_verts[base + 7], cz = raw_verts[base + 8];
-
-        float e1x = bx - ax, e1y = by - ay, e1z = bz - az;
-        float e2x = cx - ax, e2y = cy - ay, e2z = cz - az;
-        float nx = e1y * e2z - e1z * e2y;
-        float ny = e1z * e2x - e1x * e2z;
-        float nz = e1x * e2y - e1y * e2x;
-        float len = sqrtf(nx * nx + ny * ny + nz * nz);
-        if (len > 0.0001f) { nx /= len; ny /= len; nz /= len; }
-
-        for (int v = 0; v < 3; v++) {
-            mesh.normals[i * 9 + v * 3 + 0] = nx;
-            mesh.normals[i * 9 + v * 3 + 1] = ny;
-            mesh.normals[i * 9 + v * 3 + 2] = nz;
-        }
-    }
-
-    UploadMesh(&mesh, false);
-
-    om->model = LoadModelFromMesh(mesh);
-    om->placement_count = (int)placement_count;
-    om->total_vertex_count = (int)total_verts;
-    om->min_world_x = min_wx;
-    om->min_world_y = min_wy;
-    om->has_textures = has_textures;
-    om->loaded = 1;
-    if (has_textures)
+    om->model = fc_mesh_upload(mesh, 1);
+    if (om->has_textures)
         om->model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture =
             atlas_texture;
     return om;
+}
+
+void objects_free(ObjectMesh* om) {
+    if (!om) return;
+    UnloadModel(om->model);
+    free(om);
 }
 
 _Static_assert(sizeof(ObjectAnimPlacement) == 40,
@@ -2079,44 +1910,17 @@ ObjectAnimSet* object_anims_load(const char* path) {
         object_anims_free(set);
         return NULL;
     }
-    set->loaded = 1;
+    /* world tiles -> arena tiles, as for the meshes */
+    for (int i = 0; i < set->count; i++) {
+        ObjectAnimPlacement* row = &set->rows[i];
+        row->pos_x -= (float)FC_WORLD_ORIGIN_X;
+        row->pos_z += (float)FC_WORLD_ORIGIN_Y;
+        row->world_x -= FC_WORLD_ORIGIN_X;
+        row->world_y -= FC_WORLD_ORIGIN_Y;
+    }
     fprintf(stderr, "object_anims_load: loaded %d animated placements from %s\n",
             set->count, path);
     return set;
-}
-
-void object_anims_offset(ObjectAnimSet* set, int wx, int wy) {
-    if (!set || !set->loaded) return;
-    for (int i = 0; i < set->count; i++) {
-        set->rows[i].pos_x -= (float)wx;
-        set->rows[i].pos_z += (float)wy;
-        set->rows[i].world_x -= wx;
-        set->rows[i].world_y -= wy;
-    }
-}
-
-/* shift object vertices so world coordinates (wx, wy) become local (0, 0).
-   must match terrain_offset() values for alignment. */
-void objects_offset(ObjectMesh* om, int wx, int wy) {
-    if (!om || !om->loaded) return;
-    float dx = (float)wx;
-    float dz = (float)wy;
-    float* verts = om->model.meshes[0].vertices;
-    for (int i = 0; i < om->total_vertex_count; i++) {
-        verts[i * 3 + 0] -= dx;        /* X */
-        verts[i * 3 + 2] += dz;        /* Z (negated world Y) */
-    }
-    UpdateMeshBuffer(om->model.meshes[0], 0, verts,
-                     om->total_vertex_count * 3 * sizeof(float), 0);
-    om->min_world_x -= wx;
-    om->min_world_y -= wy;
-    fprintf(stderr, "objects_offset: shifted by (%d, %d)\n", wx, wy);
-}
-
-void objects_free(ObjectMesh* om) {
-    if (!om) return;
-    if (om->loaded) UnloadModel(om->model);
-    free(om);
 }
 
 /* Terrain Loader */
@@ -2131,15 +1935,12 @@ void objects_free(ObjectMesh* om) {
  *   min_world_y: int32
  *   vertices: float32[vertex_count * 3]
  *   colors: uint8[vertex_count * 4]
+ *   optional heightmap: int32 min_x, int32 min_y, uint32 width,
+ *                       uint32 height, float32[width * height]
  */
 
 typedef struct {
     Model model;
-    int vertex_count;
-    int region_count;
-    int min_world_x;
-    int min_world_y;
-    int loaded;
     float *heightmap;
     int hm_min_x;
     int hm_min_y;
@@ -2151,9 +1952,7 @@ typedef struct {
 
 void terrain_free(TerrainMesh* tm) {
     if (!tm) return;
-    if (tm->loaded) {
-        UnloadModel(tm->model);
-    }
+    if (tm->model.meshes) UnloadModel(tm->model);
     free(tm->heightmap);
     free(tm);
 }
@@ -2180,10 +1979,10 @@ TerrainMesh* terrain_load(const char* path) {
     mesh.colors = fc_read_array(&r, (size_t)vert_count * 4, 1);
     mesh.normals = fc_alloc_array(&r, (size_t)vert_count * 3, sizeof(float));
 
-    /* optional heightmap appended after the colors */
+    /* optional heightmap appended after the colors, moved to arena tiles */
     if (r.ok && r.pos < r.size) {
-        tm->hm_min_x = fc_read_i32(&r);
-        tm->hm_min_y = fc_read_i32(&r);
+        tm->hm_min_x = fc_read_i32(&r) - FC_WORLD_ORIGIN_X;
+        tm->hm_min_y = fc_read_i32(&r) - FC_WORLD_ORIGIN_Y;
         uint32_t hm_w = fc_read_u32(&r);
         uint32_t hm_h = fc_read_u32(&r);
         fc_reader_require(&r, hm_w > 0 && hm_h > 0 && hm_w <= 4096
@@ -2195,73 +1994,18 @@ TerrainMesh* terrain_load(const char* path) {
     }
     fc_reader_close(&r);
     if (!r.ok) {
-        free(mesh.vertices);
-        free(mesh.colors);
-        free(mesh.normals);
+        fc_mesh_free_arrays(&mesh);
         terrain_free(tm);
         return NULL;
     }
     fprintf(stderr, "terrain_load: %u verts, %u regions, origin (%d, %d)\n",
             vert_count, region_count, min_wx, min_wy);
 
-    /* compute normals for proper lighting */
-    float* raw_verts = mesh.vertices;
-    for (int i = 0; i < mesh.triangleCount; i++) {
-        int base = i * 9;
-        float ax = raw_verts[base + 0], ay = raw_verts[base + 1], az = raw_verts[base + 2];
-        float bx = raw_verts[base + 3], by = raw_verts[base + 4], bz = raw_verts[base + 5];
-        float cx = raw_verts[base + 6], cy = raw_verts[base + 7], cz = raw_verts[base + 8];
-
-        float e1x = bx - ax, e1y = by - ay, e1z = bz - az;
-        float e2x = cx - ax, e2y = cy - ay, e2z = cz - az;
-        float nx = e1y * e2z - e1z * e2y;
-        float ny = e1z * e2x - e1x * e2z;
-        float nz = e1x * e2y - e1y * e2x;
-        float len = sqrtf(nx * nx + ny * ny + nz * nz);
-        if (len > 0.0001f) { nx /= len; ny /= len; nz /= len; }
-
-        for (int v = 0; v < 3; v++) {
-            mesh.normals[i * 9 + v * 3 + 0] = nx;
-            mesh.normals[i * 9 + v * 3 + 1] = ny;
-            mesh.normals[i * 9 + v * 3 + 2] = nz;
-        }
-    }
-
-    UploadMesh(&mesh, false);
-
-    tm->model = LoadModelFromMesh(mesh);
-    tm->vertex_count = (int)vert_count;
-    tm->region_count = (int)region_count;
-    tm->min_world_x = min_wx;
-    tm->min_world_y = min_wy;
-    tm->loaded = 1;
+    tm->model = fc_mesh_upload(mesh, 1);
     if (tm->heightmap)
-        fprintf(stderr, "terrain heightmap: %dx%d, origin (%d, %d)\n",
+        fprintf(stderr, "terrain heightmap: %dx%d, arena origin (%d, %d)\n",
                 tm->hm_width, tm->hm_height, tm->hm_min_x, tm->hm_min_y);
     return tm;
-}
-
-/* shift terrain so world coordinates (wx, wy) become local (0, 0).
-   offsets all mesh vertices and heightmap origin. must call before rendering. */
-void terrain_offset(TerrainMesh* tm, int wx, int wy) {
-    if (!tm || !tm->loaded) return;
-    float dx = (float)wx;
-    float dz = (float)wy;  /* Z = -world_y in our coord system */
-    float* verts = tm->model.meshes[0].vertices;
-    for (int i = 0; i < tm->vertex_count; i++) {
-        verts[i * 3 + 0] -= dx;        /* X */
-        verts[i * 3 + 2] += dz;        /* Z (negated world Y) */
-    }
-    UpdateMeshBuffer(tm->model.meshes[0], 0, verts,
-                     tm->vertex_count * 3 * sizeof(float), 0);
-    tm->min_world_x -= wx;
-    tm->min_world_y -= wy;
-    if (tm->heightmap) {
-        tm->hm_min_x -= wx;
-        tm->hm_min_y -= wy;
-    }
-    fprintf(stderr, "terrain_offset: shifted by (%d, %d), new origin (%d, %d)\n",
-            wx, wy, tm->min_world_x, tm->min_world_y);
 }
 
 /* query terrain height at a world tile position (tile corner) */
@@ -2290,7 +2034,6 @@ typedef struct {
 typedef struct {
     SpotAnimDef *defs;
     int count;
-    int loaded;
 } SpotAnimSet;
 
 #define SPOTANIM_MAGIC 0x544F5053u
@@ -2325,13 +2068,12 @@ SpotAnimSet *spotanims_load(const char *path) {
         spotanims_free(set);
         return NULL;
     }
-    set->loaded = 1;
     fprintf(stderr, "spotanims: loaded %d from %s\n", set->count, path);
     return set;
 }
 
 const SpotAnimDef *spotanim_find(const SpotAnimSet *set, int id) {
-    if (!set || !set->loaded || id < 0) return NULL;
+    if (!set || id < 0) return NULL;
     for (int i = 0; i < set->count; i++) {
         if ((int)set->defs[i].id == id) return &set->defs[i];
     }
@@ -2398,15 +2140,13 @@ static ModelSet *compose(ModelEntry *parts[], int count, uint32_t id) {
     out->base_verts = malloc((size_t)vertices * 3 * sizeof(int16_t));
     out->vertex_skins = malloc((size_t)vertices);
     out->face_indices = malloc((size_t)faces * 3 * sizeof(uint16_t));
-    out->face_priorities = malloc((size_t)faces);
     out->rest_verts = malloc((size_t)faces * 9 * sizeof(float));
     Mesh mesh = {.vertexCount = faces * 3, .triangleCount = faces};
     mesh.vertices = malloc((size_t)faces * 9 * sizeof(float));
     mesh.normals = malloc((size_t)faces * 9 * sizeof(float));
     mesh.colors = malloc((size_t)faces * 12);
     if (!out->base_verts || !out->vertex_skins || !out->face_indices ||
-        !out->face_priorities || !out->rest_verts || !mesh.vertices ||
-        !mesh.normals || !mesh.colors) {
+        !out->rest_verts || !mesh.vertices || !mesh.normals || !mesh.colors) {
         free(mesh.vertices); free(mesh.normals); free(mesh.colors);
         models_free(set);
         return NULL;
@@ -2422,8 +2162,6 @@ static ModelSet *compose(ModelEntry *parts[], int count, uint32_t id) {
         for (int f = 0; f < part->face_count * 3; f++)
             out->face_indices[face_offset * 3 + f] =
                 (uint16_t)(part->face_indices[f] + vertex_offset);
-        memcpy(out->face_priorities + face_offset, part->face_priorities,
-               (size_t)part->face_count);
         memcpy(mesh.vertices + face_offset * 9, part->rest_verts,
                (size_t)part->face_count * 9 * sizeof(float));
         memcpy(mesh.normals + face_offset * 9, source->normals,
@@ -2436,7 +2174,6 @@ static ModelSet *compose(ModelEntry *parts[], int count, uint32_t id) {
     memcpy(out->rest_verts, mesh.vertices, (size_t)faces * 9 * sizeof(float));
     UploadMesh(&mesh, true);
     out->model = LoadModelFromMesh(mesh);
-    out->loaded = set->loaded = 1;
     return set;
 }
 
@@ -6499,20 +6236,19 @@ int fc_player_equipment_visual_profile(const FcPlayer *player) {
     return weapon ? weapon->visual_profile : -1;
 }
 
-NpcModelEntry *fc_actor_player_model_entry(NpcModelSet *player_models,
-                                           int active_loadout) {
+ModelEntry *fc_actor_player_model_entry(ModelSet *player_models,
+                                        int active_loadout) {
     if (!player_models) return NULL;
     if (active_loadout < 0 || active_loadout >= FC_NUM_LOADOUTS)
         active_loadout = FC_ACTIVE_LOADOUT;
     uint32_t model_id = FC_LOADOUTS[active_loadout].player_model_id;
-    NpcModelEntry *entry = fc_npc_model_find(player_models, model_id);
-    return entry && entry->loaded ? entry : NULL;
+    return model_find(player_models, model_id);
 }
 
 
 void fc_actor_animation_upload_npc(FcActorAnimation *animation,
                                    int npc_slot,
-                                   NpcModelEntry *entry) {
+                                   ModelEntry *entry) {
     if (!animation || npc_slot < 0 || npc_slot >= FC_MAX_NPCS) return;
     fc_model_animation_upload(entry, animation->npc_states[npc_slot]);
 }
@@ -6659,9 +6395,9 @@ static int sequence_blocks_movement(AnimCache *cache, uint16_t sequence_id) {
 }
 
 static void recreate_player_state(FcActorAnimation *animation,
-                                  NpcModelEntry *entry,
+                                  ModelEntry *entry,
                                   int active_loadout) {
-    if (!animation || !entry || !entry->loaded || !entry->vertex_skins) return;
+    if (!animation || !entry || !entry->vertex_skins) return;
     if (animation->player_state &&
         animation->player_state->vert_count == entry->base_vert_count) return;
     if (animation->player_state) anim_model_state_free(animation->player_state);
@@ -6685,7 +6421,7 @@ void fc_actor_animation_init(FcActorAnimation *animation) {
 
 void fc_actor_animation_reset(FcActorAnimation *animation,
                               const FcState *state,
-                              NpcModelSet *player_models,
+                              ModelSet *player_models,
                               int active_loadout) {
     if (!animation || !state) return;
     fc_visual_scene_init(&animation->scene);
@@ -6930,8 +6666,8 @@ static uint16_t player_pose_sequence(const FcPlayerVisualProfile *profile,
 
 void fc_actor_animation_update_models(FcActorAnimation *animation,
                                       const FcState *state,
-                                      NpcModelSet *player_models,
-                                      NpcModelSet *npc_models,
+                                      ModelSet *player_models,
+                                      ModelSet *npc_models,
                                       AnimCache *cache,
                                       int active_loadout,
                                       float tps,
@@ -6939,7 +6675,7 @@ void fc_actor_animation_update_models(FcActorAnimation *animation,
                                       const unsigned char deferred_deaths[FC_MAX_NPCS]) {
     if (!animation || !state || !cache) return;
     float anim_dt = fc_actor_animation_scaled_dt(tps, dt);
-    NpcModelEntry *player_entry =
+    ModelEntry *player_entry =
         fc_actor_player_model_entry(player_models, active_loadout);
     int visual_profile = fc_player_equipment_visual_profile(&state->player);
     recreate_player_state(animation, player_entry, visual_profile);
@@ -6996,9 +6732,8 @@ void fc_actor_animation_update_models(FcActorAnimation *animation,
             animation->npc_prayer_lock_ticks[i] = -1;
             continue;
         }
-        NpcModelEntry *entry = fc_npc_model_find(
-            npc_models, fc_npc_type_to_model_id(npc->npc_type));
-        if (!entry || !entry->loaded || !entry->vertex_skins) continue;
+        ModelEntry *entry = npc_model_find(npc_models, npc->npc_type);
+        if (!entry || !entry->vertex_skins) continue;
         if (!animation->npc_states[i] ||
             animation->npc_states[i]->vert_count != entry->base_vert_count) {
             if (animation->npc_states[i])
@@ -7359,8 +7094,8 @@ typedef struct {
     FcCombatPresentationContext presentation;
     const FcRenderEntity *entities;
     int entity_count;
-    NpcModelSet *player_models;
-    NpcModelSet *npc_models;
+    ModelSet *player_models;
+    ModelSet *npc_models;
     int active_loadout;
     const RuneCUiAssets *ui_assets;
     Camera3D camera;
@@ -7477,7 +7212,7 @@ struct FcCombatPresentation {
     float npc_healthbar_timers[FC_MAX_NPCS];
     VisualProjectile projectiles[MAX_PROJECTILES];
     VisualEffect effects[MAX_VISUAL_EFFECTS];
-    NpcModelSet *projectile_models;
+    ModelSet *projectile_models;
     SpotAnimSet *spotanims;
     Texture2D hitsplat_zero_texture;
     Texture2D hitsplat_damage_texture;
@@ -7489,7 +7224,7 @@ struct FcCombatPresentation {
 
 static float ground_height(const FcCombatPresentationContext *context,
                            int tile_x, int tile_y) {
-    return context && context->terrain && context->terrain->loaded
+    return context && context->terrain
         ? terrain_height_at(context->terrain, tile_x, tile_y) + 0.1f : 0.0f;
 }
 
@@ -7538,7 +7273,7 @@ FcCombatPresentation *fc_combat_presentation_create(Texture2D shared_atlas) {
     FcCombatPresentation *presentation = calloc(1, sizeof(*presentation));
     if (!presentation) return NULL;
     if (fc_asset_exists("fc_projectiles.models")) {
-        presentation->projectile_models = fc_npc_models_load(
+        presentation->projectile_models = models_load(
             "fc_projectiles.models", shared_atlas);
     }
     if (fc_asset_exists("fc_spotanims.bin"))
@@ -7577,8 +7312,7 @@ FcCombatPresentation *fc_combat_presentation_create(Texture2D shared_atlas) {
 int fc_combat_presentation_ready(
         const FcCombatPresentation *presentation) {
     if (!presentation || !presentation->projectile_models ||
-        !presentation->projectile_models->loaded || !presentation->spotanims ||
-        !presentation->spotanims->loaded) {
+        !presentation->spotanims) {
         return 0;
     }
     const Texture2D textures[] = {
@@ -7611,7 +7345,7 @@ void fc_combat_presentation_destroy(FcCombatPresentation *presentation) {
     }
     if (presentation->spotanims) spotanims_free(presentation->spotanims);
     if (presentation->projectile_models)
-        fc_npc_models_unload(presentation->projectile_models);
+        models_free(presentation->projectile_models);
     free(presentation);
 }
 
@@ -8257,7 +7991,7 @@ void fc_combat_presentation_update(
     }
 }
 
-static NpcModelEntry *projectile_model_for_spot(
+static ModelEntry *projectile_model_for_spot(
     FcCombatPresentation *presentation, uint32_t spot_id,
     const SpotAnimDef **out_spot) {
     const SpotAnimDef *spot = presentation && presentation->spotanims
@@ -8265,14 +7999,14 @@ static NpcModelEntry *projectile_model_for_spot(
     if (out_spot) *out_spot = spot;
     if (!presentation || spot_id == 0 || !presentation->projectile_models)
         return NULL;
-    NpcModelEntry *entry = fc_npc_model_find(presentation->projectile_models,
-                                             PROJ_SPOTANIM_MODEL_BASE + spot_id);
+    ModelEntry *entry = model_find(presentation->projectile_models,
+                                   PROJ_SPOTANIM_MODEL_BASE + spot_id);
     if (!entry && spot && spot->model_id >= 0)
-        entry = fc_npc_model_find(presentation->projectile_models,
-                                  (uint32_t)spot->model_id);
+        entry = model_find(presentation->projectile_models,
+                           (uint32_t)spot->model_id);
     if (!entry)
-        entry = fc_npc_model_find(presentation->projectile_models, spot_id);
-    return entry && entry->loaded ? entry : NULL;
+        entry = model_find(presentation->projectile_models, spot_id);
+    return entry;
 }
 
 void fc_combat_presentation_draw_world(
@@ -8286,7 +8020,7 @@ void fc_combat_presentation_draw_world(
         if (!projectile->active || projectile->spot_id == 0 ||
             !projectile->launched) continue;
         const SpotAnimDef *spot = NULL;
-        NpcModelEntry *entry = projectile_model_for_spot(
+        ModelEntry *entry = projectile_model_for_spot(
             presentation, projectile->spot_id, &spot);
         if (entry) {
             float horizontal_speed = sqrtf(
@@ -8355,7 +8089,7 @@ void fc_combat_presentation_draw_world(
             }
         }
         const SpotAnimDef *spot = NULL;
-        NpcModelEntry *entry = projectile_model_for_spot(
+        ModelEntry *entry = projectile_model_for_spot(
             presentation, effect->spot_id, &spot);
         if (entry) {
             float scale_xy = spot && spot->resize_xy > 0
@@ -8406,13 +8140,13 @@ static float entity_model_top(const FcCombatPresentationDrawContext *context,
                               const FcRenderEntity *entity) {
     Model *model = NULL;
     if (entity->entity_type == ENTITY_PLAYER) {
-        NpcModelEntry *entry = fc_actor_player_model_entry(
+        ModelEntry *entry = fc_actor_player_model_entry(
             context->player_models, context->active_loadout);
         if (entry) model = &entry->model;
     } else if (context->npc_models) {
-        NpcModelEntry *entry = fc_npc_model_find(context->npc_models,
-            fc_npc_type_to_model_id(entity->npc_type));
-        if (entry && entry->loaded) model = &entry->model;
+        ModelEntry *entry = npc_model_find(context->npc_models,
+                                           entity->npc_type);
+        if (entry) model = &entry->model;
     }
     if (model) {
         BoundingBox bounds = GetModelBoundingBox(*model);
@@ -9231,8 +8965,6 @@ int dbg_draw_panel_tabs(const FcState* state,
 #define COL_WALKABLE    CLITERAL(Color){  30, 120,  30, 30  }
 
 #define FC_REWARD_CONFIG_PATH_MAX 256
-#define FC_WORLD_ORIGIN_X 2368
-#define FC_WORLD_ORIGIN_Y 5056
 typedef struct {
     AnimModelState* anim_state;
     uint16_t anim_seq;
@@ -9285,10 +9017,10 @@ typedef struct ViewerState {
     ObjectMesh* objects;
     ObjectAnimSet* object_anims;
     FcAnimatedAtlas atlas;
-    NpcModelSet* object_anim_models;
+    ModelSet* object_anim_models;
     ObjectAnimRuntime* object_anim_runtimes;
     int object_anim_runtime_count;
-    NpcModelSet* npc_models;
+    ModelSet* npc_models;
     FcPlayerAppearance appearance;
     char item_message[96];
     float item_message_seconds;
@@ -10045,35 +9777,6 @@ static void viewer_jump_to_wave(ViewerState* v, int wave) {
     fc_click_feedback_reset(&v->click_feedback);
     dbg_log_clear();
 }
-/* Terrain loader — the terrain mesh is the floor heightmap.
- * The red/black lava pattern comes from the objects mesh (fightcaves.objects),
- * not the terrain. The terrain is just the ground surface.
- * We keep original cache colors (dark base) without modification. */
-static TerrainMesh* load_terrain(ViewerState* v) {
-    (void)v;
-    TerrainMesh* tm = terrain_load("fightcaves.terrain");
-    if (tm && tm->loaded) {
-        terrain_offset(tm, FC_WORLD_ORIGIN_X, FC_WORLD_ORIGIN_Y);
-        return tm;
-    }
-    return NULL;
-}
-
-/* Objects loader — no modifications */
-static ObjectMesh* load_objects_with_terrain(TerrainMesh* tm,
-                                             Texture2D atlas_texture) {
-    (void)tm;
-    ObjectMesh* om = objects_load("fightcaves.objects", atlas_texture);
-    if (om && om->loaded) {
-        objects_offset(om, FC_WORLD_ORIGIN_X, FC_WORLD_ORIGIN_Y);
-
-        /* No modifications to objects mesh — original cache data */
-
-        return om;
-    }
-    return NULL;
-}
-
 /* Forward declaration */
 static float ground_y(ViewerState* v, int tile_x, int tile_y);
 static float ground_y_smooth(ViewerState* v, float tile_x, float tile_y);
@@ -10115,8 +9818,8 @@ static int find_clicked_npc_idx(ViewerState* v) {
         if (!n->active || n->is_dead) continue;
         FcVisualPose pose = fc_visual_scene_npc_pose(&v->actor_animation.scene, slot);
         Vector3 position = {pose.x, ground_y_smooth(v, pose.x, pose.y), -pose.y};
-        const NpcModelEntry *model = fc_npc_model_find(v->npc_models,
-            fc_npc_type_to_model_id(entity->npc_type));
+        const ModelEntry *model = npc_model_find(v->npc_models,
+                                                 entity->npc_type);
         float depth = -1;
         if (model) {
             const AnimModelState *animation = v->actor_animation.npc_states[slot];
@@ -10256,7 +9959,7 @@ static void build_human_actions(ViewerState* v) {
 
 /* Entity ground Y — slightly above terrain so entities stand on the flattened cracks */
 static float ground_y(ViewerState* v, int tile_x, int tile_y) {
-    if (v->terrain && v->terrain->loaded) {
+    if (v->terrain) {
         return terrain_height_at(v->terrain, tile_x, tile_y) + 0.1f;
     }
     return 0.0f;
@@ -10418,7 +10121,7 @@ static int object_anim_row_visible(const ObjectAnimPlacement* row) {
 }
 
 static void draw_animated_objects(ViewerState* v) {
-    if (!v || !v->object_anims || !v->object_anims->loaded ||
+    if (!v || !v->object_anims ||
         !v->object_anim_models || !v->object_anim_runtimes)
         return;
 
@@ -10428,9 +10131,8 @@ static void draw_animated_objects(ViewerState* v) {
         ObjectAnimPlacement* row = &v->object_anims->rows[i];
         if (!object_anim_row_visible(row)) continue;
 
-        NpcModelEntry* entry = fc_npc_model_find(v->object_anim_models,
-                                                 row->model_id);
-        if (!entry || !entry->loaded) continue;
+        ModelEntry* entry = model_find(v->object_anim_models, row->model_id);
+        if (!entry) continue;
 
         if (row->animation_id >= 0 && v->anim_cache) {
             ObjectAnimRuntime* rt = &v->object_anim_runtimes[i];
@@ -10506,12 +10208,12 @@ static void draw_scene(ViewerState* v) {
     BeginMode3D(v->camera);
 
     /* Terrain + objects */
-    if (v->terrain && v->terrain->loaded) {
+    if (v->terrain) {
         rlDisableBackfaceCulling();
         DrawModel(v->terrain->model, (Vector3){0,0,0}, 1.0f, WHITE);
         rlEnableBackfaceCulling();
     }
-    if (v->objects && v->objects->loaded) {
+    if (v->objects) {
         rlDisableBackfaceCulling();
         DrawModel(v->objects->model, (Vector3){0,0,0}, 1.0f, WHITE);
         rlEnableBackfaceCulling();
@@ -10555,9 +10257,9 @@ static void draw_scene(ViewerState* v) {
             draw_actor_footprint(v, e);
 
             /* Player model or fallback cylinder */
-            NpcModelEntry* pm = fc_actor_player_model_entry(
+            ModelEntry* pm = fc_actor_player_model_entry(
                 v->appearance.model, v->active_loadout);
-            if (pm && pm->loaded) {
+            if (pm) {
                 Vector3 pos = {ex, gy, ey};
                 float face_angle = pose.face_angle;
                 rlDisableBackfaceCulling();
@@ -10574,8 +10276,7 @@ static void draw_scene(ViewerState* v) {
             draw_actor_footprint(v, e);
 
             /* NPC: try to render actual model, fallback to colored cube */
-            uint32_t mid = fc_npc_type_to_model_id(e->npc_type);
-            NpcModelEntry* nme = v->npc_models ? fc_npc_model_find(v->npc_models, mid) : NULL;
+            ModelEntry* nme = npc_model_find(v->npc_models, e->npc_type);
 
             if (nme) {
                 /* Facing is maintained by the client-style actor runtime. */
@@ -11286,8 +10987,8 @@ static void fc_viewer_destroy(ViewerState* v) {
     }
     if (v->anim_cache) anim_cache_free(v->anim_cache);
     fc_player_appearance_free(&v->appearance);
-    if (v->npc_models) fc_npc_models_unload(v->npc_models);
-    if (v->object_anim_models) fc_npc_models_unload(v->object_anim_models);
+    models_free(v->npc_models);
+    models_free(v->object_anim_models);
     fc_animated_atlas_unload(&v->atlas);
     if (v->object_anims) object_anims_free(v->object_anims);
     objects_free(v->objects);
@@ -11354,7 +11055,9 @@ static ViewerState* fc_viewer_create(int replay) {
     v->camera.projection = CAMERA_PERSPECTIVE;
     v->camera.target = (Vector3){FC_ARENA_WIDTH * 0.5f, 0.5f, -(FC_ARENA_HEIGHT * 0.5f)};
 
-    v->terrain = load_terrain(v);
+    /* The terrain mesh is just the ground surface, in the original cache
+     * colors; the red/black lava pattern comes from the objects mesh. */
+    v->terrain = terrain_load("fightcaves.terrain");
     /* OSRS rasterizes the current 104x104 scene from cache terrain and
      * locations into a 512x512 minimap. This asset contains the Fight Caves
      * mapsquare centered in that same scene format; runtime only crops and
@@ -11376,15 +11079,14 @@ static ViewerState* fc_viewer_create(int replay) {
     } else {
         fprintf(stderr, "error: missing fightcaves.minimap.png\n");
     }
-    if (!fc_animated_atlas_load(&v->atlas, "fightcaves.atlas"))
+    if (!fc_animated_atlas_load(&v->atlas, "fightcaves.atlas",
+                                "fightcaves.tanim"))
         fprintf(stderr, "error: texture atlas failed to load\n");
-    v->objects = load_objects_with_terrain(v->terrain, v->atlas.texture);
+    v->objects = objects_load("fightcaves.objects", v->atlas.texture);
     if (fc_asset_exists("fightcaves.oanim"))
         v->object_anims = object_anims_load("fightcaves.oanim");
-    if (v->object_anims)
-        object_anims_offset(v->object_anims, FC_WORLD_ORIGIN_X, FC_WORLD_ORIGIN_Y);
     if (fc_asset_exists("fightcaves.object_anim.models"))
-        v->object_anim_models = fc_npc_models_load(
+        v->object_anim_models = models_load(
             "fightcaves.object_anim.models", v->atlas.texture);
     if (v->object_anims && v->object_anims->count > 0) {
         v->object_anim_runtimes = (ObjectAnimRuntime*)calloc(
@@ -11392,12 +11094,12 @@ static ViewerState* fc_viewer_create(int replay) {
         if (v->object_anim_runtimes)
             v->object_anim_runtime_count = v->object_anims->count;
     }
-    if (!v->terrain || !v->terrain->loaded) v->show_grid = 1;
+    if (!v->terrain) v->show_grid = 1;
 
     /* Load NPC models */
     {
         if (fc_asset_exists("fc_npcs.models"))
-            v->npc_models = fc_npc_models_load("fc_npcs.models", (Texture2D){0});
+            v->npc_models = models_load("fc_npcs.models", (Texture2D){0});
         if (!v->npc_models) fprintf(stderr, "error: NPC models failed to load\n");
     }
 
@@ -11480,23 +11182,18 @@ static ViewerState* fc_viewer_create(int replay) {
     REQUIRE_VIEWER_RESOURCE(v->ui.minimap_texture_ready,
                             "minimap render texture");
     REQUIRE_VIEWER_RESOURCE(item_icons_ready, "Fight Caves item icons");
-    REQUIRE_VIEWER_RESOURCE(v->terrain && v->terrain->loaded, "terrain mesh");
+    REQUIRE_VIEWER_RESOURCE(v->terrain, "terrain mesh");
     REQUIRE_VIEWER_RESOURCE(v->minimap_scene.ready, "minimap scene raster");
     REQUIRE_VIEWER_RESOURCE(v->atlas.texture.id > 0, "texture atlas");
-    REQUIRE_VIEWER_RESOURCE(v->objects && v->objects->loaded &&
-                            v->objects->has_textures,
+    REQUIRE_VIEWER_RESOURCE(v->objects && v->objects->has_textures,
                             "textured terrain objects");
-    REQUIRE_VIEWER_RESOURCE(v->object_anims && v->object_anims->loaded,
-                            "object animation placements");
-    REQUIRE_VIEWER_RESOURCE(v->object_anim_models &&
-                            v->object_anim_models->loaded,
-                            "animated object models");
+    REQUIRE_VIEWER_RESOURCE(v->object_anims, "object animation placements");
+    REQUIRE_VIEWER_RESOURCE(v->object_anim_models, "animated object models");
     REQUIRE_VIEWER_RESOURCE(!v->object_anims || v->object_anims->count == 0 ||
                             v->object_anim_runtimes,
                             "object animation runtime allocation");
-    REQUIRE_VIEWER_RESOURCE(v->npc_models && v->npc_models->loaded,
-                            "NPC models");
-    REQUIRE_VIEWER_RESOURCE(v->appearance.parts && v->appearance.parts->loaded,
+    REQUIRE_VIEWER_RESOURCE(v->npc_models, "NPC models");
+    REQUIRE_VIEWER_RESOURCE(v->appearance.parts,
                             "player equipment and body models");
     REQUIRE_VIEWER_RESOURCE(v->anim_cache, "actor animation data");
     REQUIRE_VIEWER_RESOURCE(

@@ -662,7 +662,7 @@ static int model_picking_test(void) {
     memcpy(original_rest, rest, sizeof(rest));
     memcpy(original_pose, pose, sizeof(pose));
     Mesh uploaded = {.vertices=other_actor};
-    ModelEntry entry = {.loaded=1, .rest_verts=rest, .face_count=2,
+    ModelEntry entry = {.rest_verts=rest, .face_count=2,
                        .face_indices=faces, .base_vert_count=4};
     entry.model.transform = MatrixIdentity();
     entry.model.meshes = &uploaded;
