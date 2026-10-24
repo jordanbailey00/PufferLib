@@ -1086,6 +1086,8 @@ static int adapter_test(int graphical) {
         assert(fc_state_hash(&rendered->viewer->state) == fc_state_hash(&env->state));
     }
     printf("adapter trace: steps=2048 episodes=%d digest=%08x\n", episodes, trace);
+    /* Pinned like the core contract: a change here changes what training sees. */
+    assert(episodes == 2 && trace == 0xe9b2fd18u);
     if (!graphical) {
         free(rendered->viewer);
         rendered->viewer = NULL;
