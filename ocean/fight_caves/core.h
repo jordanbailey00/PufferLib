@@ -1173,9 +1173,8 @@ static int fc_npc_can_melee_player(int player_x, int player_y,
                                    const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]);
 static void fc_build_occupancy(const FcState* state,
                                uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-                               int ignore_npc_idx,
-                               int ignore_player);
-static int fc_npc_step_toward_sized_dynamic(
+                               int ignore_npc_idx);
+static int fc_step_toward(
     int* x, int* y, int target_x, int target_y, int size,
     const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
     const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
@@ -2734,23 +2733,14 @@ static void fc_npc_spawn(FcNpc* npc, int npc_type, int x, int y, int spawn_index
     npc->num_pending_hits = 0;
 }
 
-static void build_npc_movement_occupancy(
-    const FcState* state,
-    int npc_idx,
-    uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
-    fc_build_occupancy(state, occupied, npc_idx, 0);
-}
-
-static int npc_dynamic_step_toward(FcState* state, int npc_idx,
-                                   int target_x, int target_y) {
+/* One step toward the target around walls, the player and the other NPCs. */
+static int npc_step_toward(FcState* state, int npc_idx,
+                           int target_x, int target_y) {
     FcNpc* npc = &state->npcs[npc_idx];
     uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT];
-    build_npc_movement_occupancy(state, npc_idx, occupied);
-    return fc_npc_step_toward_sized_dynamic(&npc->x, &npc->y,
-                                            target_x, target_y, npc->size,
-                                            state->walkable,
-                                            state->movement_flags,
-                                            occupied);
+    fc_build_occupancy(state, occupied, npc_idx);
+    return fc_step_toward(&npc->x, &npc->y, target_x, target_y, npc->size,
+                          state->walkable, state->movement_flags, occupied);
 }
 
 static int min_i(int a, int b) {
@@ -2853,7 +2843,7 @@ static void npc_chase_player(FcState* state, int npc_idx) {
         npc_naive_player_chase_destination(npc, &state->player,
                                            &target_x, &target_y);
         if (target_x == npc->x && target_y == npc->y) break;
-        if (!npc_dynamic_step_toward(state, npc_idx, target_x, target_y)) break;
+        if (!npc_step_toward(state, npc_idx, target_x, target_y)) break;
     }
 }
 
@@ -2997,10 +2987,6 @@ static int apply_npc_heal(FcState* state, FcNpc* source, FcNpc* target,
     return amount;
 }
 
-static int npc_anchor_distance(const FcNpc* a, const FcNpc* b) {
-    return fc_distance_between_areas(a->x, a->y, 1, b->x, b->y, 1);
-}
-
 static FcNpc* yt_mejkot_heal_target(FcState* state, FcNpc* npc) {
     if (npc->current_hp < npc->max_hp / 2) return npc;
 
@@ -3011,7 +2997,8 @@ static FcNpc* yt_mejkot_heal_target(FcState* state, FcNpc* npc) {
         if (target == npc || !target->active || target->is_dead) continue;
         if (target->current_hp >= target->max_hp / 2) continue;
 
-        int distance = npc_anchor_distance(npc, target);
+        int distance = fc_distance_between_areas(npc->x, npc->y, 1,
+                                                 target->x, target->y, 1);
         if (distance > 8) continue;
         if (!best || distance < best_distance ||
             (distance == best_distance && target->spawn_index < best->spawn_index)) {
@@ -3041,7 +3028,8 @@ static int yt_mejkot_try_heal(FcState* state, FcNpc* npc) {
     return 1;
 }
 
-/* Yt-HurKot heals Jad until a player hit tags it onto the player for good. */
+/* Yt-HurKot heals Jad until a player hit tags it onto the player for good.
+ * Heal ranges are measured between the NPCs' south-west anchor tiles. */
 #define FC_HURKOT_HEAL_RANGE 5
 
 static int find_active_jad(const FcState* state) {
@@ -3062,7 +3050,8 @@ static void yt_hurkot_heal_cycle(FcState* state, FcNpc* npc, FcNpc* jad) {
     }
 
     npc->heal_timer = stats->heal_interval;
-    if (npc_anchor_distance(npc, jad) > FC_HURKOT_HEAL_RANGE ||
+    if (fc_distance_between_areas(npc->x, npc->y, 1, jad->x, jad->y, 1) >
+            FC_HURKOT_HEAL_RANGE ||
         jad->current_hp >= jad->max_hp) {
         return;
     }
@@ -3079,8 +3068,9 @@ static void yt_hurkot_follow_jad(FcState* state, FcNpc* npc, int npc_idx) {
 
     FcNpc* jad = &state->npcs[jad_idx];
     yt_hurkot_heal_cycle(state, npc, jad);
-    if (npc_anchor_distance(npc, jad) > FC_HURKOT_HEAL_RANGE) {
-        npc_dynamic_step_toward(state, npc_idx, jad->x, jad->y);
+    if (fc_distance_between_areas(npc->x, npc->y, 1, jad->x, jad->y, 1) >
+            FC_HURKOT_HEAL_RANGE) {
+        npc_step_toward(state, npc_idx, jad->x, jad->y);
     }
 }
 
@@ -3119,32 +3109,19 @@ static void fc_npc_tick(FcState* state, int npc_idx) {
  *     authoritative cache data, never the visual mesh.
  */
 
-/* Check if a single tile is walkable (bounds + collision). */
-static int fc_tile_walkable(int x, int y,
-                            const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
-    if (x < 0 || x >= FC_ARENA_WIDTH || y < 0 || y >= FC_ARENA_HEIGHT) return 0;
-    return walkable[x][y];
-}
-
 /* An entity of this size can stand at (x,y) when every tile of its
- * [x..x+size-1, y..y+size-1] footprint is walkable. */
+ * [x..x+size-1, y..y+size-1] footprint is in the arena and walkable. */
 static int fc_footprint_walkable(int x, int y, int size,
                                  const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
-    /* Check all tiles in the NPC's [x..x+size-1, y..y+size-1] footprint */
     for (int dx = 0; dx < size; dx++) {
         for (int dy = 0; dy < size; dy++) {
-            if (!fc_tile_walkable(x + dx, y + dy, walkable)) return 0;
+            int tx = x + dx;
+            int ty = y + dy;
+            if (tx < 0 || tx >= FC_ARENA_WIDTH || ty < 0 ||
+                ty >= FC_ARENA_HEIGHT || !walkable[tx][ty]) return 0;
         }
     }
     return 1;
-}
-
-static void fc_clear_occupancy(uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
-    for (int x = 0; x < FC_ARENA_WIDTH; x++) {
-        for (int y = 0; y < FC_ARENA_HEIGHT; y++) {
-            occupied[x][y] = 0;
-        }
-    }
 }
 
 /* Mark all in-bounds tiles in a footprint occupied. Out-of-bounds tiles are
@@ -3164,19 +3141,13 @@ static void fc_mark_footprint_occupied(uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA
     }
 }
 
-/* Build an occupancy grid from the current live entities. Pass ignore_npc_idx
- * to omit the moving NPC's own current footprint. Set ignore_player to leave
- * the player's tile free. */
+/* Build an occupancy grid from the player and the live NPCs. Pass
+ * ignore_npc_idx to omit the moving NPC's own current footprint. */
 static void fc_build_occupancy(const FcState* state,
                                uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-                               int ignore_npc_idx,
-                               int ignore_player) {
-    fc_clear_occupancy(occupied);
-
-    if (!ignore_player) {
-        fc_mark_footprint_occupied(occupied, state->player.x, state->player.y, 1);
-    }
-
+                               int ignore_npc_idx) {
+    memset(occupied, 0, FC_ARENA_WIDTH * FC_ARENA_HEIGHT);
+    fc_mark_footprint_occupied(occupied, state->player.x, state->player.y, 1);
     for (int i = 0; i < FC_MAX_NPCS; i++) {
         const FcNpc* npc = &state->npcs[i];
         if (i == ignore_npc_idx) continue;
@@ -3340,80 +3311,10 @@ static int fc_footprint_step_valid(
     return 0;
 }
 
-static int fc_footprint_step_walkable(
-    int x, int y, int dx, int dy, int size,
-    const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-    const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
-    return fc_footprint_step_valid(x, y, dx, dy, size, walkable,
-                                   movement_flags, NULL);
-}
-
-static int fc_footprint_step_available_dynamic(
-    int x, int y, int dx, int dy, int size,
-    const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-    const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-    const uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
-    return fc_footprint_step_valid(x, y, dx, dy, size, walkable,
-                                   movement_flags, occupied);
-}
-
-/* Move a size-1 entity from (x,y) toward offset (dx,dy) for up to max_steps,
- * trying the diagonal first, then x, then y. Returns the number of tiles
- * moved and records each reached tile in step_x/step_y, up to step_capacity
- * entries. */
-static int fc_move_toward_traced(
-    int* x, int* y, int dx, int dy, int max_steps,
-    const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-    const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-    int* step_x, int* step_y, int step_capacity) {
-    int tx = *x + dx;
-    int ty = *y + dy;
-    int steps = 0;
-
-    for (int step = 0; step < max_steps; step++) {
-        if (*x == tx && *y == ty) break;
-
-        int sx = 0, sy = 0;
-        if (tx > *x) sx = 1; else if (tx < *x) sx = -1;
-        if (ty > *y) sy = 1; else if (ty < *y) sy = -1;
-
-        /* Try diagonal first, then x-only, then y-only */
-        int moved = 0;
-        if (sx != 0 && sy != 0 &&
-            fc_footprint_step_walkable(
-                *x, *y, sx, sy, 1, walkable, movement_flags)) {
-            *x += sx; *y += sy; moved = 1;
-        } else if (sx != 0 && fc_footprint_step_walkable(
-                       *x, *y, sx, 0, 1, walkable, movement_flags)) {
-            *x += sx; moved = 1;
-        } else if (sy != 0 && fc_footprint_step_walkable(
-                       *x, *y, 0, sy, 1, walkable, movement_flags)) {
-            *y += sy; moved = 1;
-        } else {
-            break;
-        }
-        if (moved) {
-            if (steps < step_capacity && step_x && step_y) {
-                step_x[steps] = *x;
-                step_y[steps] = *y;
-            }
-            steps++;
-        }
-    }
-    return steps;
-}
-
-static int fc_move_toward(int* x, int* y, int dx, int dy, int max_steps,
-                          const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-                          const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
-    return fc_move_toward_traced(x, y, dx, dy, max_steps, walkable,
-                                 movement_flags, NULL, NULL, 0);
-}
-
-/* One step of a sized footprint toward (target_x, target_y): the diagonal
+/* One greedy step of a footprint toward (target_x, target_y): the diagonal
  * first, then x, then y, each checked by the sized-step rule against walls
- * and occupied tiles. Returns 1 if it moved. */
-static int fc_npc_step_toward_sized_dynamic(
+ * and, when occupied is not NULL, occupied tiles. Returns 1 if it moved. */
+static int fc_step_toward(
     int* x, int* y, int target_x, int target_y, int size,
     const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
     const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
@@ -3422,24 +3323,19 @@ static int fc_npc_step_toward_sized_dynamic(
     if (target_x > *x) dx = 1; else if (target_x < *x) dx = -1;
     if (target_y > *y) dy = 1; else if (target_y < *y) dy = -1;
 
-    if (dx == 0 && dy == 0) return 0;
-
     if (dx != 0 && dy != 0 &&
-        fc_footprint_step_available_dynamic(
-            *x, *y, dx, dy, size,
-            walkable, movement_flags, occupied)) {
+        fc_footprint_step_valid(*x, *y, dx, dy, size,
+                                walkable, movement_flags, occupied)) {
         *x += dx; *y += dy; return 1;
     }
     if (dx != 0 &&
-        fc_footprint_step_available_dynamic(
-            *x, *y, dx, 0, size,
-            walkable, movement_flags, occupied)) {
+        fc_footprint_step_valid(*x, *y, dx, 0, size,
+                                walkable, movement_flags, occupied)) {
         *x += dx; return 1;
     }
     if (dy != 0 &&
-        fc_footprint_step_available_dynamic(
-            *x, *y, 0, dy, size,
-            walkable, movement_flags, occupied)) {
+        fc_footprint_step_valid(*x, *y, 0, dy, size,
+                                walkable, movement_flags, occupied)) {
         *y += dy; return 1;
     }
     return 0;
@@ -3587,10 +3483,6 @@ static const int FC_ROUTE_DIRECTIONS[8][2] = {
     {-1, -1}, {1, -1}, {-1, 1}, {1, 1},
 };
 
-static int fc_area_distance(int x, int y, int dst_x, int dst_y, int dst_size) {
-    return fc_distance_between_areas(x, y, 1, dst_x, dst_y, dst_size);
-}
-
 typedef enum {
     FC_ROUTE_EXACT,
     FC_ROUTE_ATTACK,
@@ -3606,7 +3498,7 @@ static int fc_route_goal_reached(
     if (attack_range == FC_ROUTE_MELEE_RANGE)
         return fc_npc_can_melee_player(x, y, dst_x, dst_y, dst_size,
                                        walkable, movement_flags);
-    int distance = fc_area_distance(x, y, dst_x, dst_y, dst_size);
+    int distance = fc_distance_between_areas(x, y, 1, dst_x, dst_y, dst_size);
     return distance > 0 && distance <= attack_range &&
            fc_has_los_between_areas(x, y, 1, dst_x, dst_y, dst_size,
                                     los_flags);
@@ -3676,9 +3568,9 @@ static int fc_bfs_route(
             int step_y = FC_ROUTE_DIRECTIONS[d][1];
             int nx = cx + step_x, ny = cy + step_y;
             if (nx < 0 || nx >= FC_ARENA_WIDTH || ny < 0 || ny >= FC_ARENA_HEIGHT) continue;
-            if (vis[nx][ny] || !fc_footprint_step_walkable(
+            if (vis[nx][ny] || !fc_footprint_step_valid(
                     cx, cy, step_x, step_y, 1,
-                    walkable, movement_flags)) continue;
+                    walkable, movement_flags, NULL)) continue;
             vis[nx][ny] = 1;
             pdx[nx][ny] = (int8_t)-step_x;
             pdy[nx][ny] = (int8_t)-step_y;
@@ -4353,7 +4245,7 @@ static int fc_spawn_find_available_footprint(const FcState* state,
                                              int size, int max_radius,
                                              int* out_x, int* out_y) {
     uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT];
-    fc_build_occupancy(state, occupied, -1, 0);
+    fc_build_occupancy(state, occupied, -1);
 
     *out_x = preferred_x;
     *out_y = preferred_y;
@@ -4659,12 +4551,12 @@ static int move_action_valid(const FcState* state, int action) {
         return 0;
     }
 
-    int tx = p->x;
-    int ty = p->y;
-    int max_steps = (action >= FC_MOVE_RUN_N) ? 2 : 1;
-    return fc_move_toward(&tx, &ty, FC_MOVE_DX[action], FC_MOVE_DY[action],
-                          max_steps, state->walkable,
-                          state->movement_flags) > 0;
+    /* Legal when the first step toward the direction's target is open. */
+    int x = p->x;
+    int y = p->y;
+    return fc_step_toward(&x, &y, p->x + FC_MOVE_DX[action],
+                          p->y + FC_MOVE_DY[action], 1, state->walkable,
+                          state->movement_flags, NULL);
 }
 
 static int attack_action_valid(const FcState* state, int action) {
@@ -5537,9 +5429,9 @@ static int process_player_movement(FcState* state, int move_action,
             int next_y = player->route_y[player->route_idx];
             int dx = next_x - player->x;
             int dy = next_y - player->y;
-            if (fc_footprint_step_walkable(
+            if (fc_footprint_step_valid(
                     player->x, player->y, dx, dy, 1,
-                    state->walkable, state->movement_flags)) {
+                    state->walkable, state->movement_flags, NULL)) {
                 set_player_facing_from_delta(player, (float)dx, (float)dy);
                 player->x = next_x;
                 player->y = next_y;
@@ -5556,36 +5448,26 @@ static int process_player_movement(FcState* state, int move_action,
         state->idle_this_tick = 1;
     } else if (move_action >= FC_MOVE_WALK_N &&
                move_action <= FC_MOVE_RUN_NW) {
-        int dx = FC_MOVE_DX[move_action];
-        int dy = FC_MOVE_DY[move_action];
         int wants_run = move_action >= FC_MOVE_RUN_N;
         int max_steps = wants_run
             ? (fc_player_can_run(player) ? 2 : 0)
             : 1;
         int old_x = player->x;
         int old_y = player->y;
-        int step_x[FC_MAX_RENDER_MOVE_WAYPOINTS];
-        int step_y[FC_MAX_RENDER_MOVE_WAYPOINTS];
-        int moved = fc_move_toward_traced(
-            &player->x, &player->y, dx, dy, max_steps,
-            state->walkable, state->movement_flags,
-            step_x, step_y, FC_MAX_RENDER_MOVE_WAYPOINTS);
-        if (moved > 0) {
-            int recorded = moved;
-            if (recorded > FC_MAX_RENDER_MOVE_WAYPOINTS) {
-                recorded = FC_MAX_RENDER_MOVE_WAYPOINTS;
-            }
-            state->render_events.player_move_waypoint_count = recorded;
-            for (int i = 0; i < recorded; i++) {
-                state->render_events.player_move_waypoint_x[i] = step_x[i];
-                state->render_events.player_move_waypoint_y[i] = step_y[i];
-            }
+        int target_x = old_x + FC_MOVE_DX[move_action];
+        int target_y = old_y + FC_MOVE_DY[move_action];
+        while (moved_steps < max_steps &&
+               fc_step_toward(&player->x, &player->y, target_x, target_y, 1,
+                              state->walkable, state->movement_flags, NULL)) {
+            record_player_move_waypoint(state);
+            moved_steps++;
+        }
+        if (moved_steps > 0) {
             set_player_facing_from_delta(
                 player, (float)(player->x - old_x),
                 (float)(player->y - old_y));
             state->movement_this_tick = 1;
-            player->is_running = moved >= 2 ? 1 : 0;
-            moved_steps = moved;
+            player->is_running = moved_steps >= 2;
         }
     }
     return moved_steps;
