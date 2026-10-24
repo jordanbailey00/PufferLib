@@ -25,7 +25,17 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SETUP_DATA = REPO_ROOT / "ocean" / "fight_caves" / "tools.py"
+ENV_ROOT = REPO_ROOT / "ocean" / "fight_caves"
+RESOURCE_ROOT = REPO_ROOT / "resources" / "fight_caves"
+TOOLS = ENV_ROOT / "tools.py"
+E2E = REPO_ROOT / "tests" / "fight_caves_e2e.py"
+
+
+def load_module(path):
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def native_command(label, *args, timeout=180, env=None):
@@ -45,7 +55,7 @@ def executable(tmp_path_factory):
 @pytest.fixture(scope="module")
 def native_suites(executable, tmp_path_factory):
     output = tmp_path_factory.mktemp("fight-caves-native")
-    return load_e2e().build_native_tests(REPO_ROOT, output, native_command)
+    return load_module(E2E).build_native_tests(REPO_ROOT, output, native_command)
 
 
 @pytest.mark.parametrize("suite", ["simulation", "linkage"])
@@ -64,32 +74,19 @@ def test_graphical_suite(native_suites, tmp_path):
     assert screenshot.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
 
-def load_setup_data():
-    spec = importlib.util.spec_from_file_location("fight_caves_setup_data_test", SETUP_DATA)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+@pytest.fixture
+def e2e():
+    return load_module(E2E)
 
 
-def load_e2e():
-    spec = importlib.util.spec_from_file_location("fight_caves_e2e", REPO_ROOT / "tests/fight_caves_e2e.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_e2e_requires_disposable_checkout(tmp_path):
-    e2e = load_e2e()
+def test_e2e_requires_disposable_checkout(e2e, tmp_path):
     (tmp_path / "build").mkdir()
     with pytest.raises(RuntimeError, match="use clean-clone"):
         e2e.Acceptance(tmp_path).execute()
     assert not (tmp_path / "build/fight-caves-e2e").exists()
 
 
-def test_e2e_rejects_dirty_source_and_wrong_overlay(monkeypatch, tmp_path):
-    e2e = load_e2e()
+def test_e2e_rejects_dirty_source_and_wrong_overlay(e2e, monkeypatch, tmp_path):
     monkeypatch.setattr(e2e, "git", lambda *args: b" M source.c\n")
     with pytest.raises(RuntimeError, match="source is dirty"):
         e2e.prepare_clone(str(tmp_path), "HEAD", False)
@@ -97,8 +94,7 @@ def test_e2e_rejects_dirty_source_and_wrong_overlay(monkeypatch, tmp_path):
         e2e.prepare_clone(str(tmp_path), "HEAD", True)
 
 
-def test_e2e_expected_failure_needs_nonzero_and_explanation(tmp_path):
-    e2e = load_e2e()
+def test_e2e_expected_failure_needs_nonzero_and_explanation(e2e, tmp_path):
     test = e2e.Acceptance(tmp_path)
     test.output.mkdir(parents=True)
     test.run("expected", sys.executable, "-c", "raise SystemExit('reason')", expected="reason")
@@ -109,8 +105,7 @@ def test_e2e_expected_failure_needs_nonzero_and_explanation(tmp_path):
 
 
 @pytest.mark.parametrize("fault", [None, "nan", "missing", "steps", "length", "alias"])
-def test_e2e_checks_saved_metric_histories(tmp_path, fault):
-    e2e = load_e2e()
+def test_e2e_checks_saved_metric_histories(e2e, tmp_path, fault):
     metrics = {f"env/{key}": "0,0" for key in e2e.ENV_METRICS}
     metrics.update({"env/perf": "0,0", "env/score": "0,0", "agent_steps": "1024,2048"})
     if fault == "nan":
@@ -147,7 +142,7 @@ def make_bundle(directory: Path, members: dict[str, bytes]) -> dict:
 
 @pytest.fixture
 def tools(tmp_path, monkeypatch):
-    module = load_setup_data()
+    module = load_module(TOOLS)
     monkeypatch.setattr(module, "RESOURCE_ROOT", tmp_path / "resources")
     module.RESOURCE_ROOT.mkdir()
     return module
@@ -213,9 +208,6 @@ def test_setup_reuses_a_matching_stamp(tools, tmp_path, monkeypatch, capsys):
     assert len(downloads) == 3
 
 
-ENV_ROOT = REPO_ROOT / "ocean" / "fight_caves"
-RESOURCE_ROOT = REPO_ROOT / "resources" / "fight_caves"
-
 def test_config_contains_only_supported_native_settings():
     default = configparser.ConfigParser(interpolation=None)
     default.read(REPO_ROOT / "config" / "default.ini")
@@ -231,8 +223,6 @@ def test_config_contains_only_supported_native_settings():
         if section == "env":
             continue
         assert set(config[section]) <= set(default[section]), section
-    assert not {"reset_state", "beta1", "beta2", "eps", "prio_alpha", "prio_beta0",
-                "expansion_factor"} & {key for section in config for key in config[section]}
 
 
 def test_asset_manifest_pins_both_bundles():

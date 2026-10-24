@@ -1,25 +1,25 @@
 # Fight Caves
 
-A native C Fight Caves environment for PufferLib 5.0, with all 63 waves,
-a playable Raylib viewer, and native checkpoint replay. Training and the viewer
-share the same simulation.
+A native C Fight Caves environment for PufferLib 5.0: all 63 waves, a playable
+Raylib viewer, and checkpoint replay on GPU or CPU. Training, replay and manual
+play share one simulation.
 
-## Build and assets
+## Build
 
-Use PufferLib 5.0's normal native build dependencies. There is no Fight
-Caves-specific Python package, trainer, or Docker image. Asset setup requires
-Python 3's standard library and network access on the first build.
-
-From the checkout root:
+Fight Caves needs only PufferLib 5.0's normal native build dependencies, which
+[PufferTank 5.0](https://github.com/PufferAI/PufferTank/tree/5.0) provides; there
+is no Fight Caves-specific Python package, trainer or Docker image.
 
 ```bash
-./build.sh fight_caves
+./build.sh fight_caves         # native trainer with Fight Caves compiled in: ./puffer
+./build.sh fight_caves --cpu   # manual play, CPU replay and checkpoint checks: ./fight_caves
 ```
 
-This installs and verifies both asset bundles, compiles the simulation and viewer
-as C, and links them into the native `./puffer` executable. Training is headless;
-linking the viewer does not open a window. No editable Python installation is
-needed for these native entry points.
+Both builds first install the pinned [assets](#assets); add `--debug` to the CPU
+build for sanitizers. Run all commands from the repository root, where the assets
+and `config/fight_caves.ini` are found. If the viewer reports a `llvmpipe`
+(software) renderer at startup, run `unset __GLX_VENDOR_LIBRARY_NAME` first;
+PufferTank's image sets that GLX override.
 
 ## Train
 
@@ -27,225 +27,117 @@ needed for these native entry points.
 ./puffer train
 ```
 
-The executable has Fight Caves compiled in and reads `config/fight_caves.ini`.
-Rebuild when selecting a different environment.
-
-The main INI pins the selected hyperparameters, 4,096 agents, a 256-step horizon,
-32,768-step minibatches, and a 512-wide, three-layer policy. Native training uses
-`momentum`, V-trace, synchronous execution (`async=0`), and recurrent-state resets
-at each horizon (`reset_every_horizon=1`). The requested 500M budget becomes
-499,122,176 steps after rounding down to complete rollouts.
+Settings come from `config/fight_caves.ini` on top of `config/default.ini`, and
+any of them can be overridden with `--section.key=value`. The `[env]` section
+holds the starting supplies and the reward settings. Training is headless.
 
 The environment reports episode averages for `zero_progress_ticks`,
 `wave_reached`, `wrong_prayer_hits`, `reached_wave_63`, `jad_kill_rate`,
 `prayer_uptime_range`, `prayer_uptime_melee`, `prayer_uptime_magic`,
-`npc_healing_total`, `jad_healing_total`, and `episode_length`.
-The native `perf` and `score` metrics both represent Jad completion.
-Prayer uptime is a fraction of episode ticks; healing totals count effective HP
-restored in simulation units.
+`npc_healing_total`, `jad_healing_total` and `episode_length`. Puffer's `perf`
+and `score` are both the Jad kill rate. Prayer uptimes are fractions of episode
+ticks; healing totals count HP restored.
 
-## Play manually
-
-```bash
-./build.sh fight_caves --cpu
-unset __GLX_VENDOR_LIBRARY_NAME
-./fight_caves
-```
-
-The `unset` command removes a forced GLX-driver override, which can cause
-software rendering on some systems. It does not force a GPU brand or fix
-missing graphics drivers/display access. Check the startup `Renderer` line:
-`llvmpipe` means software rendering. Mesa can also use GPUs.
-
-Manual play does not require CUDA or a trained checkpoint. Add `--debug` to the
-CPU build for sanitizers. It produces a separate executable and does not replace
-`./puffer`. Use `./fight_caves --start-wave 63` to test a particular wave.
-
-Press Space to start/pause, Right Arrow to advance one tick, O for debug
-overlays, and Q to quit. Right-drag rotates the camera; the wheel zooms.
-The viewer includes tile clicks and route previews, equipment switching,
-inventory/prayer controls, right-click menus, minimap/run-energy controls,
-animations, projectiles, impacts, health bars, and hitsplats. The console has
-wave/target/TPS selection, god mode, observations, rewards, and an event log.
-
-## Replay a checkpoint
-
-Use the native executable and the architecture/configuration used for training:
+## Play
 
 ```bash
-unset __GLX_VENDOR_LIBRARY_NAME
-./puffer eval latest
-# Or select a specific native 5.0 checkpoint:
-./puffer eval /path/to/checkpoint.bin
+./fight_caves                  # add --start-wave 63 to begin at a later wave
 ```
 
-Replay uses Puffer's native policy inference and opens the same full viewer.
-Camera, debug, pause, single-step and speed controls remain available.
-Gameplay-changing controls are disabled. Keys 1/2/4/0 select 1x/2x/4x/10x;
-Q closes evaluation. A display and working graphics drivers are required.
+Manual play needs no CUDA or checkpoint. Space starts and pauses, Right Arrow
+steps one tick, R resets and Q quits. Left-click walks or attacks, right-click
+opens menus, right-drag orbits the camera and the wheel zooms; 1/2/3 toggle the
+protection prayers. The side panel has the combat, inventory, equipment and
+prayer tabs; clicking the minimap walks there and its orb toggles running. The
+console in the chat box lists targets, jumps to a wave, sets the tick rate,
+toggles god mode and debug overlays, and shows player state, observations, the
+action mask, rewards and the event log. The full key list is at the top of
+`viewer.c`.
 
-The native trainer's evaluation requires CUDA. CPU-only replay is also available
-through the playable executable, using PufferLib's C inference:
+## Replay and check checkpoints
 
 ```bash
-./build.sh fight_caves --cpu
-unset __GLX_VENDOR_LIBRARY_NAME
-./fight_caves eval /path/to/checkpoint.bin
-# An exact two-episode CPU evaluation without graphics:
-./fight_caves eval /path/to/checkpoint.bin --headless --base.eval_episodes=2
+./puffer eval latest                  # or a checkpoint path; needs CUDA
+./fight_caves eval CHECKPOINT.bin     # CPU replay in the same viewer
+./fight_caves eval CHECKPOINT.bin --headless --base.eval_episodes=2
+./fight_caves check CHECKPOINT.bin    # exact size and finite weights only
 ```
 
-CPU replay requires an explicit path, shares the viewer's timing/controls, uses
-native action masks, and resets recurrent state between episodes. It is not an
-automatic fallback if GPU replay fails. CPU float32 inference need not produce
-the same sampled trajectories as CUDA/BF16 inference. Use the training
-architecture and environment settings for either replay path; for example,
-append `--policy.hidden_size=512 --policy.num_layers=3`.
+Replay disables the gameplay controls but keeps pause, step, camera and debug;
+1/2/4/0 select 1x/2x/4x/10x and Up/Down change the speed. CPU replay needs an
+explicit path, uses the native action masks and resets recurrent state between
+episodes; its float32 inference can sample different trajectories than CUDA/BF16.
+Both replay paths need the policy shape used in training: pass
+`--policy.hidden_size=N --policy.num_layers=N` when it differs from the INI.
 
-### Checkpoints and logs
-
-Native training writes `checkpoints/fight_caves/<run_id>/<16-digit-step>.bin`
-and, on completion, `logs/fight_caves/<run_id>.ini`. The INI contains
-settings plus downsampled `[metrics]` arrays, including the eleven environment
-metrics listed above. Paths can be changed with `--base.checkpoint_dir=PATH`
-and `--base.log_dir=PATH`; a named run uses `--base.run_id=NAME`.
-Use a new run ID for each run to avoid overwriting earlier artifacts.
-
-The configured checkpoint interval is 50 training epochs, and the final epoch
-also saves a checkpoint. `latest` selects by filesystem change time, not
-Jad kill rate; use an explicit path when comparing particular checkpoints.
-Files contain flat float32 policy weights, not optimizer state or embedded
-architecture/game-version metadata.
-
-An optional check, without graphics or CUDA, verifies exact size and finite
-weights against the selected architecture:
-
-```bash
-./fight_caves check /path/to/checkpoint.bin
-```
-
-The configured 512-wide/three-layer policy has 2,541,056 floats (10,164,224 bytes).
-The CPU checker/replayer requires a positive, 8-aligned hidden size and positive
-layer count. It rejects missing, short, oversized and non-finite files. This is
-structural validation, **not proof of a checkpoint's origin or gameplay
-compatibility**. Keep the corresponding source revision, configuration and run
-log with your checkpoints. The unchanged CUDA loader detects missing/short
-files but does not enforce this stricter exact-size/finite-value check; run the
-CPU check first when validating an unfamiliar file.
-
-The native log is not a per-update history: the current `sweep.downsample=5`
-setting produces five points, and loss channels are not saved there. Completed
-episode metrics retain the last available snapshot when a rollout has no new
-completed episodes. When final evaluation is enabled, the final metrics include
-its results and the saved settings can reflect evaluation overrides (such as
-`base.eval_agents`). Keep the launch command when interpreting those logs.
-Headless GPU evaluation can finish more episodes than requested because it is
-batched.
-
-## PufferTank 5.0
-
-Fight Caves runs in [PufferTank's 5.0 branch](https://github.com/PufferAI/PufferTank/tree/5.0)
-with its standard Dockerfile and no extra dependencies:
-
-```bash
-git clone --branch 5.0 https://github.com/PufferAI/PufferTank.git PufferTank-5.0
-cd PufferTank-5.0
-./docker.sh build -n fight-caves-tank5 -t 5.0
-./docker.sh test -n fight-caves-tank5 -t 5.0
-```
-
-Inside the container, use a checkout containing Fight Caves and run the same
-build/train/play/replay commands above. The launcher provides GPU/display access;
-each new graphical shell may still need `unset __GLX_VENDOR_LIBRARY_NAME`.
+`check` confirms that a file's size matches the configured policy's float32
+weights and that every weight is finite. The CUDA loader only rejects missing or
+short files, so check unfamiliar files first. Neither proves where a checkpoint
+came from or that it matches this game version; keep the source revision, config
+and run log with your checkpoints.
 
 ## Assets
 
-The first build installs the pinned
-[Fight Caves v3 bundles](https://github.com/jordanbailey00/fc-rl/releases/tag/fight-caves-assets-v3):
+The first build downloads the pinned
+[Fight Caves v3 bundles](https://github.com/jordanbailey00/fc-rl/releases/tag/fight-caves-assets-v3)
+(about 6 MB) listed in `resources/fight_caves/asset_manifest.json`:
 
-- `resources/fight_caves/runtime/`: collision, movement, and line-of-sight maps.
+- `resources/fight_caves/runtime/`: collision, movement and line-of-sight maps.
 - `resources/fight_caves/viewer/`: models, equipment parts, animations, terrain,
-  textures, UI sprites/fonts, and the minimap raster.
+  textures, UI sprites and fonts, and the minimap.
 
-Each archive's SHA-256 is checked before it is extracted, and the installed
-directory records it in an `.archive-sha256` stamp. Later builds reuse a matching
-install offline without re-reading its files, so reinstall with `--force` after
-editing or deleting an installed file. A download or checksum failure stops the
-build and leaves the existing install alone. Runtime loads local files only,
-without another repository or raw OSRS cache. Missing required data produces an
-error rather than an open-map or reduced-graphics fallback.
-
-Optional installation, stamp check or reinstall:
+Each archive's SHA-256 is checked before extraction and recorded in the installed
+directory's `.archive-sha256` stamp. Later builds reuse a matching install offline
+without re-reading its files, so reinstall after editing or deleting an installed
+file. A failed download or checksum stops the build and keeps the existing
+install. Setup needs only Python's standard library with tarfile extraction
+filters (Python 3.12+, or 3.8.17/3.9.17/3.10.12/3.11.4 and later).
 
 ```bash
-python3 ocean/fight_caves/tools.py setup
-python3 ocean/fight_caves/tools.py setup --verify-only
-python3 ocean/fight_caves/tools.py setup --force
+python3 ocean/fight_caves/tools.py setup                # what the build runs
+python3 ocean/fight_caves/tools.py setup --verify-only  # check the stamps
+python3 ocean/fight_caves/tools.py setup --force        # reinstall both bundles
 ```
 
-The installed asset directories are ignored by Git.
-Development overrides are `FC_COLLISION_PATH`, `FC_MOVEMENT_PATH`, `FC_LOS_PATH`,
-and `FC_ASSET_ROOT` (the viewer asset directory). Run commands from the repository
-root: assets and `config/fight_caves.ini` are found relative to it.
-
-OSRS assets are distributed separately and are not covered by PufferLib's
+Missing data stops with an error rather than falling back to an open map or
+reduced graphics. `FC_COLLISION_PATH`, `FC_MOVEMENT_PATH`, `FC_LOS_PATH` and
+`FC_ASSET_ROOT` (the viewer directory) override the installed locations. The
+assets are exported from Old School RuneScape and are not covered by PufferLib's
 software license; see `resources/fight_caves/ASSET_NOTICE.md`.
 
-## Tests and maintenance
-
-With pytest and the normal CPU build dependencies installed:
+## Tests
 
 ```bash
 python3 -m pytest -q tests/test_fight_caves_integration.py
-# Include graphical regressions (requires DISPLAY or xvfb-run):
-FC_TEST_RENDER=1 python3 -m pytest -q tests/test_fight_caves_integration.py
+FC_TEST_RENDER=1 python3 -m pytest -q tests/test_fight_caves_integration.py  # adds graphical checks
 ```
 
-The suite builds a fresh CPU executable in pytest's temporary directory and
-installs/verifies assets through the standard build. It checks the asset installer,
-invalid checkpoints, CPU replay,
-and two C suites: simulation/adapter and independent C/C++ linkage. The
-simulation suite includes wave/equipment/analytics fixtures, observations,
-masks, terminal rewards, autoreset, metrics, viewer snapshots and the CPU
-policy's recurrent-state carry and reset. Graphical checks also cover
-replay controls, picking/click feedback and equipment appearance.
+The suite builds a CPU executable with `./build.sh`, then checks the asset
+installer, checkpoint handling and CPU replay, and runs the C simulation and
+C/C++ linkage suites. Missing prerequisites fail the run; only the graphical
+checks, which need `DISPLAY` or `xvfb-run`, are skipped without `FC_TEST_RENDER=1`.
+`CC`/`CXX` select the compilers (default clang/clang++). No GPU training runs
+in pytest.
 
-CC/CXX select the C and C++ compilers (defaults: clang/clang++). Requested native
-or graphical checks fail when prerequisites are missing. Only the graphical
-case is skipped by default; set `FC_TEST_RENDER=1` to require it. No GPU training
-runs in pytest. The stdlib acceptance runner below and pytest share the same
-C compilation recipe.
+### Clean-checkout acceptance
 
-### Disposable-checkout acceptance
-
-In a Linux/CUDA environment with graphics access, run explicitly:
+On Linux with CUDA and a display:
 
 ```bash
-unset __GLX_VENDOR_LIBRARY_NAME
-python3 -S tests/fight_caves_e2e.py clean-clone
-# Include this checkout's uncommitted source changes:
-python3 -S tests/fight_caves_e2e.py clean-clone --working-tree
+python3 -S tests/fight_caves_e2e.py clean-clone                 # committed HEAD
+python3 -S tests/fight_caves_e2e.py clean-clone --working-tree  # plus uncommitted changes
 ```
 
-This stdlib-only runner clones into a retained temporary directory, downloads
-assets/Raylib, builds the native and CPU executables, runs the C suites (including
-NVCC/C linkage), and exercises the graphical viewer. It trains four full batches
-(4,194,304 steps with this INI), verifies native logs and two checkpoints, then
-reloads them on CPU and GPU. It checks clear failures for missing assets,
-compiler/display and missing/truncated checkpoints. This is a functional
-integration check, not a policy-performance benchmark.
+This standard-library runner clones into a retained temporary directory, builds
+both executables (downloading the assets and Raylib), runs the C suites including
+NVCC linkage, opens the viewer, trains four batches and replays the checkpoints
+on CPU and GPU. It also checks the errors for missing assets, a missing compiler
+or display and bad checkpoints, and fails if any source file changes. Nothing is
+silently skipped. Logs, screenshots, checkpoints and
+`build/fight-caves-e2e/report.json` stay in the clone.
 
-No GPU, display or build check is silently skipped. Logs, screenshots, checkpoints
-and `build/fight-caves-e2e/report.json` remain in the disposable checkout on success
-or failure. The source/configuration digest must remain unchanged; the built
-`puffer` executable is excluded from it.
-
-A dirty local source is rejected unless `--working-tree` is explicit. That option
-applies the tracked diff and copies non-ignored untracked sources, then verifies
-the source digest. Existing builds, assets and virtualenvs are not copied. It does
-not commit or push.
-
-`--source PATH_OR_GIT_URL --ref REF` selects another committed source.
-`--prepare-only` prepares the clone for validation elsewhere, such as PufferTank.
-Inside that fresh disposable copy, run `python3 -S tests/fight_caves_e2e.py checkout`.
-It refuses a checkout with existing build/assets/virtualenv directories.
+A dirty source is rejected unless `--working-tree` is given, which applies the
+tracked diff and copies untracked, non-ignored files. `--source PATH_OR_URL --ref
+REF` tests another commit. `--prepare-only` just prepares the clone; run
+`python3 -S tests/fight_caves_e2e.py checkout` inside it, for example in
+PufferTank.
