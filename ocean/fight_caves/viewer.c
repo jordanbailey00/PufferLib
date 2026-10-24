@@ -6933,10 +6933,11 @@ static void dbg_draw_path_2d(const FcState* state, Camera3D cam) {
     }
 }
 
-/* Attack range ring — 2D projected Chebyshev boundary */
+/* Attack range ring — 2D projected Chebyshev boundary at the wielded
+ * weapon's range */
 static void dbg_draw_range_2d(const FcState* state, Camera3D cam) {
     const FcPlayer* p = &state->player;
-    int range = 7;
+    int range = p->weapon_range;
 
     for (int dx = -range; dx <= range; dx++) {
         for (int dy = -range; dy <= range; dy++) {
