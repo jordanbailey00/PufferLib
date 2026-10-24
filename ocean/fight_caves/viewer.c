@@ -2202,21 +2202,18 @@ static const RuneCUiSkillRef RUNEC_OSRS_SKILLS[] = {
 
 static const Rectangle RUNEC_OSRS_STATS_TOTAL = {0, 241, 190, 19};
 
+/* Button, icon and label rectangles of the visible combat styles, in order. */
 typedef struct RuneCUiCombatStyleRef {
-    const char *label;
-    const char *mode;
-    const char *icon_asset;
-    int visible;
     Rectangle rect;
     Rectangle icon_rect;
     Rectangle text_rect;
 } RuneCUiCombatStyleRef;
 
 static const RuneCUiCombatStyleRef RUNEC_OSRS_COMBAT_STYLES[] = {
-    {"Flick",   "Accurate",  "sideicons_interface_0", 1, {20,  46, 68, 47}, {37,  51, 34, 24}, {20,  67, 68, 13}},
-    {"Lash",    "Controlled", "sideicons_interface_1", 1, {102, 46, 68, 47}, {119, 51, 34, 24}, {102, 76, 68, 13}},
-    {"Deflect", "Defensive",  "sideicons_interface_2", 1, {20,  99, 68, 47}, {37, 104, 34, 24}, {20, 129, 68, 13}},
-    {"",        "",           "sideicons_interface_3", 0, {102, 99, 68, 47}, {119,104, 34, 24}, {102,129, 68, 13}},
+    {{20,  46, 68, 47}, {37,  51, 34, 24}, {20,  67, 68, 13}},
+    {{102, 46, 68, 47}, {119, 51, 34, 24}, {102, 76, 68, 13}},
+    {{20,  99, 68, 47}, {37, 104, 34, 24}, {20, 129, 68, 13}},
+    {{102, 99, 68, 47}, {119,104, 34, 24}, {102,129, 68, 13}},
 };
 
 static const Rectangle RUNEC_OSRS_COMBAT_HEADER = {10, 0, 170, 44};
@@ -2312,68 +2309,18 @@ static const char *const g_ui_asset_names[] = {
     "combatboxes_1",
     "combatboxes_special_attack",
     "combat_shield",
-    "combaticons_0",
-    "combaticons_1",
-    "combaticons_2",
-    "combaticons_3",
-    "combaticons_4",
-    "combaticons_5",
-    "combaticons_6",
-    "combaticons_7",
-    "combaticons_8",
-    "combaticons_9",
-    "combaticons_10",
-    "combaticons_11",
-    "combaticons_12",
-    "combaticons_13",
     "combaticons_14",
     "combaticons_15",
     "combaticons_16",
-    "combaticons_17",
-    "combaticons_18",
-    "combaticons_19",
-    "combaticons2_0",
-    "combaticons2_1",
-    "combaticons2_2",
-    "combaticons2_3",
     "combaticons2_5",
     "combaticons2_6",
     "combaticons2_7",
-    "combaticons2_8",
-    "combaticons2_9",
     "combaticons2_10",
     "combaticons2_11",
     "combaticons2_12",
-    "combaticons2_13",
-    "combaticons2_14",
     "combaticons2_15",
     "combaticons2_16",
     "combaticons2_17",
-    "combaticons2_18",
-    "combaticons2_19",
-    "combaticons3_0",
-    "combaticons3_1",
-    "combaticons3_2",
-    "combaticons3_3",
-    "combaticons3_4",
-    "combaticons3_5",
-    "combaticons3_6",
-    "combaticons3_7",
-    "combaticons3_8",
-    "combaticons3_9",
-    "combaticons3_10",
-    "combaticons3_11",
-    "combaticons3_12",
-    "combaticons3_13",
-    "combaticons3_14",
-    "combaticons3_15",
-    "combaticons3_16",
-    "combaticons3_17",
-    "combaticons3_18",
-    "sideicons_interface_0",
-    "sideicons_interface_1",
-    "sideicons_interface_2",
-    "sideicons_interface_3",
     "skill_icon_0",
     "skill_icon_1",
     "skill_icon_2",
@@ -3422,7 +3369,7 @@ typedef struct RuneCUiCombatStyleDef {
 } RuneCUiCombatStyleDef;
 
 typedef struct RuneCUiCombatProfile {
-    int osrs_category;
+    int weapon_category;
     const RuneCUiCombatStyleDef styles[RUNEC_UI_COMBAT_STYLE_COUNT];
 } RuneCUiCombatProfile;
 
@@ -3433,189 +3380,35 @@ typedef struct RuneCUiCombatProfile {
 
 /*
  * Exact b237 combat_interface_weapon_category DB rows from the local
- * Joshua-F dump. Core owns the selected style; the viewer owns this
- * presentation mapping so weapon tabs use the same labels/icons as OSRS.
+ * Joshua-F dump for the weapon categories the loadouts use
+ * (FcLoadout.combat_style_profile, or 0 when unarmed). Core owns the selected
+ * style; the viewer owns this presentation mapping so weapon tabs use the
+ * same labels/icons as OSRS.
  */
 static const RuneCUiCombatProfile g_combat_profiles[] = {
-    {0, {
+    {0, {   /* unarmed: OSRS category 0 */
         COMBAT_STYLE(0, "Punch", "Accurate", "combaticons_14"),
         COMBAT_STYLE(1, "Kick", "Aggressive", "combaticons_15"),
         COMBAT_STYLE(3, "Block", "Defensive", "combaticons_16"),
         COMBAT_STYLE_HIDDEN,
     }},
-    {1, {
-        COMBAT_STYLE(0, "Chop", "Accurate", "combaticons_1"),
-        COMBAT_STYLE(1, "Hack", "Aggressive", "combaticons_2"),
-        COMBAT_STYLE(2, "Smash", "Aggressive", "combaticons_3"),
-        COMBAT_STYLE(3, "Block", "Defensive", "combaticons_0"),
-    }},
-    {2, {
-        COMBAT_STYLE(0, "Pound", "Accurate", "combaticons2_2"),
-        COMBAT_STYLE(1, "Pummel", "Aggressive", "combaticons2_3"),
-        COMBAT_STYLE(3, "Block", "Defensive", "combaticons2_0"),
-        COMBAT_STYLE_HIDDEN,
-    }},
-    {3, {
-        COMBAT_STYLE(0, "Accurate", "Accurate", "combaticons2_15"),
-        COMBAT_STYLE(1, "Rapid", "Rapid", "combaticons2_16"),
-        COMBAT_STYLE(3, "Longrange", "Longrange", "combaticons2_17"),
-        COMBAT_STYLE_HIDDEN,
-    }},
-    {4, {
-        COMBAT_STYLE(0, "Chop", "Accurate", "combaticons3_6"),
-        COMBAT_STYLE(1, "Slash", "Aggressive", "combaticons3_5"),
-        COMBAT_STYLE(2, "Lunge", "Controlled", "combaticons3_4"),
-        COMBAT_STYLE(3, "Block", "Defensive", "combaticons3_7"),
-    }},
-    {5, {
+    {9, {   /* crossbow: OSRS category 5 */
         COMBAT_STYLE(0, "Accurate", "Accurate", "combaticons2_5"),
         COMBAT_STYLE(1, "Rapid", "Rapid", "combaticons2_6"),
         COMBAT_STYLE(3, "Longrange", "Longrange", "combaticons2_7"),
         COMBAT_STYLE_HIDDEN,
     }},
-    {6, {
-        COMBAT_STYLE(0, "Scorch", "Accurate", "combaticons3_16"),
-        COMBAT_STYLE(1, "Flare", "Aggressive", "combaticons3_17"),
-        COMBAT_STYLE(2, "Blaze", "Defensive", "combaticons3_18"),
-        COMBAT_STYLE_HIDDEN,
-    }},
-    {7, {
-        COMBAT_STYLE(0, "Short fuse", "Accurate", "combaticons3_15"),
-        COMBAT_STYLE(1, "Medium fuse", "Rapid", "combaticons3_9"),
-        COMBAT_STYLE(3, "Long fuse", "Longrange", "combaticons3_8"),
-        COMBAT_STYLE_HIDDEN,
-    }},
-    {8, {
-        COMBAT_STYLE(0, "Aim and Fire", "Accurate", "prayeron_13"),
-        COMBAT_STYLE(1, "Kick", "Aggressive", "combaticons_15"),
-        COMBAT_STYLE_HIDDEN,
-        COMBAT_STYLE_HIDDEN,
-    }},
-    {9, {
-        COMBAT_STYLE(0, "Chop", "Accurate", "combaticons_6"),
-        COMBAT_STYLE(1, "Slash", "Aggressive", "combaticons_5"),
-        COMBAT_STYLE(2, "Lunge", "Controlled", "combaticons_7"),
-        COMBAT_STYLE(3, "Block", "Defensive", "combaticons_4"),
-    }},
-    {10, {
-        COMBAT_STYLE(0, "Chop", "Accurate", "combaticons_6"),
-        COMBAT_STYLE(1, "Slash", "Aggressive", "combaticons_5"),
-        COMBAT_STYLE(2, "Smash", "Aggressive", "combaticons_5"),
-        COMBAT_STYLE(3, "Block", "Defensive", "combaticons_4"),
-    }},
-    {11, {
-        COMBAT_STYLE(0, "Spike", "Accurate", "combaticons3_1"),
-        COMBAT_STYLE(1, "Impale", "Aggressive", "combaticons3_3"),
-        COMBAT_STYLE(2, "Smash", "Aggressive", "combaticons3_2"),
-        COMBAT_STYLE(3, "Block", "Defensive", "combaticons3_0"),
-    }},
-    {12, {
-        COMBAT_STYLE(0, "Jab", "Controlled", "combaticons3_11"),
-        COMBAT_STYLE(1, "Swipe", "Aggressive", "combaticons3_12"),
-        COMBAT_STYLE(3, "Fend", "Defensive", "combaticons3_10"),
-        COMBAT_STYLE_HIDDEN,
-    }},
-    {13, {
-        COMBAT_STYLE(0, "Bash", "Accurate", "combaticons2_13"),
-        COMBAT_STYLE(1, "Pound", "Aggressive", "combaticons2_14"),
-        COMBAT_STYLE(3, "Block", "Defensive", "combaticons_19"),
-        COMBAT_STYLE_HIDDEN,
-    }},
-    {14, {
-        COMBAT_STYLE(0, "Reap", "Accurate", "combaticons2_19"),
-        COMBAT_STYLE(1, "Chop", "Aggressive", "combaticons2_9"),
-        COMBAT_STYLE(2, "Jab", "Controlled", "combaticons2_18"),
-        COMBAT_STYLE(3, "Block", "Defensive", "combaticons2_8"),
-    }},
-    {15, {
-        COMBAT_STYLE(0, "Lunge", "Controlled", "combaticons_8"),
-        COMBAT_STYLE(1, "Swipe", "Controlled", "combaticons_18"),
-        COMBAT_STYLE(2, "Pound", "Controlled", "combaticons_9"),
-        COMBAT_STYLE(3, "Block", "Defensive", "combaticons_17"),
-    }},
-    {16, {
-        COMBAT_STYLE(0, "Pound", "Accurate", "combaticons_13"),
-        COMBAT_STYLE(1, "Pummel", "Aggressive", "combaticons_11"),
-        COMBAT_STYLE(2, "Spike", "Controlled", "combaticons_12"),
-        COMBAT_STYLE(3, "Block", "Defensive", "combaticons_10"),
-    }},
-    {17, {
-        COMBAT_STYLE(0, "Stab", "Accurate", "combaticons_7"),
-        COMBAT_STYLE(1, "Lunge", "Aggressive", "combaticons_6"),
-        COMBAT_STYLE(2, "Slash", "Controlled", "combaticons_5"),
-        COMBAT_STYLE(3, "Block", "Defensive", "combaticons_4"),
-    }},
-    {18, {
-        COMBAT_STYLE(0, "Bash", "Accurate", "combaticons2_13"),
-        COMBAT_STYLE(1, "Pound", "Aggressive", "combaticons2_14"),
-        COMBAT_STYLE(3, "Focus", "Defensive", "combaticons_19"),
-        COMBAT_STYLE_HIDDEN,
-    }},
-    {19, {
+    {23, {  /* thrown: OSRS category 19 */
         COMBAT_STYLE(0, "Accurate", "Accurate", "combaticons2_10"),
         COMBAT_STYLE(1, "Rapid", "Rapid", "combaticons2_11"),
         COMBAT_STYLE(3, "Longrange", "Longrange", "combaticons2_12"),
         COMBAT_STYLE_HIDDEN,
     }},
-    {20, {
-        COMBAT_STYLE(0, "Flick", "Accurate", "combaticons3_13"),
-        COMBAT_STYLE(1, "Lash", "Controlled", "combaticons3_14"),
-        COMBAT_STYLE(3, "Deflect", "Defensive", "combaticons3_13"),
+    {25, {  /* bow: OSRS category 3 */
+        COMBAT_STYLE(0, "Accurate", "Accurate", "combaticons2_15"),
+        COMBAT_STYLE(1, "Rapid", "Rapid", "combaticons2_16"),
+        COMBAT_STYLE(3, "Longrange", "Longrange", "combaticons2_17"),
         COMBAT_STYLE_HIDDEN,
-    }},
-    {21, {
-        COMBAT_STYLE(0, "Jab", "Accurate", "combaticons2_13"),
-        COMBAT_STYLE(1, "Swipe", "Aggressive", "combaticons2_14"),
-        COMBAT_STYLE(3, "Fend", "Defensive", "combaticons_19"),
-        COMBAT_STYLE_HIDDEN,
-    }},
-    {22, {
-        COMBAT_STYLE(0, "Jab", "Accurate", "combaticons2_13"),
-        COMBAT_STYLE(1, "Swipe", "Aggressive", "combaticons2_14"),
-        COMBAT_STYLE(3, "Fend", "Defensive", "combaticons_19"),
-        COMBAT_STYLE_HIDDEN,
-    }},
-    {24, {
-        COMBAT_STYLE(0, "Accurate", "Accurate", "combaticons2_10"),
-        COMBAT_STYLE(1, "Accurate", "Accurate", "combaticons2_10"),
-        COMBAT_STYLE(3, "Longrange", "Longrange", "combaticons2_12"),
-        COMBAT_STYLE_HIDDEN,
-    }},
-    {25, {
-        COMBAT_STYLE(0, "Lunge", "Controlled", "combaticons_8"),
-        COMBAT_STYLE(1, "Swipe", "Controlled", "combaticons_18"),
-        COMBAT_STYLE(2, "Pound", "Controlled", "combaticons_9"),
-        COMBAT_STYLE(3, "Block", "Defensive", "combaticons_17"),
-    }},
-    {26, {
-        COMBAT_STYLE(0, "Jab", "Controlled", "combaticons3_11"),
-        COMBAT_STYLE(1, "Swipe", "Aggressive", "combaticons3_12"),
-        COMBAT_STYLE(3, "Fend", "Defensive", "combaticons3_10"),
-        COMBAT_STYLE_HIDDEN,
-    }},
-    {27, {
-        COMBAT_STYLE(0, "Pound", "Accurate", "combaticons2_2"),
-        COMBAT_STYLE(1, "Pummel", "Aggressive", "combaticons2_3"),
-        COMBAT_STYLE(2, "Smash", "Aggressive", "combaticons2_0"),
-        COMBAT_STYLE_HIDDEN,
-    }},
-    {28, {
-        COMBAT_STYLE(1, "Pummel", "Aggressive", "combaticons2_1"),
-        COMBAT_STYLE(3, "Block", "Defensive", "combaticons2_0"),
-        COMBAT_STYLE_HIDDEN,
-        COMBAT_STYLE_HIDDEN,
-    }},
-    {29, {
-        COMBAT_STYLE(0, "Accurate", "Accurate", "combaticons2_10"),
-        COMBAT_STYLE(1, "Accurate", "Accurate", "combaticons2_10"),
-        COMBAT_STYLE(3, "Longrange", "Longrange", "combaticons2_12"),
-        COMBAT_STYLE_HIDDEN,
-    }},
-    {30, {
-        COMBAT_STYLE(0, "Stab", "Accurate", "combaticons_7"),
-        COMBAT_STYLE(1, "Lunge", "Aggressive", "combaticons_6"),
-        COMBAT_STYLE(2, "Pound", "Controlled", "combaticons_5"),
-        COMBAT_STYLE(3, "Block", "Defensive", "combaticons_4"),
     }},
 };
 
@@ -3627,49 +3420,13 @@ static void copy_text(char *dst, size_t cap, const char *src) {
     snprintf(dst, cap, "%s", src);
 }
 
-static const RuneCUiCombatProfile *combat_profile_for_osrs_category(int category) {
+static const RuneCUiCombatProfile *combat_profile_for_weapon_category(int category) {
     int count = (int)(sizeof(g_combat_profiles) / sizeof(g_combat_profiles[0]));
     for (int i = 0; i < count; i++) {
-        if (g_combat_profiles[i].osrs_category == category)
+        if (g_combat_profiles[i].weapon_category == category)
             return &g_combat_profiles[i];
     }
     return &g_combat_profiles[0];
-}
-
-static int osrs_combat_category_from_core_weapon(int core_weapon_category) {
-    switch (core_weapon_category) {
-    case 0: return 0;   /* unarmed */
-    case 1: return 10;  /* 2h sword */
-    case 2: return 1;   /* axe */
-    case 4: return 2;   /* blunt */
-    case 5: return 27;  /* bludgeon */
-    case 6: return 28;  /* bulwark */
-    case 7: return 7;   /* chinchompa/grenade */
-    case 8: return 4;   /* claw */
-    case 9: return 5;   /* crossbow */
-    case 10: return 20; /* whip */
-    case 11: return 6;  /* fixed device */
-    case 12: return 8;  /* gun */
-    case 13: return 11; /* pickaxe */
-    case 14: return 12; /* polearm */
-    case 15: return 13; /* polestaff */
-    case 16: return 24; /* powered staff */
-    case 17: return 14; /* scythe */
-    case 18: return 9;  /* slash sword */
-    case 19: return 15; /* spear */
-    case 20: return 16; /* spiked */
-    case 21: return 17; /* stab sword */
-    case 22: return 18; /* staff */
-    case 23: return 19; /* thrown */
-    case 24: return 10; /* two-handed sword */
-    case 25: return 3;  /* bow */
-    case 26: return 6;  /* salamander */
-    case 27: return 6;  /* multi-style fallback */
-    case 28: return 29; /* powered wand */
-    case 29: return 21; /* bladed staff */
-    case 30: return 30; /* partisan */
-    default: return 0;
-    }
 }
 
 static const RuneCUiCombatStyleOption *combat_style_option_by_index(
@@ -3722,12 +3479,11 @@ void runec_ui_set_combat_weapon_name(RuneCUiState *ui, const char *name) {
               name && name[0] ? name : "Unarmed");
 }
 
-void runec_ui_set_combat_style_profile(RuneCUiState *ui, int core_weapon_category) {
+void runec_ui_set_combat_style_profile(RuneCUiState *ui, int weapon_category) {
     if (!ui)
         return;
-    int osrs_category = osrs_combat_category_from_core_weapon(core_weapon_category);
     const RuneCUiCombatProfile *profile =
-        combat_profile_for_osrs_category(osrs_category);
+        combat_profile_for_weapon_category(weapon_category);
     for (int i = 0; i < RUNEC_UI_COMBAT_STYLE_COUNT; i++) {
         const RuneCUiCombatStyleDef *src = &profile->styles[i];
         RuneCUiCombatStyleOption *dst = &ui->combat_styles[i];
