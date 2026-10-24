@@ -6746,7 +6746,6 @@ typedef struct {
     Color color[DBG_LOG_MAX_ENTRIES];   /* display color per entry */
     int head;                           /* next write position */
     int count;                          /* total entries (capped at MAX) */
-    int scroll_offset;                  /* for scrollable display */
 } DbgEventLog;
 
 static DbgEventLog g_dbg_log = {0};
@@ -6754,7 +6753,6 @@ static DbgEventLog g_dbg_log = {0};
 void dbg_log_clear(void) {
     g_dbg_log.head = 0;
     g_dbg_log.count = 0;
-    g_dbg_log.scroll_offset = 0;
 }
 
 static void dbg_log_event(int game_tick, Color c, const char* fmt, ...) {
@@ -7012,28 +7010,11 @@ static void dbg_draw_range_2d(const FcState* state, Camera3D cam) {
     }
 }
 
-static void dbg_draw_run_energy(const FcState* state) {
-    int energy = state->player.run_energy;
-    if (energy < 0) energy = 0;
-    if (energy > FC_RUN_ENERGY_MAX) energy = FC_RUN_ENERGY_MAX;
-
-    char text[32];
-    snprintf(text, sizeof(text), "Run energy: %d.%02d%%",
-             energy / 100, energy % 100);
-    int width = fc_osrs_measure_text(text, 9);
-    DrawRectangle(6, 6, width + 10, 18,
-                  CLITERAL(Color){20, 18, 14, 210});
-    DrawRectangleLines(6, 6, width + 10, 18,
-                       CLITERAL(Color){120, 110, 90, 255});
-    fc_osrs_draw_text(text, 11, 11, 9, DBG_COL_VALUE);
-}
-
 /* Master 2D overlays for LOS/path/range — called after EndMode3D */
 void debug_overlay_screen(const FcState* state, Camera3D cam, int dbg_flags) {
     if (dbg_flags & DBG_LOS)   dbg_draw_los_2d(state, cam);
     if (dbg_flags & DBG_PATH)  dbg_draw_path_2d(state, cam);
     if (dbg_flags & DBG_RANGE) dbg_draw_range_2d(state, cam);
-    dbg_draw_run_energy(state);
 }
 
 void dbg_draw_prayer_window_indicator(Vector3 world_anchor, Camera3D cam) {
@@ -7085,18 +7066,15 @@ static int dbg_mask_bits(const float* mask, int head, char* bits) {
     return valid;
 }
 
-/* Draw one debug tab's contents.
- * px = panel X, x = content X, by = Y start position, pw = panel width.
- * dbg_tab: 0=player, 1=obs, 2=mask, 3=reward, 4=log.
- * content_height limits the log viewport; zero keeps the legacy 20 rows.
+/* Draw one debug tab's contents from (x, by); the console clips and scrolls
+ * them. dbg_tab: 0=player, 1=obs, 2=mask, 3=reward, 4=log.
  * Returns end Y position. */
 int dbg_draw_panel_tabs(const FcState* state,
                         const FcRewardBreakdown* reward_breakdown,
                         const FcRewardRuntime* reward_runtime,
                         int reward_config_loaded,
                         const char* reward_config_path,
-                        int px, int x, int by, int pw, int dbg_tab,
-                        int content_height) {
+                        int x, int by, int dbg_tab) {
     int lh = 14;
 
     if (dbg_tab == 0) {
@@ -7257,76 +7235,14 @@ int dbg_draw_panel_tabs(const FcState* state,
             }
         }
     } else if (dbg_tab == 4) {
-        /* Event log — scrollable with scrollbar, most recent at top */
-        int entry_h = lh - 2;
-        int max_visible = content_height > 0
-            ? content_height / entry_h : 20;
-        if (max_visible < 1) max_visible = 1;
-        int total = g_dbg_log.count;
-        int log_h = max_visible * entry_h;
-        int scrollbar_w = 10;
-        if (total == 0) {
+        /* Event log, most recent at top */
+        if (g_dbg_log.count == 0)
             dbg_print_line(x, &by, lh, 8, DBG_COL_DIM, "No events yet");
-        } else {
-            int max_scroll = total - max_visible;
-            if (max_scroll < 0) max_scroll = 0;
-
-            /* Clamp scroll */
-            if (g_dbg_log.scroll_offset > max_scroll)
-                g_dbg_log.scroll_offset = max_scroll;
-            if (g_dbg_log.scroll_offset < 0)
-                g_dbg_log.scroll_offset = 0;
-
-            /* Mouse wheel scroll */
-            float wheel = GetMouseWheelMove();
-            if (wheel != 0.0f) {
-                Vector2 mp = GetMousePosition();
-                if (mp.x >= px && mp.x < px + pw &&
-                    mp.y >= by && mp.y < by + log_h) {
-                    g_dbg_log.scroll_offset -= (int)wheel * 3;
-                    if (g_dbg_log.scroll_offset < 0) g_dbg_log.scroll_offset = 0;
-                    if (g_dbg_log.scroll_offset > max_scroll) g_dbg_log.scroll_offset = max_scroll;
-                }
-            }
-
-            /* Scrollbar track */
-            int sb_x = px + pw - scrollbar_w - 4;
-            int sb_y = by;
-            DrawRectangle(sb_x, sb_y, scrollbar_w, log_h, CLITERAL(Color){30,26,20,255});
-
-            /* Scrollbar thumb */
-            if (total > max_visible) {
-                float thumb_frac = (float)max_visible / (float)total;
-                int thumb_h = (int)(log_h * thumb_frac);
-                if (thumb_h < 12) thumb_h = 12;
-                float scroll_frac = (max_scroll > 0) ? (float)g_dbg_log.scroll_offset / (float)max_scroll : 0;
-                int thumb_y = sb_y + (int)((log_h - thumb_h) * scroll_frac);
-                DrawRectangle(sb_x, thumb_y, scrollbar_w, thumb_h, CLITERAL(Color){120,110,90,255});
-
-                /* Drag scrollbar with mouse */
-                if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
-                    Vector2 mp = GetMousePosition();
-                    if (mp.x >= sb_x && mp.x < sb_x + scrollbar_w &&
-                        mp.y >= sb_y && mp.y < sb_y + log_h) {
-                        float click_frac = (mp.y - sb_y) / (float)log_h;
-                        g_dbg_log.scroll_offset = (int)(click_frac * (float)(max_scroll + 1));
-                        if (g_dbg_log.scroll_offset > max_scroll) g_dbg_log.scroll_offset = max_scroll;
-                    }
-                }
-            }
-
-            /* Draw entries */
-            int drawn = 0;
-            for (int i = g_dbg_log.scroll_offset; i < total && drawn < max_visible; i++) {
-                int idx = (g_dbg_log.head - 1 - i + DBG_LOG_MAX_ENTRIES * 2) % DBG_LOG_MAX_ENTRIES;
-                dbg_print_line(x, &by, entry_h, 7, g_dbg_log.color[idx],
-                               "t%d %s", g_dbg_log.tick[idx],
-                               g_dbg_log.entries[idx]);
-                drawn++;
-            }
-
-            /* Pad remaining space if fewer entries than max_visible */
-            by += (max_visible - drawn) * entry_h;
+        for (int i = 0; i < g_dbg_log.count; i++) {
+            int idx = (g_dbg_log.head - 1 - i + DBG_LOG_MAX_ENTRIES * 2) % DBG_LOG_MAX_ENTRIES;
+            dbg_print_line(x, &by, lh - 2, 7, g_dbg_log.color[idx],
+                           "t%d %s", g_dbg_log.tick[idx],
+                           g_dbg_log.entries[idx]);
         }
     }
 
@@ -7435,8 +7351,8 @@ typedef struct ViewerState {
     int scene_right_tracking, scene_right_dragged;
     int console_tab;              /* controls, player, obs, mask, reward, log */
     int console_wave_dropdown_open;
-    int console_scroll[4];        /* player/obs/mask/reward vertical offsets */
-    int console_content_height[4];
+    int console_scroll[5];        /* player/obs/mask/reward/log vertical offsets */
+    int console_content_height[5];
     /* prayeron/prayeroff sprites per FC_PROTECTION_PRAYERS row, for the
      * Prayer tab and (on) the overhead icon. */
     Texture2D prayer_on[FC_PROTECTION_PRAYER_COUNT];
@@ -8707,48 +8623,42 @@ static void draw_runec_console_controls(ViewerState* v, Rectangle body) {
         draw_runec_console_wave_grid(v, body);
 }
 
+/* Console tabs 1-5 show debug tabs 0-4, scrolled by the mouse wheel. */
 static void draw_runec_console_diagnostics(ViewerState* v, Rectangle body) {
     int debug_tab = v->console_tab - 1;
     int available_height = (int)body.height - 6;
-    int scroll = 0;
-    if (debug_tab >= 0 && debug_tab < 4) {
-        clamp_console_scroll(v, debug_tab, available_height);
-        scroll = v->console_scroll[debug_tab];
-    }
+    clamp_console_scroll(v, debug_tab, available_height);
 
-    int content_y = (int)body.y + 3 - scroll;
+    int content_y = (int)body.y + 3 - v->console_scroll[debug_tab];
     BeginScissorMode((int)body.x, (int)body.y,
                      (int)body.width, (int)body.height);
     int end_y = dbg_draw_panel_tabs(
         &v->state,
         &v->reward_breakdown, &v->reward_runtime,
         v->reward_config_loaded, v->reward_config_path,
-        (int)body.x, (int)body.x + 4, content_y,
-        (int)body.width, debug_tab, available_height);
+        (int)body.x + 4, content_y, debug_tab);
     EndScissorMode();
 
-    if (debug_tab >= 0 && debug_tab < 4) {
-        int height = end_y - content_y;
-        v->console_content_height[debug_tab] = height > 0 ? height : 0;
-        int max_scroll = clamp_console_scroll(v, debug_tab, available_height);
-        if (max_scroll > 0) {
-            int track_x = (int)(body.x + body.width) - 6;
-            int track_y = (int)body.y + 3;
-            int track_h = available_height;
-            DrawRectangle(track_x, track_y, 4, track_h,
-                          CLITERAL(Color){30, 26, 20, 230});
-            float visible_fraction =
-                (float)available_height / (float)height;
-            int thumb_h = (int)((float)track_h * visible_fraction);
-            if (thumb_h < 12) thumb_h = 12;
-            float scroll_fraction = max_scroll > 0
-                ? (float)v->console_scroll[debug_tab] / (float)max_scroll
-                : 0.0f;
-            int thumb_y = track_y +
-                (int)((float)(track_h - thumb_h) * scroll_fraction);
-            DrawRectangle(track_x, thumb_y, 4, thumb_h,
-                          CLITERAL(Color){120, 110, 90, 255});
-        }
+    int height = end_y - content_y;
+    v->console_content_height[debug_tab] = height > 0 ? height : 0;
+    int max_scroll = clamp_console_scroll(v, debug_tab, available_height);
+    if (max_scroll > 0) {
+        int track_x = (int)(body.x + body.width) - 6;
+        int track_y = (int)body.y + 3;
+        int track_h = available_height;
+        DrawRectangle(track_x, track_y, 4, track_h,
+                      CLITERAL(Color){30, 26, 20, 230});
+        float visible_fraction =
+            (float)available_height / (float)height;
+        int thumb_h = (int)((float)track_h * visible_fraction);
+        if (thumb_h < 12) thumb_h = 12;
+        float scroll_fraction = max_scroll > 0
+            ? (float)v->console_scroll[debug_tab] / (float)max_scroll
+            : 0.0f;
+        int thumb_y = track_y +
+            (int)((float)(track_h - thumb_h) * scroll_fraction);
+        DrawRectangle(track_x, thumb_y, 4, thumb_h,
+                      CLITERAL(Color){120, 110, 90, 255});
     }
 }
 
@@ -8856,8 +8766,7 @@ static int process_runec_console_input(ViewerState* v) {
         }
     }
 
-    if (v->console_tab >= 1 && v->console_tab <= 4 &&
-        CheckCollisionPointRec(mouse, body)) {
+    if (v->console_tab >= 1 && CheckCollisionPointRec(mouse, body)) {
         float wheel = GetMouseWheelMove();
         if (wheel != 0.0f) {
             int index = v->console_tab - 1;
