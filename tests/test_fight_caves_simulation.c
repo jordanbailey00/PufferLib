@@ -307,6 +307,39 @@ static int loadout_totals(void) {
     return 0;
 }
 
+/* The loadout and NPC tables are compile-time constants, checked here rather
+ * than on every fc_init. */
+static int constant_tables(void) {
+    for (int id = 0; id < FC_NUM_LOADOUTS; id++) {
+        const FcLoadout *loadout = &FC_LOADOUTS[id];
+        CHECK(loadout->max_hp > 0 && loadout->max_prayer > 0);
+        CHECK(loadout->attack_lvl >= 1 && loadout->strength_lvl >= 1 &&
+              loadout->defence_lvl >= 1 && loadout->ranged_lvl >= 1 &&
+              loadout->prayer_lvl >= 1 && loadout->magic_lvl >= 1);
+        CHECK(loadout->ammo >= 0 && loadout->equipment_count > 0 &&
+              loadout->equipment_count <= FC_LOADOUT_EQUIP_MAX);
+        int occupied[FC_EQUIPMENT_SLOTS] = {0};
+        for (int i = 0; i < loadout->equipment_count; i++) {
+            const FcItemDef *item = fc_item_definition(loadout->equipment[i]);
+            CHECK(item && item->slot >= 0 && item->slot < FC_EQUIPMENT_SLOTS);
+            CHECK(occupied[item->slot]++ == 0);
+        }
+        FcPlayer player = {0};
+        apply_loadout_combat_fields(&player, loadout);
+        CHECK(fc_player_ranged_base_max_hit_hp(&player) > 0);
+        for (int type = NPC_TZ_KIH; type < NPC_TYPE_COUNT; type++) {
+            FcNpc target = {.npc_type = type};
+            CHECK(fc_player_ranged_final_max_hit_hp(&player, &target) > 0);
+        }
+    }
+    /* NPC reach and attack rules assume a melee-style NPC has a melee hit. */
+    for (int type = NPC_TZ_KIH; type < NPC_TYPE_COUNT; type++) {
+        const FcNpcStats *stats = fc_npc_get_stats(type);
+        CHECK(stats->attack_style != ATTACK_MELEE || stats->max_hit[ATTACK_MELEE] > 0);
+    }
+    return 0;
+}
+
 static int transactions(void) {
     FcState s;
     reset(&s, 0);
@@ -499,9 +532,9 @@ static int combat(void) {
 }
 
 static int equipment_test(void) {
-    if (loadout_totals() || transactions() || two_handed_and_stacks() ||
-        supplies_and_loaded_weapon() || combat()) return 1;
-    puts("equipment: preset preservation, atomic transfers, stacks, requirements, supplies and combat passed");
+    if (loadout_totals() || constant_tables() || transactions() ||
+        two_handed_and_stacks() || supplies_and_loaded_weapon() || combat()) return 1;
+    puts("equipment: preset preservation, tables, atomic transfers, stacks, requirements, supplies and combat passed");
     return 0;
 }
 
