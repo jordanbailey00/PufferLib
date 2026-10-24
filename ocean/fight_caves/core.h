@@ -7,9 +7,9 @@
 #error "Compile the Fight Caves core implementation as C, not C++."
 #endif
 
-/* Player Init */
-
 #include <stdint.h>
+
+/* Player Init */
 
 /*
  * Player skill, equipment, and consumable configuration shared by the core,
@@ -93,26 +93,12 @@ extern const FcLoadout FC_LOADOUTS[FC_NUM_LOADOUTS];
 
 /* Types */
 
-#include <stdint.h>
-
 /*
- * fc_types.h — Core data structures for Fight Caves simulation.
- *
- * Design rules (from PufferLib OSRS PvP reference):
- *   - All state is flat fields on structs. No nested pointers, no heap alloc per tick.
- *   - Enables cache locality, fast memset reset, linear observation generation.
- *   - All structs are zeroed on reset via memset; zero must be a safe default for every field.
- *
- * PR 2 combat note — PvM prayer semantics:
- *   Protection prayers in Fight Caves BLOCK 100% of the matching NPC attack style.
- *   This is standard OSRS PvM behavior, NOT the PvP 60% reduction from osrs_pvp.
- *   Exceptions (e.g. TzTok-Jad hits through wrong prayer) must be explicit per NPC/attack.
- *   See fc_combat.c (PR 2) for implementation.
+ * All state is flat fields on structs: no nested pointers and no heap
+ * allocation per tick, which keeps copies, hashing and observation writing
+ * linear. fc_reset zeroes FcState with memset, so zero must be a safe default
+ * for every field it does not set.
  */
-
-/* ======================================================================== */
-/* Enums                                                                     */
-/* ======================================================================== */
 
 typedef enum {
     ENTITY_PLAYER = 0,
@@ -179,10 +165,6 @@ typedef enum {
     SPAWN_CENTER     = 4
 } FcSpawnDir;
 
-/* ======================================================================== */
-/* Constants                                                                 */
-/* ======================================================================== */
-
 /* Arena */
 #define FC_ARENA_WIDTH   64
 #define FC_ARENA_HEIGHT  64
@@ -208,7 +190,7 @@ typedef enum {
 
 /* Entity limits */
 #define FC_MAX_NPCS      16   /* max simultaneous NPCs in the arena */
-#define FC_VISIBLE_NPCS   8   /* max NPCs in observation (see fc_contracts.h) */
+#define FC_VISIBLE_NPCS   8   /* max NPCs in observation (FC_OBS_NPC_SLOTS) */
 #define FC_MAX_PENDING_HITS 8 /* per entity pending hit queue */
 
 /* Waves */
@@ -240,27 +222,18 @@ typedef enum {
 #define FC_RUN_ENERGY_RESTORE \
     (15 + FC_RUN_AGILITY_LEVEL / 10)
 
-/* Player base stats — defined in fc_player_init.h */
-/* ======================================================================== */
-/* Pending Hit (projectile in flight or delayed melee)                       */
-/* ======================================================================== */
-
 /*
- * Attacks queue a PendingHit with a tick delay before damage applies.
+ * Pending hit: a projectile in flight or a delayed melee hit. Attacks queue
+ * one with a delay in ticks; pending hits resolve after the NPCs act, so a
+ * delay of 1 lands on the attack tick. Melee uses 1; ranged and magic use the
+ * projectile travel time from fc_ranged_hit_delay (player) or
+ * fc_npc_hit_delay (NPCs).
+ *
  * Prayer blocking is locked into the pending hit before impact:
  *   - normal Fight Caves NPCs snapshot prayer on the attack tick
- *   - Jad special-cases ranged/magic to snapshot shortly after the tell
+ *   - Jad's ranged and magic snapshot two ticks after the attack
  * The projectile/hitsplat can still land later, but prayer no longer re-checks
  * the live player prayer on impact.
- *
- * This models OSRS projectile flight:
- *   Melee:  0 tick delay (instant)
- *   Ranged: 1 + floor((3 + distance) / 6) ticks
- *   Magic:  1 + floor((1 + distance) / 3) ticks
- *
- * PR 2 note: Protection prayer blocks 100% damage if correct style match.
- * Unlike PvP (60% reduction), PvM prayer fully blocks the hit.
- * Exception: Jad attacks always deal damage if WRONG prayer is active.
  */
 typedef struct {
     int active;           /* 1 if this slot is in use */
@@ -272,10 +245,6 @@ typedef struct {
     int prayer_snapshot;  /* prayer locked for this hit; -1 = snapshot pending */
     int prayer_lock_tick; /* first tick on which prayer_snapshot should be filled */
 } FcPendingHit;
-
-/* ======================================================================== */
-/* Player                                                                    */
-/* ======================================================================== */
 
 #define FC_INVENTORY_SLOTS 28
 #define FC_EQUIPMENT_SLOTS 14
@@ -345,7 +314,7 @@ typedef struct {
     int hp_regen_counter;
 
     /* Click-to-move route (like RSMod RouteDestination / Void walkTo).
-     * Set once on click, consumed one step per tick until empty.
+     * Set once on click, consumed one step per tick (two when running).
      * When route_len == route_idx, player stands still. */
     #define FC_MAX_ROUTE 64
     int route_x[FC_MAX_ROUTE];
@@ -381,10 +350,6 @@ typedef struct {
     int melee_attack_bonus, melee_strength_bonus;
     int selected_food_slot, selected_potion_slot;
 } FcPlayer;
-
-/* ======================================================================== */
-/* NPC                                                                       */
-/* ======================================================================== */
 
 typedef struct {
     /* Identity */
@@ -434,10 +399,7 @@ typedef struct {
     int num_pending_hits;
 } FcNpc;
 
-/* ======================================================================== */
-/* Wave entry (spawn table row)                                              */
-/* ======================================================================== */
-
+/* Wave spawn table row */
 #define FC_MAX_SPAWNS_PER_WAVE 6
 
 typedef struct {
@@ -445,15 +407,8 @@ typedef struct {
     int num_spawns;
 } FcWaveEntry;
 
-/* ======================================================================== */
-/* Render entity (value type for viewer — filled by fc_fill_render_entities) */
-/* ======================================================================== */
-
-/*
- * The viewer never reads FcPlayer/FcNpc directly. It receives an array of
- * these render entities via the fc_fill_render_entities callback.
- * This decouples rendering from simulation internals.
- */
+/* Viewer-facing snapshot of the player or an NPC, filled each tick by
+ * fc_fill_render_entities. */
 typedef struct {
     int entity_type;    /* FcEntityType */
     int npc_type;       /* FcNpcType (0 for player) */
@@ -475,10 +430,7 @@ typedef struct {
 
 #define FC_MAX_RENDER_ENTITIES (1 + FC_MAX_NPCS)  /* player + NPCs */
 
-/* ======================================================================== */
-/* Per-tick rendering events                                                 */
-/* ======================================================================== */
-
+/* Per-tick rendering events */
 #define FC_MAX_RENDER_MOVE_WAYPOINTS 2
 #define FC_MAX_RENDER_NPC_ATTACKS FC_MAX_NPCS
 #define FC_MAX_RENDER_HITS 32
@@ -551,10 +503,7 @@ typedef struct {
     int player_move_waypoint_y[FC_MAX_RENDER_MOVE_WAYPOINTS];
 } FcRenderEvents;
 
-/* ======================================================================== */
-/* Top-level simulation state                                                */
-/* ======================================================================== */
-
+/* Top-level simulation state */
 typedef struct {
     FcPlayer player;
     FcNpc npcs[FC_MAX_NPCS];
@@ -659,10 +608,11 @@ typedef struct {
 #endif
 
 /*
- * fc_contracts.h — Observation, action, reward, and mask contracts.
+ * Observation, action, reward, and mask contracts.
  *
- * SINGLE SOURCE OF TRUTH for all buffer layouts. Python reads these constants
- * (via codegen or manual sync) — it never redefines them.
+ * SINGLE SOURCE OF TRUTH for all buffer layouts. Python reads the compiled
+ * values from the --contract JSON (fc_training_contract_json) instead of
+ * redefining them.
  *
  * All observations are float32, normalized to [0,1]. All actions are int32 per
  * head. The canonical core buffer contains policy observations followed by raw
@@ -670,12 +620,9 @@ typedef struct {
  * model input, documented below; reward features are not model inputs.
  */
 
-/* ======================================================================== */
-/* Observation layout                                                        */
-/* ======================================================================== */
-
 /*
- * The optional complete core buffer is split into three contiguous regions:
+ * Observation layout. The optional complete core buffer is split into three
+ * contiguous regions:
  *
  *   [0 .. FC_POLICY_OBS_SIZE-1]                          policy observations
  *   [FC_POLICY_OBS_SIZE .. FC_POLICY_OBS_SIZE+FC_REWARD_FEATURES-1]  reward features
@@ -733,8 +680,8 @@ typedef struct {
  *
  * Overflow behavior: If more than 8 NPCs are alive, the 8 closest are visible.
  * NPCs beyond slot 8 are still simulated (they attack, move, take damage) but
- * are not included in the observation. The agent cannot directly target overflow
- * NPCs via the ATTACK action head, but area/splash effects may still hit them.
+ * are not included in the observation. The agent cannot select overflow NPCs
+ * with the ATTACK head, although auto-retaliate can still target them.
  *
  * The spawn_index tiebreaker ensures deterministic ordering when distances are
  * equal, which is critical for replay consistency and debug reproducibility.
@@ -810,10 +757,9 @@ typedef struct {
 
 /* --- Reward features (20 floats) --- */
 /*
- * These are packed AFTER policy observations in the same buffer.
- * The trainer reads them for reward shaping and logging.
- * The policy DOES NOT consume these by default.
- * Python applies configurable shaping weights to produce the scalar reward.
+ * fc_write_obs packs these after the policy observations in the same buffer.
+ * fc_reward_compute_breakdown weights them into the scalar reward; the policy
+ * never sees them.
  */
 #define FC_REWARD_START         FC_POLICY_OBS_SIZE  /* 286 */
 #define FC_RWD_DAMAGE_DEALT     0   /* NPC HP reduced this tick (normalized) */
@@ -841,20 +787,12 @@ typedef struct {
 /* --- Total observation (policy obs + reward features) --- */
 #define FC_TOTAL_OBS            (FC_POLICY_OBS_SIZE + FC_REWARD_FEATURES)  /* 306 */
 
-/* ======================================================================== */
-/* Action space — 7 canonical core heads                                     */
-/* ======================================================================== */
-
 /*
- * Canonical action interface shared by:
- *   - Headless RL training
- *   - Human playable viewer (click/keyboard → action buffer)
- *   - Replay playback (recorded action buffer per tick)
- *   - Policy playback (policy output → action buffer)
- *
- * Human input (click-to-move, click-to-attack) must translate into these
- * head values. The viewer enqueues canonical MOVE steps per tick via
- * pathfinding; it NEVER bypasses the action interface to mutate state.
+ * Action space: 7 canonical core heads, shared by headless training, policy
+ * replay and the playable viewer. The viewer translates human input into
+ * these heads: a clicked tile becomes heads 5 and 6, a clicked NPC its head 1
+ * slot. Equipment and inventory changes between ticks use the item
+ * transactions (fc_equip_item and friends) instead.
  */
 
 #define FC_NUM_ACTION_HEADS     7
@@ -865,8 +803,8 @@ typedef struct {
  *   1-8   = walk 1 tile (N, NE, E, SE, S, SW, W, NW)
  *   9-16  = run 2 tiles (N, NE, E, SE, S, SW, W, NW)
  *
- * For fine-grained per-tick control. Ignored when a BFS route is active
- * (set via heads 5+6 or viewer click-to-move).
+ * For fine-grained per-tick control. A directional step cancels a route in
+ * progress; it is ignored when heads 5 and 6 set a route in the same tick.
  */
 #define FC_MOVE_DIM             17
 #define FC_MOVE_IDLE             0
@@ -901,11 +839,8 @@ static const int FC_MOVE_DY[17] = {
  *   6 = explicit OFF edge, then protect from missiles (ranged)
  *   7 = explicit OFF edge, then protect from melee
  *
- * PR 2 note — PvM prayer semantics:
- *   Correct protection prayer BLOCKS 100% of the matching NPC attack style.
- *   This is NOT the PvP 60% reduction. Full block is standard OSRS PvM behavior.
- *   Only exception: attacking while wrong prayer is active against Jad still takes
- *   full damage. Prayer must be switched before the hit's snapshot/lock tick.
+ * A hit is checked against the prayer locked into it (see FcPendingHit), so
+ * the switch must happen before that lock.
  */
 #define FC_PRAYER_DIM            8
 #define FC_PRAYER_NO_CHANGE      0
@@ -937,8 +872,8 @@ static const int FC_MOVE_DY[17] = {
  * to tile (target_x-1, target_y-1) and sets the player route. This is
  * identical to a human clicking a tile in the viewer.
  *
- * The route is consumed one step per tick (or two if running). While a route
- * is active, directional actions (head 0) are ignored.
+ * The route is consumed one step per tick (or two if running). A directional
+ * action (head 0) on a later tick cancels it.
  *
  * If the exact target is unwalkable or unreachable, native move-near chooses
  * the best reachable endpoint within ten tiles. If none exists, it is a no-op.
@@ -948,7 +883,7 @@ static const int FC_MOVE_DY[17] = {
 /* Head 6: MOVE_TARGET_Y — BFS pathfinding target Y coordinate */
 #define FC_MOVE_TARGET_Y_DIM    65  /* 0=no-op, 1-64=tile y 0-63 */
 
-/* Head dimension array (for binding.c) */
+/* Head dimensions */
 #define FC_ACT_SIZES { FC_MOVE_DIM, FC_ATTACK_DIM, FC_PRAYER_DIM, FC_EAT_DIM, FC_DRINK_DIM, FC_MOVE_TARGET_X_DIM, FC_MOVE_TARGET_Y_DIM }
 
 /* Action head dimensions as a static array (for iteration in viewer/binding) */
@@ -965,12 +900,8 @@ static const int FC_ACTION_DIMS[FC_NUM_ACTION_HEADS] = FC_ACT_SIZES;
 
 static const int FC_PUFFER_ACTION_DIMS[FC_PUFFER_NUM_ATNS] = FC_PUFFER_ACT_SIZES;
 
-/* ======================================================================== */
-/* Action mask                                                               */
-/* ======================================================================== */
-
 /*
- * Per-tick binary mask: 1.0 = valid, 0.0 = invalid.
+ * Action mask. Per-tick binary mask: 1.0 = valid, 0.0 = invalid.
  * One float per action value per head. Appended after FC_TOTAL_OBS in the buffer.
  *
  * Layout: [MOVE(17)] [ATTACK(9)] [PRAYER(8)] [EAT(3)] [DRINK(2)] [TARGET_X(65)] [TARGET_Y(65)]
@@ -986,30 +917,17 @@ static const int FC_PUFFER_ACTION_DIMS[FC_PUFFER_NUM_ATNS] = FC_PUFFER_ACT_SIZES
 #define FC_MASK_TARGET_X_START   (FC_MASK_DRINK_START + FC_DRINK_DIM)           /* 39 */
 #define FC_MASK_TARGET_Y_START   (FC_MASK_TARGET_X_START + FC_MOVE_TARGET_X_DIM) /* 104 */
 
-/* ======================================================================== */
-/* Optional complete core diagnostic buffer size                             */
-/* ======================================================================== */
-
 /*
- * Total floats in the full FC backend buffer:
+ * Optional complete core diagnostic buffer. Total floats:
  *   FC_POLICY_OBS_SIZE (286) + FC_REWARD_FEATURES (20) + FC_ACTION_MASK_SIZE (169) = 475
  *
  * The PufferLib adapter does not allocate or expose this layout. It allocates
  * FC_PUFFER_OBS_SIZE (320), copies the no-supplies mask into the model input at
  * FC_POLICY_OBS_SIZE, and publishes the same flags through the native mask
- * pointer. Reward computation reads authoritative state through fc_reward.
+ * pointer. Reward computation reads authoritative state through
+ * fc_reward_compute_breakdown.
  */
 #define FC_OBS_SIZE             (FC_TOTAL_OBS + FC_ACTION_MASK_SIZE)  /* 475 */
-
-/* ======================================================================== */
-/* Normalization divisors                                                     */
-/* ======================================================================== */
-
-/*
- * Each observation feature is divided by its divisor to normalize to [0,1].
- * Divisors are defined in fc_obs.c and indexed by feature offset.
- * Policy sees normalized values only.
- */
 
 
 /* Npc */
@@ -1173,29 +1091,19 @@ FcRewardParams fc_reward_default_params(void);
 /* Api */
 
 /*
- * fc_api.h — Public API for the Fight Caves simulation.
- *
- * Follows the encounter vtable pattern from PufferLib OSRS PvP/Zulrah:
- *   init → reset(seed) → [step(actions) → write_obs → ...]* → destroy
- *
- * All functions operate on FcState. No global/static state.
+ * The functions with external linkage, for fight_caves.c and the C/C++
+ * linkage test; everything else is static to binding.c's translation unit.
+ * An episode is fc_init, then fc_reset(seed) and one fc_step(actions) per
+ * tick, each followed by fc_write_obs and fc_write_mask.
  */
-
-/* ======================================================================== */
-/* Lifecycle                                                                 */
-/* ======================================================================== */
 
 /* Initialize state to a clean starting configuration. Zeroes all fields.
  * Must be called once before the first reset. */
 void fc_init(FcState* state);
 
-/* ======================================================================== */
-/* Observation / Mask / Reward                                               */
-/* ======================================================================== */
-
 /* Write the observation buffer (policy obs + reward features).
  * out must have room for FC_TOTAL_OBS floats.
- * Values are normalized to [0,1] via divisor tables. */
+ * Values are normalized to [0,1]. */
 void fc_write_obs(const FcState* state, float* out);
 
 /* Write the action mask buffer.
@@ -1203,12 +1111,7 @@ void fc_write_obs(const FcState* state, float* out);
  * 1.0 = valid action, 0.0 = invalid. */
 void fc_write_mask(const FcState* state, float* out);
 
-/* ======================================================================== */
-/* Determinism                                                               */
-/* ======================================================================== */
-
-/* Version 6 removes retired analytics from the serialized state.
- * Gameplay, policy observations, actions and rewards are unchanged. */
+/* Bumped whenever the hashed fields or their order change. */
 #define FC_STATE_HASH_VERSION 6u
 
 /*
@@ -1250,6 +1153,13 @@ typedef enum {
 
 #ifdef FC_CORE_IMPLEMENTATION
 
+#include <limits.h>
+#include <math.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 /* Used before their definitions below. */
 static const FcNpcStats* fc_npc_get_stats(int npc_type);
 static int fc_rng_int(FcState* state, int max);
@@ -1287,25 +1197,8 @@ static void fc_spawn_position(int spawn_dir, int* x, int* y);
 static int fc_wave_check_advance(FcState* state);
 
 /* Combat */
-#include <limits.h>
-#include <stddef.h>
-#include <stdint.h>
 
-/*
- * fc_combat.c — OSRS combat math and pending hit resolution.
- *
- * Formulas adapted from osrs_combat_shared.h (PufferLib).
- *
- * PvM prayer semantics:
- *   Correct protection prayer BLOCKS 100% of the matching NPC attack style.
- *   This is standard OSRS PvM — NOT the PvP 60% reduction.
- *   Exceptions must be explicit per NPC/attack (e.g. Jad wrong-prayer still takes damage).
- */
-
-/* ======================================================================== */
-/* OSRS accuracy formula                                                     */
-/* ======================================================================== */
-
+/* OSRS accuracy: the chance that an attack roll beats a defence roll. */
 static float fc_hit_chance(int att_roll, int def_roll) {
     if (att_roll > def_roll)
         return 1.0f - (float)(def_roll + 2) / (2.0f * (float)(att_roll + 1));
@@ -1313,19 +1206,13 @@ static float fc_hit_chance(int att_roll, int def_roll) {
         return (float)att_roll / (2.0f * (float)(def_roll + 1));
 }
 
-/* ======================================================================== */
-/* NPC attack and defence rolls                                              */
-/* ======================================================================== */
-
+/* NPC attack and defence rolls: level plus the invisible boost of 9, times
+ * bonus + 64. */
 static int fc_npc_roll(int level, int bonus) {
-    /* NPCs use level + invisible_boost(9) × (bonus + 64) */
     return (level + 9) * (bonus + 64);
 }
 
-/* ======================================================================== */
-/* Player defence roll                                                       */
-/* ======================================================================== */
-
+/* Player defence roll against one incoming attack type. */
 static int fc_player_def_roll(const FcPlayer* p, FcAttackType attack_type) {
     int def_bonus;
     switch (attack_type) {
@@ -1347,10 +1234,6 @@ static int fc_player_def_roll(const FcPlayer* p, FcAttackType attack_type) {
     }
     return eff_def * (def_bonus + 64);
 }
-
-/* ======================================================================== */
-/* Player ranged attack / max-hit                                            */
-/* ======================================================================== */
 
 static int fc_player_effective_ranged_level(const FcPlayer* p) {
     /* Rapid is the active DPS style for both RCB and TBow in this sim. */
@@ -1492,34 +1375,19 @@ static int fc_roll_npc_damage_tenths(FcState* state, int final_max_hit_hp) {
     return fc_rng_int(state, final_max_hit_hp + 1) * 10;
 }
 
-/* ======================================================================== */
-/* Prayer check                                                              */
-/* ======================================================================== */
-
+/* PvM protection: the matching protection prayer blocks all of a hit's
+ * damage (not PvP's 60% reduction) and any other prayer blocks none.
+ * PRAYER_PROTECT_MELEE/RANGE/MAGIC equal ATTACK_MELEE/RANGED/MAGIC. */
 static int fc_prayer_blocks_style(int prayer, int attack_style) {
-    /*
-     * PvM: correct protection prayer blocks 100% of matching style.
-     * Our enum mapping:
-     *   PRAYER_PROTECT_MELEE(1) blocks ATTACK_MELEE(1)
-     *   PRAYER_PROTECT_RANGE(2) blocks ATTACK_RANGED(2)
-     *   PRAYER_PROTECT_MAGIC(3) blocks ATTACK_MAGIC(3)
-     */
     if (prayer == PRAYER_NONE || attack_style == ATTACK_NONE) return 0;
     return (prayer == attack_style) ? 1 : 0;
 }
 
-/* ======================================================================== */
-/* Chebyshev distance to multi-tile NPC                                      */
-/* ======================================================================== */
-
+/* Chebyshev distance from a tile to an NPC's footprint. */
 static int fc_distance_to_npc(int px, int py, const FcNpc* npc) {
     return fc_distance_between_areas(px, py, 1,
                                      npc->x, npc->y, npc->size);
 }
-
-/* ======================================================================== */
-/* Hit delay formulas                                                        */
-/* ======================================================================== */
 
 /*
  * OSRS projectile hit delay:
@@ -1576,10 +1444,7 @@ static int fc_npc_hit_delay(int npc_type, int attack_style, int distance) {
     }
 }
 
-/* ======================================================================== */
-/* Queue a pending hit                                                       */
-/* ======================================================================== */
-
+/* Queue a pending hit; returns 0 when the queue is full. */
 static int fc_queue_pending_hit(FcPendingHit hits[], int* num_hits, int max_hits,
                                 int damage, int ticks, int style, int source_idx,
                                 int prayer_drain) {
@@ -1597,10 +1462,7 @@ static int fc_queue_pending_hit(FcPendingHit hits[], int* num_hits, int max_hits
     return 1;
 }
 
-/* ======================================================================== */
-/* Resolve pending hits (called each tick)                                   */
-/* ======================================================================== */
-
+/* Record a resolved hit for the viewer. */
 static void record_render_hit(FcState* state, int target_entity_type,
                               int target_npc_slot, int source_npc_slot,
                               int attack_style, int damage, int blocked) {
@@ -1616,6 +1478,8 @@ static void record_render_hit(FcState* state, int target_entity_type,
     hit->blocked = blocked;
 }
 
+/* Resolve the hits on the player whose delay ran out; run each tick after
+ * the NPCs act. */
 static void fc_resolve_player_pending_hits(FcState* state) {
     FcPlayer* p = &state->player;
     int write = 0;
@@ -1800,7 +1664,6 @@ static void fc_resolve_npc_pending_hits(FcState* state, int npc_idx) {
 
 
 /* Episode Summary */
-#include <string.h>
 
 static void fc_episode_summary_build(const FcState* state, const FcRewardRuntime* runtime,
                                      int episode_length, FcEpisodeSummary* summary) {
@@ -1825,15 +1688,14 @@ static void fc_episode_summary_build(const FcState* state, const FcRewardRuntime
 
 
 /* Hash */
-#include <stdint.h>
-#include <string.h>
 
 /*
- * The state hash serializes every FcState field explicitly in the documented order
- * below, including whole-tile, directional movement, and projectile collision
- * maps. Signed integers and floats are represented by 32 bits, then fed
- * least-significant byte first. Arena bytes are fed directly. This order is
- * the canonical contract: never hash struct storage, padding, or pointers.
+ * The state hash serializes every FcState field except render_events
+ * explicitly in the order below, including whole-tile, directional movement,
+ * and projectile collision maps. Signed integers and floats are represented
+ * by 32 bits, then fed least-significant byte first. Arena bytes are fed
+ * directly. This order is the canonical contract: never hash struct storage,
+ * padding, or pointers.
  */
 
 #define FC_HASH_FNV_OFFSET UINT32_C(0x811c9dc5)
@@ -2082,8 +1944,6 @@ uint32_t fc_state_hash(const FcState* state) {
 #undef FC_HASH_F32
 
 /* Items */
-#include <limits.h>
-#include <string.h>
 
 /* Pinned to the existing FcLoadout balance, including legacy d'hide defence
  * and Pegasian strength. Equipment switching must not rebalance training.
@@ -2713,34 +2573,25 @@ const FcLoadout FC_LOADOUTS[FC_NUM_LOADOUTS] = {
 
 
 /* Npc */
-#include <stddef.h>
 
 /*
- * fc_npc.c — NPC framework with stat table and type-specific AI dispatch.
- *
- * PR 5: All 8 NPC types have full AI.
- *
- * NPC AI per tick (generic):
- *   1. If dead or inactive, skip.
- *   2. Decrement attack timer.
- *   3. Type-specific behavior (Jad style selection, Yt-MejKot heal, Yt-HurKot heal).
- *   4. If not in attack range, move toward player (greedy step).
- *   5. If in range and attack timer ready, roll attack and queue pending hit.
+ * NPC stats and AI. Each tick an active NPC (fc_npc_tick):
+ *   1. Decrements its attack timer.
+ *   2. Walks toward the player (greedy step) unless it can already attack
+ *      from its tile.
+ *   3. Attacks once its timer is ready and the player is in reach, queueing
+ *      a pending hit.
  *
  * Type-specific:
  *   Tz-Kih:     Melee + prayer drain on hit.
  *   Tz-Kek:     Melee. Splits into 2 small Tz-Kek on death.
  *   Tz-Kek-Sm:  Melee. (no special)
- *   Tok-Xil:    Ranged with projectile delay.
+ *   Tok-Xil:    Ranged with projectile delay; melee at contact.
  *   Yt-MejKot:  Chooses one melee-cycle action: attack or heal a weak NPC.
- *   Ket-Zek:    Magic with projectile delay.
- *   TzTok-Jad:  Magic/ranged at distance; melee/magic/ranged at range 1.
+ *   Ket-Zek:    Magic with projectile delay; magic or melee at contact.
+ *   TzTok-Jad:  Magic/ranged at distance; melee/magic/ranged at contact.
  *   Yt-HurKot:  Heals Jad in range; attacks the player after being tagged.
  */
-
-/* ======================================================================== */
-/* NPC stat table                                                            */
-/* ======================================================================== */
 
 /*
  * Fight Caves stats use the reviewed OSRS parity table. Sizes and non-combat
@@ -2925,10 +2776,6 @@ static FcAttackType npc_attack_type_for_style(const FcNpcStats* stats,
     }
 }
 
-/* ======================================================================== */
-/* Spawn                                                                     */
-/* ======================================================================== */
-
 /* Initialize an NPC slot from type and spawn position. */
 static void fc_npc_spawn(FcNpc* npc, int npc_type, int x, int y, int spawn_index) {
     const FcNpcStats* stats = fc_npc_get_stats(npc_type);
@@ -3097,10 +2944,7 @@ static int npc_dynamic_step_toward_player_bounds(FcState* state, int npc_idx) {
     return npc_dynamic_step_toward(state, npc_idx, target_x, target_y);
 }
 
-/* ======================================================================== */
-/* Tz-Kek: split on death — spawn 2 small Tz-Kek                            */
-/* ======================================================================== */
-
+/* Tz-Kek splits on death into two small Tz-Kek. */
 static void fc_npc_tz_kek_split(FcState* state, int dead_x, int dead_y) {
     /* Spawn 2 NPC_TZ_KEK_SM at/near the death position.
      * Do NOT increment npcs_remaining — the parent Tz-Kek was pre-counted as 2
@@ -3126,10 +2970,7 @@ static void fc_npc_tz_kek_split(FcState* state, int dead_x, int dead_y) {
     }
 }
 
-/* ======================================================================== */
-/* Jad direct attack selection                                               */
-/* ======================================================================== */
-
+/* Record an NPC attack launched this tick for the viewer. */
 static void record_npc_attack(FcState* state, const FcNpc* npc, int npc_idx,
                               int attack_style, int hit_delay_ticks,
                               int prayer_lock_tick, int hit_queued) {
@@ -3151,6 +2992,7 @@ static void record_npc_attack(FcState* state, const FcNpc* npc, int npc_idx,
     attack->hit_queued = hit_queued;
 }
 
+/* Roll an attack of the given style and queue it on the player. */
 static void launch_npc_attack(FcState* state, FcNpc* npc, int npc_idx,
                               int attack_style, int hit_delay_ticks,
                               int prayer_drain, int prayer_lock_delay_ticks) {
@@ -3189,6 +3031,8 @@ static void launch_npc_attack(FcState* state, FcNpc* npc, int npc_idx,
     npc->attack_timer = npc->attack_speed;
 }
 
+/* Jad picks its style as it attacks: any of its three at melee contact,
+ * magic or ranged at a distance. */
 static void jad_attack(FcState* state, FcNpc* npc, int npc_idx) {
     const FcNpcStats* stats = fc_npc_get_stats(npc->npc_type);
     FcPlayer* p = &state->player;
@@ -3234,10 +3078,8 @@ static void jad_attack(FcState* state, FcNpc* npc, int npc_idx) {
                       prayer_lock_delay);
 }
 
-/* ======================================================================== */
-/* Yt-MejKot: heal nearby NPCs                                              */
-/* ======================================================================== */
-
+/* Heal target by up to amount (capped at its max HP) and record the heal for
+ * observations and rewards. Returns the HP restored. */
 static int apply_npc_heal(FcState* state, FcNpc* source, FcNpc* target,
                           int amount) {
     int before = target->current_hp;
@@ -3290,6 +3132,8 @@ static FcNpc* yt_mejkot_heal_target(FcState* state, FcNpc* npc) {
     return best;
 }
 
+/* At melee contact a Yt-MejKot may spend its attack healing itself or a
+ * nearby NPC below half HP. */
 static int yt_mejkot_try_heal(FcState* state, FcNpc* npc) {
     if (npc->attack_timer > 0) return 0;
     if (!fc_npc_can_melee_player(state->player.x, state->player.y,
@@ -3307,10 +3151,7 @@ static int yt_mejkot_try_heal(FcState* state, FcNpc* npc) {
     return 1;
 }
 
-/* ======================================================================== */
-/* Yt-HurKot: heal Jad until permanently tagged onto the player               */
-/* ======================================================================== */
-
+/* Yt-HurKot heals Jad until a player hit tags it onto the player for good. */
 #define FC_HURKOT_HEAL_RANGE 5
 static void npc_generic_attack(FcState* state, FcNpc* npc, int npc_idx);
 
@@ -3366,10 +3207,6 @@ static void yt_hurkot_tick(FcState* state, FcNpc* npc, int npc_idx) {
     }
 }
 
-/* ======================================================================== */
-/* Generic NPC attack (melee/ranged/magic, non-Jad)                          */
-/* ======================================================================== */
-
 /*
  * Tok-Xil switches to its weaker melee attack at contact. Ket-Zek keeps both
  * its Magic and Melee attacks valid at contact and samples between them.
@@ -3420,10 +3257,7 @@ static int npc_has_attack_position(FcState* state, FcNpc* npc) {
     return fc_npc_position_can_attack_player(state, npc, npc->x, npc->y);
 }
 
-/* ======================================================================== */
-/* NPC AI tick — type dispatch                                               */
-/* ======================================================================== */
-
+/* One tick of NPC AI: movement, then an attack or a Yt-MejKot heal. */
 static void fc_npc_tick(FcState* state, int npc_idx) {
     FcNpc* npc = &state->npcs[npc_idx];
     if (!npc->active || npc->is_dead) return;
@@ -3472,23 +3306,15 @@ static void fc_npc_tick(FcState* state, int npc_idx) {
 #undef FC_HURKOT_HEAL_RANGE
 
 /* Pathfinding */
-#include <stddef.h>
-#include <string.h>
 
 /*
- * fc_pathfinding.c — Grid movement, footprint checks, and LOS for Fight Caves.
- *
- * Key design:
- *   - NPCs have sizes 1-5 (Jad and Ket-Zek are 5x5!). Movement must check
+ * Grid movement, footprint checks, and LOS:
+ *   - NPCs have sizes 1-5 (Jad and Ket-Zek are 5x5). Movement must check
  *     the entire footprint at the destination tile.
  *   - Projectile LOS uses its own directional collision flags.
  *   - Movement uses whole-tile blocking plus directional wall flags from the
  *     authoritative cache data, never the visual mesh.
  */
-
-/* ======================================================================== */
-/* Tile queries                                                              */
-/* ======================================================================== */
 
 /* Check if a single tile is walkable (bounds + collision). */
 static int fc_tile_walkable(int x, int y,
@@ -3509,10 +3335,6 @@ static int fc_footprint_walkable(int x, int y, int size,
     }
     return 1;
 }
-
-/* ======================================================================== */
-/* Dynamic occupancy                                                         */
-/* ======================================================================== */
 
 static void fc_clear_occupancy(uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
     for (int x = 0; x < FC_ARENA_WIDTH; x++) {
@@ -3732,10 +3554,6 @@ static int fc_footprint_step_available_dynamic(
                                    movement_flags, occupied);
 }
 
-/* ======================================================================== */
-/* Size-1 movement (player, small NPCs)                                      */
-/* ======================================================================== */
-
 /* Move a size-1 entity from (x,y) toward offset (dx,dy) for up to max_steps,
  * trying the diagonal first, then x, then y. Returns the number of tiles
  * moved and records each reached tile in step_x/step_y, up to step_capacity
@@ -3789,10 +3607,6 @@ static int fc_move_toward(int* x, int* y, int dx, int dy, int max_steps,
                                  movement_flags, NULL, NULL, 0);
 }
 
-/* ======================================================================== */
-/* Size-aware NPC movement                                                   */
-/* ======================================================================== */
-
 /* One step of a sized footprint toward (target_x, target_y): the diagonal
  * first, then x, then y, each checked by the sized-step rule against walls
  * and occupied tiles. Returns 1 if it moved. */
@@ -3827,10 +3641,6 @@ static int fc_npc_step_toward_sized_dynamic(
     }
     return 0;
 }
-
-/* ======================================================================== */
-/* Line of sight — directional projectile collision                         */
-/* ======================================================================== */
 
 /* Chebyshev distance between the nearest tiles of two rectangular areas. */
 static int fc_distance_between_areas(int src_x, int src_y, int src_size,
@@ -3968,10 +3778,7 @@ static int fc_npc_can_melee_player(int player_x, int player_y,
            (movement_flags[player_x][player_y] & source_wall) == 0;
 }
 
-/* ======================================================================== */
-/* BFS pathfinding                                                           */
-/* ======================================================================== */
-
+/* BFS routes for click-to-move and attack approach. */
 static const int FC_ROUTE_DIRECTIONS[8][2] = {
     {-1, 0}, {1, 0}, {0, -1}, {0, 1},
     {-1, -1}, {1, -1}, {-1, 1}, {1, 1},
@@ -4142,13 +3949,11 @@ static int fc_pathfind_attack_position(
 #undef FC_BLOCK_NORTH_AND_SOUTH_WEST
 #undef FC_BLOCK_NORTH_EAST_AND_WEST
 #undef FC_BLOCK_SOUTH_EAST_AND_WEST
-#undef BLOCKED
 
 /* Prayer */
-#include <stddef.h>
 
 /*
- * fc_prayer.c — Prayer activation, drain, and potion restore.
+ * Prayer activation, drain, and potion restore.
  *
  * OSRS prayer drain (from PrayerDrain.kt):
  *   Each tick: prayerDrainCounter += totalDrainEffect (sum of active prayer drains)
@@ -4296,7 +4101,6 @@ static int fc_prayer_potion_restore(int prayer_level) {
 #undef PRAYER_OVERHEAD_DRAIN_RATE
 
 /* Reward */
-#include <string.h>
 
 /* Every FcRewardParams field: its [env] key in config/fight_caves.ini, whether
  * it is an int, and its default. The adapter and the viewer read the keys. */
@@ -4710,7 +4514,7 @@ static FcRewardBreakdown fc_reward_compute_breakdown(
 /*
  * XORshift32 RNG — single state, deterministic, seeded at reset.
  * All randomness in the simulation flows through this RNG.
- * Adopted from PufferLib OSRS PvP (osrs_pvp_types.h).
+ * Adopted from PufferLib's OSRS PvP environment.
  */
 
 static void fc_rng_seed(FcState* state, uint32_t seed) {
@@ -4789,26 +4593,18 @@ static int fc_spawn_npc_first_free(FcState* state, int npc_type, int x, int y) {
 
 
 /* State */
-#include <string.h>
-#include <stdio.h>
-#include <stdlib.h>
 
 /*
- * fc_state.c — State allocation, initialization, reset, rendering.
- *
- * FcState is caller-allocated (stack or heap). These functions
- * initialize and reset it. memset to zero is the canonical reset
- * mechanism — all fields must have safe zero defaults.
+ * Arena maps, episode lifecycle, observations, masks and render snapshots.
+ * FcState is caller-allocated; fc_reset zeroes it with memset before setting
+ * up an episode.
  */
 
-/* ======================================================================== */
-/* Arena collision map (from Void 634 cache, region 37,79, level 0)          */
-/* ======================================================================== */
-
 /*
- * Binary collision extracted via DumpFcCollision.kt from the Void 634 cache.
- * fightcaves.collision stores whole-tile blocking as 64*64 row-major bytes.
- * fightcaves.movement stores the corresponding directional wall bits.
+ * Arena maps from the Void 634 cache (region 37,79, level 0), extracted via
+ * DumpFcCollision.kt. fightcaves.collision stores whole-tile blocking as 64*64
+ * row-major bytes, fightcaves.movement the corresponding directional wall bits
+ * and fightcaves.los the projectile collision flags.
  *
  * Loaded from resources/fight_caves/runtime in a packaged PufferLib checkout.
  * All three arena maps are required; running without one would change the
@@ -4942,10 +4738,6 @@ static void init_player(FcPlayer* p) {
     p->approach_target_size = 0;
 }
 
-/* ======================================================================== */
-/* Lifecycle                                                                 */
-/* ======================================================================== */
-
 static void validate_npc_table_or_abort(void) {
     for (int npc_type = NPC_TZ_KIH; npc_type < NPC_TYPE_COUNT; npc_type++) {
         const FcNpcStats* stats = fc_npc_get_stats(npc_type);
@@ -5057,10 +4849,6 @@ static void fc_destroy(FcState* state) {
     /* Currently no heap allocations. Zero for safety. */
     memset(state, 0, sizeof(FcState));
 }
-
-/* ======================================================================== */
-/* Observation / Mask / Reward                                               */
-/* ======================================================================== */
 
 /* Sort helper: indices of active NPCs, sorted by (distance, spawn_index) */
 static int compare_npc_slots(const void* a, const void* b, const FcState* state) {
@@ -5557,7 +5345,6 @@ static void fc_write_reward_features(const FcState* state, float* out) {
     out[FC_RWD_PRAYER_LOST]         = (float)state->prayer_lost_this_tick / 10.0f;
 }
 
-
 void fc_write_mask(const FcState* state, float* out) {
     /* Set all to valid, then mask invalid */
     for (int i = 0; i < FC_ACTION_MASK_SIZE; i++) {
@@ -5600,10 +5387,6 @@ void fc_write_mask(const FcState* state, float* out) {
 static int fc_is_terminal(const FcState* state) {
     return state->terminal != TERMINAL_NONE;
 }
-
-/* ======================================================================== */
-/* Render entities                                                           */
-/* ======================================================================== */
 
 /* Snapshot of the visible entities for the viewer; entities[] must have room
  * for FC_MAX_RENDER_ENTITIES. Entity 0 is always the player, followed by every
@@ -5657,11 +5440,9 @@ static void fc_fill_render_events(const FcState* state, FcRenderEvents* events) 
 
 
 /* Tick */
-#include <math.h>
+
 /*
- * fc_tick.c — Main tick loop for Fight Caves simulation.
- *
- * Processing order (adapted from PufferLib PvP two-phase execution):
+ * Processing order of one tick (fc_tick):
  *
  *   1. Clear per-tick event flags
  *   2. Process player actions:
@@ -5671,16 +5452,14 @@ static void fc_fill_render_events(const FcState* state, FcRenderEvents* events) 
  *      d. Movement (route or directional head), unless an attack fired
  *      e. Run-energy drain or restoration from actual movement
  *   3. Decrement player timers (attack, food, potion, combo)
- *   4. Prayer drain (only if prayer stayed active across the tick boundary)
+ *   4. Prayer drain (only if prayer stayed active across the tick boundary),
+ *      then HP regeneration
  *   5. NPC AI tick (movement + attack) for all active NPCs
- *   6. Resolve pending hits (NPC → player, player → NPC)
- *   7. Check terminal conditions
- *   8. Increment tick and lock prayer snapshots due at the new boundary
+ *   6. Resolve pending hits (NPC → player, player → NPC), then death timers
+ *   7. Check terminal conditions, wave advancement and Jad healer spawns
+ *   8. Episode analytics
+ *   9. Increment tick and lock prayer snapshots due at the new boundary
  */
-
-/* ======================================================================== */
-/* Clear per-tick flags                                                      */
-/* ======================================================================== */
 
 static void clear_per_tick_flags(FcState* state) {
     state->render_events = (FcRenderEvents){0};
@@ -5746,10 +5525,6 @@ static void set_player_facing_from_delta(FcPlayer* player, float dx, float dy) {
     player->facing_angle = atan2f(dx, -dy) * (180.0f / 3.14159f);
 }
 
-/* ======================================================================== */
-/* Resolve NPC visible-slot index to NPC array index                         */
-/* ======================================================================== */
-
 /* Same ordering as observation writer — must be identical for consistency */
 static int npc_slot_to_index(const FcState* state, int slot) {
     int visible_indices[FC_VISIBLE_NPCS];
@@ -5757,11 +5532,6 @@ static int npc_slot_to_index(const FcState* state, int slot) {
     if (slot < 0 || slot >= visible) return -1;
     return visible_indices[slot];
 }
-
-/* ======================================================================== */
-/* Process player actions                                                    */
-/* ======================================================================== */
-
 
 static void apply_player_prayer_action(
     FcState* state, int action, FcPrayerTransition* transition) {
@@ -5893,7 +5663,6 @@ static void launch_player_attack(FcState* state, FcNpc* target, int distance) {
     }
     player->hit_landed_this_tick = 1;
 }
-
 
 static void process_player_target(FcState* state,
                                   int explicit_directional_move,
@@ -6094,7 +5863,6 @@ static void update_player_run_energy(FcPlayer* player, int moved_steps) {
     }
 }
 
-
 static void process_player_actions(FcState* state,
                                    const int actions[FC_NUM_ACTION_HEADS],
                                    FcPrayerTransition* prayer_transition) {
@@ -6140,24 +5908,12 @@ static void process_player_actions(FcState* state,
     update_player_run_energy(p, moved_steps);
 }
 
-/* ======================================================================== */
-/* Decrement player timers                                                   */
-/* ======================================================================== */
-
 static void decrement_player_timers(FcPlayer* p) {
     if (p->attack_timer > 0) p->attack_timer--;
     if (p->food_timer > 0) p->food_timer--;
     if (p->potion_timer > 0) p->potion_timer--;
     if (p->combo_timer > 0) p->combo_timer--;
 }
-
-/* ======================================================================== */
-/* Check terminal conditions                                                 */
-/* ======================================================================== */
-
-/* ======================================================================== */
-/* Jad healer auto-spawn                                                     */
-/* ======================================================================== */
 
 /*
  * Jad healer spawn (from TzhaarFightCave.kt npcLevelChanged handler):
@@ -6238,10 +5994,6 @@ static void check_jad_healers(FcState* state) {
     }
 }
 
-/* ======================================================================== */
-/* Check terminal conditions                                                 */
-/* ======================================================================== */
-
 static void check_terminal(FcState* state) {
     if (state->terminal != TERMINAL_NONE) return;
 
@@ -6275,10 +6027,6 @@ static void lock_pending_prayers_at_boundary(FcState* state) {
         hit->prayer_snapshot = p->prayer;
     }
 }
-
-/* ======================================================================== */
-/* Main tick entry point                                                     */
-/* ======================================================================== */
 
 static void fc_tick(FcState* state, const int actions[FC_NUM_ACTION_HEADS]) {
     state->player.prayer_at_tick_start = state->player.prayer;
@@ -6360,27 +6108,15 @@ static void fc_tick(FcState* state, const int actions[FC_NUM_ACTION_HEADS]) {
 
 
 /* Wave */
+
 /*
- * fc_wave.c — 63-wave Fight Caves spawn table with 15 rotations.
- *
- * Wave data sourced from OSRS wiki + Kotlin archive TOML:
- *   archive/kotlin-final:runescape-rl/src/headless-env/data/minigame/
- *     tzhaar_fight_cave/tzhaar_fight_cave_waves.toml
+ * The 63-wave spawn table with 15 rotations, sourced from the OSRS wiki and
+ * the Kotlin archive's tzhaar_fight_cave_waves.toml.
  *
  * Pattern: each new NPC tier is introduced on waves 1,3,7,15,31,63.
  * The binary pattern gives 2^tier - 1 waves before each new tier.
- *
- * Spawn directions map to arena coordinates:
- *   SPAWN_SOUTH      → (32, 5)
- *   SPAWN_SOUTH_WEST → (8, 8)
- *   SPAWN_NORTH_WEST → (8, 55)
- *   SPAWN_SOUTH_EAST → (55, 8)
- *   SPAWN_CENTER     → (32, 32)
+ * fc_spawn_position maps spawn directions to arena tiles.
  */
-
-/* ======================================================================== */
-/* Wave table (63 waves × up to 6 NPCs)                                     */
-/* ======================================================================== */
 
 static const FcWaveEntry WAVE_TABLE[FC_NUM_WAVES] = {
     /* Wave  1 */ { {NPC_TZ_KIH, 0, 0, 0, 0, 0}, 1 },
@@ -6611,10 +6347,6 @@ static const uint8_t WAVE_SPAWN_PATTERNS[FC_NUM_WAVES][FC_MAX_SPAWNS_PER_WAVE] =
     /* Wave 63 */ {2},
 };
 
-/* ======================================================================== */
-/* Spawn position from direction                                             */
-/* ======================================================================== */
-
 /*
  * Spawn positions derived from RSPS tzhaar_fight_cave.areas.toml.
  * World coords converted to arena-local (world - 2368, world - 5056).
@@ -6637,10 +6369,6 @@ static void fc_spawn_position(int spawn_dir, int* x, int* y) {
     }
 }
 
-/* ======================================================================== */
-/* Wave table accessors                                                      */
-/* ======================================================================== */
-
 static const FcWaveEntry* fc_wave_get(int wave_num) {
     if (wave_num < 1 || wave_num > FC_NUM_WAVES) return &WAVE_TABLE[0];
     return &WAVE_TABLE[wave_num - 1];
@@ -6655,10 +6383,6 @@ static int fc_wave_spawn_dir(int wave_num, int rotation, int npc_index) {
     int pattern = WAVE_SPAWN_PATTERNS[wave_num - 1][npc_index];
     return SPAWN_PATTERNS[pattern][rotation];
 }
-
-/* ======================================================================== */
-/* Spawn wave NPCs into the arena                                            */
-/* ======================================================================== */
 
 /* Spawn all NPCs for the given wave using the state's rotation_id. */
 static void fc_wave_spawn(FcState* state, int wave_num) {
@@ -6684,11 +6408,6 @@ static void fc_wave_spawn(FcState* state, int wave_num) {
     }
 }
 
-/* ======================================================================== */
-/* Wave advancement                                                          */
-/* ======================================================================== */
-
-
 /* Once the wave is cleared, flag it and spawn the next wave, or complete the
  * cave after the last. Returns 1 if a new wave was spawned. */
 static int fc_wave_check_advance(FcState* state) {
@@ -6698,7 +6417,6 @@ static int fc_wave_check_advance(FcState* state) {
     if (state->terminal != TERMINAL_NONE) return 0;
 
     state->wave_just_cleared = 1;
-
 
     /* Check if all waves complete */
     if (state->current_wave >= FC_NUM_WAVES) {
