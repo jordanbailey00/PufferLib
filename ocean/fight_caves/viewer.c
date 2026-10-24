@@ -6628,8 +6628,8 @@ static const struct {
     {NPC_TZTOK_JAD, ATTACK_MAGIC,
      {PROJ_JAD_MAGIC_TRAVEL, PROJ_JAD_MAGIC_LAUNCH, PROJ_JAD_MAGIC_IMPACT,
       172.0f, 124.0f, 41.0f, 16.0f, 0.0f, 64.0f, 5.0f, 0}},
-    /* Jad's ranged attack has no flight model: its impact lands 60 cycles
-     * after the attack where the player stood. */
+    /* Jad's ranged attack has no flight model: only its impact shows, on
+     * the player's tile at launch, when the flight ends at cycle 60. */
     {NPC_TZTOK_JAD, ATTACK_RANGED,
      {0, 0, PROJ_JAD_RANGED_IMPACT,
       768.0f, 52.0f, 0.0f, 0.0f, 60.0f, 0.0f, 0.0f, 1}},
@@ -6808,18 +6808,9 @@ void fc_combat_presentation_update(
                 presentation->hitsplats[i].active = 0;
         }
     }
-    if (presentation->player_healthbar_timer > 0.0f) {
-        presentation->player_healthbar_timer -= dt;
-        if (presentation->player_healthbar_timer < 0.0f)
-            presentation->player_healthbar_timer = 0.0f;
-    }
-    for (int i = 0; i < FC_MAX_NPCS; i++) {
-        if (presentation->npc_healthbar_timers[i] > 0.0f) {
-            presentation->npc_healthbar_timers[i] -= dt;
-            if (presentation->npc_healthbar_timers[i] < 0.0f)
-                presentation->npc_healthbar_timers[i] = 0.0f;
-        }
-    }
+    tick_down(&presentation->player_healthbar_timer, dt);
+    for (int i = 0; i < FC_MAX_NPCS; i++)
+        tick_down(&presentation->npc_healthbar_timers[i], dt);
     for (int i = 0; i < MAX_PROJECTILES; i++) {
         VisualProjectile *projectile = &presentation->projectiles[i];
         if (!projectile->active || !update_projectile(context, projectile, dt))
