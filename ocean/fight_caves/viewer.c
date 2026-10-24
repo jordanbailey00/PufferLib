@@ -2243,335 +2243,280 @@ static const RuneCUiWornButtonRef RUNEC_OSRS_WORN_BUTTONS[] = {
 
 /* Ui Assets */
 
-#define RUNEC_UI_ASSET_MAX 512
-
-typedef struct RuneCUiAssets {
-    Texture2D textures[RUNEC_UI_ASSET_MAX];
-    unsigned char loaded[RUNEC_UI_ASSET_MAX];
-    Font font;
-    Font small_font;
-    int font_loaded;
-    int small_font_loaded;
-    int required_count;
-    int missing_required_count;
-    int missing_optional_count;
-} RuneCUiAssets;
-
-typedef struct RuneCUiAssetSpec {
-    const char *name;
-    const char *file;
-    int required;
-} RuneCUiAssetSpec;
-
-#define UI_ASSET(name) { name, name ".png", 1 }
-#define UI_OPTIONAL_ASSET(name, file) { name, file, 0 }
-
-static const RuneCUiAssetSpec g_ui_asset_specs[] = {
-    UI_ASSET("tradebacking_dark"),
-    UI_ASSET("chatbox_bg"),
-    UI_ASSET("main_stones_bottom"),
-    UI_ASSET("side_stone_highlights_0"),
-    UI_ASSET("side_stone_highlights_1"),
-    UI_ASSET("side_stone_highlights_2"),
-    UI_ASSET("side_stone_highlights_3"),
-    UI_ASSET("side_stone_highlights_4"),
-    UI_ASSET("osrs_stretch_side_topbottom_0"),
-    UI_ASSET("osrs_stretch_side_topbottom_1"),
-    UI_ASSET("osrs_stretch_side_columns_0"),
-    UI_ASSET("osrs_stretch_side_columns_1"),
-    UI_ASSET("compass"),
-    UI_ASSET("osrs_stretch_mapsurround"),
-    UI_ASSET("resize_compass_mask"),
-    UI_ASSET("side_icon_combat"),
-    UI_ASSET("side_icon_stats"),
-    UI_ASSET("side_icon_quests"),
-    UI_ASSET("side_icon_inventory"),
-    UI_ASSET("side_icon_equipment"),
-    UI_ASSET("side_icon_prayer"),
-    UI_ASSET("side_icon_magic"),
-    UI_ASSET("side_icon_clan"),
-    UI_ASSET("side_icon_friends"),
-    UI_ASSET("side_icon_options"),
-    UI_ASSET("side_icon_logout"),
-    UI_ASSET("side_icon_emotes"),
-    UI_ASSET("side_icon_music"),
-    UI_ASSET("side_icon_grouping"),
-    UI_ASSET("options_icons_16"),
-    UI_ASSET("options_icons_18"),
-    UI_ASSET("options_icons_28"),
-    UI_ASSET("whistle"),
-    UI_ASSET("orb_frame_0"),
-    UI_ASSET("orb_frame_1"),
-    UI_ASSET("orb_filler_0"),
-    UI_ASSET("orb_filler_1"),
-    UI_ASSET("orb_filler_4"),
-    UI_ASSET("orb_filler_5"),
-    UI_ASSET("orb_filler_6"),
-    UI_ASSET("orb_filler_9"),
-    UI_ASSET("orb_icon_0"),
-    UI_ASSET("orb_icon_1"),
-    UI_ASSET("orb_icon_2"),
-    UI_ASSET("orb_icon_3"),
-    UI_ASSET("orb_icon_6"),
-    UI_ASSET("ring_30"),
-    UI_ASSET("worldmap_icon_0"),
-    UI_ASSET("chat_tab_button_0"),
-    UI_ASSET("wornicons_0"),
-    UI_ASSET("wornicons_1"),
-    UI_ASSET("wornicons_2"),
-    UI_ASSET("wornicons_3"),
-    UI_ASSET("wornicons_4"),
-    UI_ASSET("wornicons_5"),
-    UI_ASSET("wornicons_6"),
-    UI_ASSET("wornicons_7"),
-    UI_ASSET("wornicons_8"),
-    UI_ASSET("wornicons_9"),
-    UI_ASSET("wornicons_10"),
-    UI_ASSET("wornicons_11"),
-    UI_ASSET("miscgraphics_2"),
-    UI_ASSET("miscgraphics_3"),
-    UI_ASSET("combatboxes_0"),
-    UI_ASSET("combatboxes_1"),
-    UI_ASSET("combatboxes_special_attack"),
-    UI_ASSET("combat_shield"),
-    UI_ASSET("combaticons_0"),
-    UI_ASSET("combaticons_1"),
-    UI_ASSET("combaticons_2"),
-    UI_ASSET("combaticons_3"),
-    UI_ASSET("combaticons_4"),
-    UI_ASSET("combaticons_5"),
-    UI_ASSET("combaticons_6"),
-    UI_ASSET("combaticons_7"),
-    UI_ASSET("combaticons_8"),
-    UI_ASSET("combaticons_9"),
-    UI_ASSET("combaticons_10"),
-    UI_ASSET("combaticons_11"),
-    UI_ASSET("combaticons_12"),
-    UI_ASSET("combaticons_13"),
-    UI_ASSET("combaticons_14"),
-    UI_ASSET("combaticons_15"),
-    UI_ASSET("combaticons_16"),
-    UI_ASSET("combaticons_17"),
-    UI_ASSET("combaticons_18"),
-    UI_ASSET("combaticons_19"),
-    UI_ASSET("combaticons2_0"),
-    UI_ASSET("combaticons2_1"),
-    UI_ASSET("combaticons2_2"),
-    UI_ASSET("combaticons2_3"),
-    UI_ASSET("combaticons2_5"),
-    UI_ASSET("combaticons2_6"),
-    UI_ASSET("combaticons2_7"),
-    UI_ASSET("combaticons2_8"),
-    UI_ASSET("combaticons2_9"),
-    UI_ASSET("combaticons2_10"),
-    UI_ASSET("combaticons2_11"),
-    UI_ASSET("combaticons2_12"),
-    UI_ASSET("combaticons2_13"),
-    UI_ASSET("combaticons2_14"),
-    UI_ASSET("combaticons2_15"),
-    UI_ASSET("combaticons2_16"),
-    UI_ASSET("combaticons2_17"),
-    UI_ASSET("combaticons2_18"),
-    UI_ASSET("combaticons2_19"),
-    UI_ASSET("combaticons3_0"),
-    UI_ASSET("combaticons3_1"),
-    UI_ASSET("combaticons3_2"),
-    UI_ASSET("combaticons3_3"),
-    UI_ASSET("combaticons3_4"),
-    UI_ASSET("combaticons3_5"),
-    UI_ASSET("combaticons3_6"),
-    UI_ASSET("combaticons3_7"),
-    UI_ASSET("combaticons3_8"),
-    UI_ASSET("combaticons3_9"),
-    UI_ASSET("combaticons3_10"),
-    UI_ASSET("combaticons3_11"),
-    UI_ASSET("combaticons3_12"),
-    UI_ASSET("combaticons3_13"),
-    UI_ASSET("combaticons3_14"),
-    UI_ASSET("combaticons3_15"),
-    UI_ASSET("combaticons3_16"),
-    UI_ASSET("combaticons3_17"),
-    UI_ASSET("combaticons3_18"),
-    UI_ASSET("sideicons_interface_0"),
-    UI_ASSET("sideicons_interface_1"),
-    UI_ASSET("sideicons_interface_2"),
-    UI_ASSET("sideicons_interface_3"),
-    UI_OPTIONAL_ASSET("item_995", "../items/item_995.png"),
-    UI_OPTIONAL_ASSET("item_995_1", "../items/item_995_1.png"),
-    UI_OPTIONAL_ASSET("item_995_2", "../items/item_995_2.png"),
-    UI_OPTIONAL_ASSET("item_995_3", "../items/item_995_3.png"),
-    UI_OPTIONAL_ASSET("item_995_4", "../items/item_995_4.png"),
-    UI_OPTIONAL_ASSET("item_995_5", "../items/item_995_5.png"),
-    UI_OPTIONAL_ASSET("item_995_25", "../items/item_995_25.png"),
-    UI_OPTIONAL_ASSET("item_995_100", "../items/item_995_100.png"),
-    UI_OPTIONAL_ASSET("item_995_250", "../items/item_995_250.png"),
-    UI_OPTIONAL_ASSET("item_995_1000", "../items/item_995_1000.png"),
-    UI_OPTIONAL_ASSET("item_995_10000", "../items/item_995_10000.png"),
-    UI_OPTIONAL_ASSET("item_1038", "../items/item_1038.png"),
-    UI_OPTIONAL_ASSET("item_1040", "../items/item_1040.png"),
-    UI_OPTIONAL_ASSET("item_1042", "../items/item_1042.png"),
-    UI_OPTIONAL_ASSET("item_1044", "../items/item_1044.png"),
-    UI_OPTIONAL_ASSET("item_1046", "../items/item_1046.png"),
-    UI_OPTIONAL_ASSET("item_1048", "../items/item_1048.png"),
-    UI_OPTIONAL_ASSET("item_4151", "../items/item_4151.png"),
-    UI_OPTIONAL_ASSET("item_554", "../items/item_554.png"),
-    UI_OPTIONAL_ASSET("item_555", "../items/item_555.png"),
-    UI_OPTIONAL_ASSET("item_556", "../items/item_556.png"),
-    UI_OPTIONAL_ASSET("item_557", "../items/item_557.png"),
-    UI_OPTIONAL_ASSET("item_558", "../items/item_558.png"),
-    UI_OPTIONAL_ASSET("item_560", "../items/item_560.png"),
-    UI_OPTIONAL_ASSET("item_562", "../items/item_562.png"),
-    UI_OPTIONAL_ASSET("item_861", "../items/item_861.png"),
-    UI_OPTIONAL_ASSET("item_892", "../items/item_892.png"),
-    UI_OPTIONAL_ASSET("item_1381", "../items/item_1381.png"),
-    UI_OPTIONAL_ASSET("item_10346", "../items/item_10346.png"),
-    UI_OPTIONAL_ASSET("item_10348", "../items/item_10348.png"),
-    UI_OPTIONAL_ASSET("item_10350", "../items/item_10350.png"),
-    UI_OPTIONAL_ASSET("item_10352", "../items/item_10352.png"),
-    UI_OPTIONAL_ASSET("item_11802", "../items/item_11802.png"),
-    UI_OPTIONAL_ASSET("item_11832", "../items/item_11832.png"),
-    UI_OPTIONAL_ASSET("item_11834", "../items/item_11834.png"),
-    UI_OPTIONAL_ASSET("item_26382", "../items/item_26382.png"),
-    UI_OPTIONAL_ASSET("item_26384", "../items/item_26384.png"),
-    UI_OPTIONAL_ASSET("item_26386", "../items/item_26386.png"),
-    UI_ASSET("skill_icon_0"),
-    UI_ASSET("skill_icon_1"),
-    UI_ASSET("skill_icon_2"),
-    UI_ASSET("skill_icon_3"),
-    UI_ASSET("skill_icon_4"),
-    UI_ASSET("skill_icon_5"),
-    UI_ASSET("skill_icon_6"),
-    UI_ASSET("skill_icon_7"),
-    UI_ASSET("skill_icon_8"),
-    UI_ASSET("skill_icon_9"),
-    UI_ASSET("skill_icon_10"),
-    UI_ASSET("skill_icon_11"),
-    UI_ASSET("skill_icon_12"),
-    UI_ASSET("skill_icon_13"),
-    UI_ASSET("skill_icon_14"),
-    UI_ASSET("skill_icon_15"),
-    UI_ASSET("skill_icon_16"),
-    UI_ASSET("skill_icon_17"),
-    UI_ASSET("skill_icon_18"),
-    UI_ASSET("skill_icon_19"),
-    UI_ASSET("skill_icon_20"),
-    UI_ASSET("skill_icon_21"),
-    UI_ASSET("skill_icon_22"),
-    UI_ASSET("skill_icon_23"),
-    UI_ASSET("prayeroff_0"),
-    UI_ASSET("prayeroff_1"),
-    UI_ASSET("prayeroff_2"),
-    UI_ASSET("prayeroff_3"),
-    UI_ASSET("prayeroff_4"),
-    UI_ASSET("prayeroff_5"),
-    UI_ASSET("prayeroff_6"),
-    UI_ASSET("prayeroff_7"),
-    UI_ASSET("prayeroff_8"),
-    UI_ASSET("prayeroff_9"),
-    UI_ASSET("prayeroff_10"),
-    UI_ASSET("prayeroff_11"),
-    UI_ASSET("prayeroff_12"),
-    UI_ASSET("prayeroff_13"),
-    UI_ASSET("prayeroff_14"),
-    UI_ASSET("prayeroff_15"),
-    UI_ASSET("prayeroff_16"),
-    UI_ASSET("prayeroff_17"),
-    UI_ASSET("prayeroff_18"),
-    UI_ASSET("prayeroff_19"),
-    UI_ASSET("prayeroff_20"),
-    UI_ASSET("prayeroff_21"),
-    UI_ASSET("prayeroff_22"),
-    UI_ASSET("prayeroff_23"),
-    UI_ASSET("prayeroff_24"),
-    UI_ASSET("standard_spell_on_0"),
-    UI_ASSET("standard_spell_on_1"),
-    UI_ASSET("standard_spell_on_2"),
-    UI_ASSET("standard_spell_on_3"),
-    UI_ASSET("standard_spell_on_4"),
-    UI_ASSET("standard_spell_on_5"),
-    UI_ASSET("standard_spell_on_6"),
-    UI_ASSET("standard_spell_on_7"),
-    UI_ASSET("standard_spell_on_8"),
-    UI_ASSET("standard_spell_on_9"),
-    UI_ASSET("standard_spell_on_10"),
-    UI_ASSET("standard_spell_on_11"),
-    UI_ASSET("standard_spell_on_12"),
-    UI_ASSET("standard_spell_on_13"),
-    UI_ASSET("standard_spell_on_14"),
-    UI_ASSET("standard_spell_on_15"),
-    UI_ASSET("standard_spell_on_16"),
-    UI_ASSET("standard_spell_on_17"),
-    UI_ASSET("standard_spell_on_18"),
-    UI_ASSET("standard_spell_on_19"),
-    UI_ASSET("standard_spell_on_20"),
-    UI_ASSET("standard_spell_on_21"),
-    UI_ASSET("standard_spell_on_22"),
-    UI_ASSET("standard_spell_on_23"),
-    UI_ASSET("standard_spell_on_24"),
-    UI_ASSET("standard_spell_on_25"),
-    UI_ASSET("standard_spell_on_26"),
-    UI_ASSET("standard_spell_on_27"),
-    UI_ASSET("standard_spell_on_28"),
-    UI_ASSET("standard_spell_on_29"),
-    UI_ASSET("standard_spell_on_30"),
-    UI_ASSET("standard_spell_on_31"),
-    UI_ASSET("standard_spell_on_32"),
-    UI_ASSET("standard_spell_on_33"),
-    UI_ASSET("standard_spell_on_34"),
-    UI_ASSET("standard_spell_on_35"),
-    UI_ASSET("standard_spell_on_36"),
-    UI_ASSET("standard_spell_on_37"),
-    UI_ASSET("standard_spell_on_38"),
-    UI_ASSET("standard_spell_on_39"),
-    UI_ASSET("standard_spell_on_40"),
-    UI_ASSET("standard_spell_on_41"),
-    UI_ASSET("standard_spell_on_42"),
-    UI_ASSET("standard_spell_on_43"),
-    UI_ASSET("standard_spell_on_44"),
-    UI_ASSET("standard_spell_on_45"),
-    UI_ASSET("standard_spell_on_46"),
-    UI_ASSET("standard_spell_on_47"),
-    UI_ASSET("standard_spell_on_48"),
-    UI_ASSET("standard_spell_on_49"),
-    UI_ASSET("standard_spell_on_50"),
-    UI_ASSET("standard_spell_on_51"),
-    UI_ASSET("standard_spell_on_52"),
-    UI_ASSET("standard_spell_on_53"),
-    UI_ASSET("standard_spell_on_54"),
-    UI_ASSET("standard_spell_on_55"),
-    UI_ASSET("standard_spell_on_56"),
-    UI_ASSET("standard_spell_on_57"),
-    UI_ASSET("standard_spell_on_58"),
-    UI_ASSET("standard_spell_on_60"),
-    UI_ASSET("standard_spell_on_61"),
-    UI_ASSET("standard_spell_on_62"),
-    UI_ASSET("standard_spell_on_63"),
-    UI_ASSET("standard_spell_on_64"),
-    UI_ASSET("standard_spell_on_65"),
-    UI_ASSET("standard_spell_on_66"),
-    UI_ASSET("standard_spell_on_67"),
-    UI_ASSET("standard_spell_on_68"),
-    UI_ASSET("standard_spell_on_69"),
-    UI_ASSET("standard_spell_on_70"),
-    UI_ASSET("standard_spell_on_71"),
-    UI_ASSET("standard_spell_on_72"),
-    UI_ASSET("standard_spell_on_73"),
-    UI_ASSET("standard_spell_on_74"),
-    UI_ASSET("standard_spell_on_75"),
-    UI_ASSET("standard_spell_on_76"),
-    UI_ASSET("standard_spell_on_77"),
-    UI_ASSET("standard_spell_on_78"),
-    UI_ASSET("standard_spell_on_79"),
+/* Sprites loaded from data/sprites/ui/<name>.png. The viewer refuses to
+ * start unless every one of them loads. */
+static const char *const g_ui_asset_names[] = {
+    "tradebacking_dark",
+    "chatbox_bg",
+    "main_stones_bottom",
+    "side_stone_highlights_0",
+    "side_stone_highlights_1",
+    "side_stone_highlights_2",
+    "side_stone_highlights_3",
+    "side_stone_highlights_4",
+    "osrs_stretch_side_topbottom_0",
+    "osrs_stretch_side_topbottom_1",
+    "osrs_stretch_side_columns_0",
+    "osrs_stretch_side_columns_1",
+    "compass",
+    "osrs_stretch_mapsurround",
+    "side_icon_combat",
+    "side_icon_stats",
+    "side_icon_quests",
+    "side_icon_inventory",
+    "side_icon_equipment",
+    "side_icon_prayer",
+    "side_icon_magic",
+    "side_icon_clan",
+    "side_icon_friends",
+    "side_icon_options",
+    "side_icon_logout",
+    "side_icon_emotes",
+    "side_icon_music",
+    "side_icon_grouping",
+    "options_icons_16",
+    "options_icons_18",
+    "options_icons_28",
+    "whistle",
+    "orb_frame_0",
+    "orb_frame_1",
+    "orb_filler_0",
+    "orb_filler_1",
+    "orb_filler_4",
+    "orb_filler_5",
+    "orb_filler_6",
+    "orb_filler_9",
+    "orb_icon_0",
+    "orb_icon_1",
+    "orb_icon_2",
+    "orb_icon_3",
+    "orb_icon_6",
+    "ring_30",
+    "worldmap_icon_0",
+    "chat_tab_button_0",
+    "wornicons_0",
+    "wornicons_1",
+    "wornicons_2",
+    "wornicons_3",
+    "wornicons_4",
+    "wornicons_5",
+    "wornicons_6",
+    "wornicons_7",
+    "wornicons_8",
+    "wornicons_9",
+    "wornicons_10",
+    "wornicons_11",
+    "miscgraphics_2",
+    "miscgraphics_3",
+    "combatboxes_0",
+    "combatboxes_1",
+    "combatboxes_special_attack",
+    "combat_shield",
+    "combaticons_0",
+    "combaticons_1",
+    "combaticons_2",
+    "combaticons_3",
+    "combaticons_4",
+    "combaticons_5",
+    "combaticons_6",
+    "combaticons_7",
+    "combaticons_8",
+    "combaticons_9",
+    "combaticons_10",
+    "combaticons_11",
+    "combaticons_12",
+    "combaticons_13",
+    "combaticons_14",
+    "combaticons_15",
+    "combaticons_16",
+    "combaticons_17",
+    "combaticons_18",
+    "combaticons_19",
+    "combaticons2_0",
+    "combaticons2_1",
+    "combaticons2_2",
+    "combaticons2_3",
+    "combaticons2_5",
+    "combaticons2_6",
+    "combaticons2_7",
+    "combaticons2_8",
+    "combaticons2_9",
+    "combaticons2_10",
+    "combaticons2_11",
+    "combaticons2_12",
+    "combaticons2_13",
+    "combaticons2_14",
+    "combaticons2_15",
+    "combaticons2_16",
+    "combaticons2_17",
+    "combaticons2_18",
+    "combaticons2_19",
+    "combaticons3_0",
+    "combaticons3_1",
+    "combaticons3_2",
+    "combaticons3_3",
+    "combaticons3_4",
+    "combaticons3_5",
+    "combaticons3_6",
+    "combaticons3_7",
+    "combaticons3_8",
+    "combaticons3_9",
+    "combaticons3_10",
+    "combaticons3_11",
+    "combaticons3_12",
+    "combaticons3_13",
+    "combaticons3_14",
+    "combaticons3_15",
+    "combaticons3_16",
+    "combaticons3_17",
+    "combaticons3_18",
+    "sideicons_interface_0",
+    "sideicons_interface_1",
+    "sideicons_interface_2",
+    "sideicons_interface_3",
+    "skill_icon_0",
+    "skill_icon_1",
+    "skill_icon_2",
+    "skill_icon_3",
+    "skill_icon_4",
+    "skill_icon_5",
+    "skill_icon_6",
+    "skill_icon_7",
+    "skill_icon_8",
+    "skill_icon_9",
+    "skill_icon_10",
+    "skill_icon_11",
+    "skill_icon_12",
+    "skill_icon_13",
+    "skill_icon_14",
+    "skill_icon_15",
+    "skill_icon_16",
+    "skill_icon_17",
+    "skill_icon_18",
+    "skill_icon_19",
+    "skill_icon_20",
+    "skill_icon_21",
+    "skill_icon_22",
+    "skill_icon_23",
+    "prayeroff_0",
+    "prayeroff_1",
+    "prayeroff_2",
+    "prayeroff_3",
+    "prayeroff_4",
+    "prayeroff_5",
+    "prayeroff_6",
+    "prayeroff_7",
+    "prayeroff_8",
+    "prayeroff_9",
+    "prayeroff_10",
+    "prayeroff_11",
+    "prayeroff_12",
+    "prayeroff_13",
+    "prayeroff_14",
+    "prayeroff_15",
+    "prayeroff_16",
+    "prayeroff_17",
+    "prayeroff_18",
+    "prayeroff_19",
+    "prayeroff_20",
+    "prayeroff_21",
+    "prayeroff_22",
+    "prayeroff_23",
+    "prayeroff_24",
+    "standard_spell_on_0",
+    "standard_spell_on_1",
+    "standard_spell_on_2",
+    "standard_spell_on_3",
+    "standard_spell_on_4",
+    "standard_spell_on_5",
+    "standard_spell_on_6",
+    "standard_spell_on_7",
+    "standard_spell_on_8",
+    "standard_spell_on_9",
+    "standard_spell_on_10",
+    "standard_spell_on_11",
+    "standard_spell_on_12",
+    "standard_spell_on_13",
+    "standard_spell_on_14",
+    "standard_spell_on_15",
+    "standard_spell_on_16",
+    "standard_spell_on_17",
+    "standard_spell_on_18",
+    "standard_spell_on_19",
+    "standard_spell_on_20",
+    "standard_spell_on_21",
+    "standard_spell_on_22",
+    "standard_spell_on_23",
+    "standard_spell_on_24",
+    "standard_spell_on_25",
+    "standard_spell_on_26",
+    "standard_spell_on_27",
+    "standard_spell_on_28",
+    "standard_spell_on_29",
+    "standard_spell_on_30",
+    "standard_spell_on_31",
+    "standard_spell_on_32",
+    "standard_spell_on_33",
+    "standard_spell_on_34",
+    "standard_spell_on_35",
+    "standard_spell_on_36",
+    "standard_spell_on_37",
+    "standard_spell_on_38",
+    "standard_spell_on_39",
+    "standard_spell_on_40",
+    "standard_spell_on_41",
+    "standard_spell_on_42",
+    "standard_spell_on_43",
+    "standard_spell_on_44",
+    "standard_spell_on_45",
+    "standard_spell_on_46",
+    "standard_spell_on_47",
+    "standard_spell_on_48",
+    "standard_spell_on_49",
+    "standard_spell_on_50",
+    "standard_spell_on_51",
+    "standard_spell_on_52",
+    "standard_spell_on_53",
+    "standard_spell_on_54",
+    "standard_spell_on_55",
+    "standard_spell_on_56",
+    "standard_spell_on_57",
+    "standard_spell_on_58",
+    "standard_spell_on_60",
+    "standard_spell_on_61",
+    "standard_spell_on_62",
+    "standard_spell_on_63",
+    "standard_spell_on_64",
+    "standard_spell_on_65",
+    "standard_spell_on_66",
+    "standard_spell_on_67",
+    "standard_spell_on_68",
+    "standard_spell_on_69",
+    "standard_spell_on_70",
+    "standard_spell_on_71",
+    "standard_spell_on_72",
+    "standard_spell_on_73",
+    "standard_spell_on_74",
+    "standard_spell_on_75",
+    "standard_spell_on_76",
+    "standard_spell_on_77",
+    "standard_spell_on_78",
+    "standard_spell_on_79",
 };
 
-static int ui_asset_count(void) {
-    return (int)(sizeof(g_ui_asset_specs) / sizeof(g_ui_asset_specs[0]));
-}
+#define RUNEC_UI_ASSET_COUNT \
+    ((int)(sizeof(g_ui_asset_names) / sizeof(g_ui_asset_names[0])))
+
+typedef struct RuneCUiAssets {
+    Texture2D textures[RUNEC_UI_ASSET_COUNT];
+    Font font;
+    Font small_font;
+    int missing_count;
+} RuneCUiAssets;
 
 static int find_asset_index(const char *name) {
-    int count = ui_asset_count();
-    for (int i = 0; i < count; i++) {
-        if (strcmp(g_ui_asset_specs[i].name, name) == 0)
+    for (int i = 0; i < RUNEC_UI_ASSET_COUNT; i++) {
+        if (strcmp(g_ui_asset_names[i], name) == 0)
             return i;
     }
     return -1;
@@ -2608,115 +2553,53 @@ static Texture2D load_compass_texture(const char *path) {
     return texture;
 }
 
+static Font load_ui_font(const char *path, int size) {
+    Font font = fc_load_font_asset(path, size);
+    if (font.texture.id != 0) {
+        SetTextureFilter(font.texture, TEXTURE_FILTER_POINT);
+        fprintf(stderr, "ui_assets: loaded font %s\n", path);
+    }
+    return font;
+}
+
 void runec_ui_assets_load(RuneCUiAssets *assets) {
     memset(assets, 0, sizeof(*assets));
-
-    int count = ui_asset_count();
-    if (count > RUNEC_UI_ASSET_MAX)
-        count = RUNEC_UI_ASSET_MAX;
-
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < RUNEC_UI_ASSET_COUNT; i++) {
+        const char *name = g_ui_asset_names[i];
         char path[256];
-        snprintf(path, sizeof(path), "data/sprites/ui/%s", g_ui_asset_specs[i].file);
-        if (g_ui_asset_specs[i].required)
-            assets->required_count++;
-        if (!fc_asset_exists(path)) {
-            if (g_ui_asset_specs[i].required) {
-                assets->missing_required_count++;
-                fprintf(stderr, "ui_assets: missing required sprite %s (%s)\n",
-                        g_ui_asset_specs[i].name, path);
-            } else {
-                assets->missing_optional_count++;
-            }
-            continue;
-        }
-        Texture2D tex = strcmp(g_ui_asset_specs[i].name, "compass") == 0
+        snprintf(path, sizeof(path), "data/sprites/ui/%s.png", name);
+        Texture2D tex = strcmp(name, "compass") == 0
             ? load_compass_texture(path)
             : fc_load_texture_asset(path);
         if (tex.id == 0) {
-            if (g_ui_asset_specs[i].required) {
-                assets->missing_required_count++;
-                fprintf(stderr, "ui_assets: failed to load required sprite %s (%s)\n",
-                        g_ui_asset_specs[i].name, path);
-            } else {
-                assets->missing_optional_count++;
-            }
+            assets->missing_count++;
+            fprintf(stderr, "ui_assets: failed to load sprite %s (%s)\n", name, path);
             continue;
         }
         SetTextureFilter(tex, TEXTURE_FILTER_POINT);
         assets->textures[i] = tex;
-        assets->loaded[i] = 1;
     }
-    fprintf(stderr,
-            "ui_assets: loaded %d/%d required sprites, %d optional sprites missing\n",
-            assets->required_count - assets->missing_required_count,
-            assets->required_count, assets->missing_optional_count);
-
-    const char *font_paths[] = {
-        "data/fonts/runescape.ttf",
-    };
-    for (int i = 0; i < (int)(sizeof(font_paths) / sizeof(font_paths[0])); i++) {
-        const char *font_path = font_paths[i];
-        if (!fc_asset_exists(font_path))
-            continue;
-        assets->font = fc_load_font_asset(font_path, 14);
-        if (assets->font.texture.id != 0) {
-            SetTextureFilter(assets->font.texture, TEXTURE_FILTER_POINT);
-            assets->font_loaded = 1;
-            fprintf(stderr, "ui_assets: loaded font %s\n", font_path);
-            break;
-        }
-    }
-    const char *small_font_paths[] = {
-        "data/fonts/runescape_small.ttf",
-    };
-    for (int i = 0; i < (int)(sizeof(small_font_paths) / sizeof(small_font_paths[0])); i++) {
-        const char *font_path = small_font_paths[i];
-        if (!fc_asset_exists(font_path))
-            continue;
-        assets->small_font = fc_load_font_asset(font_path, 12);
-        if (assets->small_font.texture.id != 0) {
-            SetTextureFilter(assets->small_font.texture, TEXTURE_FILTER_POINT);
-            assets->small_font_loaded = 1;
-            fprintf(stderr, "ui_assets: loaded small font %s\n", font_path);
-            break;
-        }
-    }
+    fprintf(stderr, "ui_assets: loaded %d/%d sprites\n",
+            RUNEC_UI_ASSET_COUNT - assets->missing_count, RUNEC_UI_ASSET_COUNT);
+    assets->font = load_ui_font("data/fonts/runescape.ttf", 14);
+    assets->small_font = load_ui_font("data/fonts/runescape_small.ttf", 12);
 }
 
 void runec_ui_assets_unload(RuneCUiAssets *assets) {
-    int count = ui_asset_count();
-    if (count > RUNEC_UI_ASSET_MAX)
-        count = RUNEC_UI_ASSET_MAX;
-
-    for (int i = 0; i < count; i++) {
-        if (assets->loaded[i]) {
+    for (int i = 0; i < RUNEC_UI_ASSET_COUNT; i++) {
+        if (assets->textures[i].id != 0)
             UnloadTexture(assets->textures[i]);
-            assets->loaded[i] = 0;
-        }
     }
-    if (assets->font_loaded) {
+    if (assets->font.texture.id != 0)
         UnloadFont(assets->font);
-        assets->font_loaded = 0;
-    }
-    if (assets->small_font_loaded) {
+    if (assets->small_font.texture.id != 0)
         UnloadFont(assets->small_font);
-        assets->small_font_loaded = 0;
-    }
-    assets->required_count = 0;
-    assets->missing_required_count = 0;
-    assets->missing_optional_count = 0;
+    memset(assets, 0, sizeof(*assets));
 }
 
 const Texture2D *runec_ui_asset(const RuneCUiAssets *assets, const char *name) {
     int index = find_asset_index(name);
-    if (index < 0 || index >= RUNEC_UI_ASSET_MAX || !assets->loaded[index])
-        return NULL;
-    return &assets->textures[index];
-}
-
-int runec_ui_asset_ready(const RuneCUiAssets *assets, const char *name) {
-    return runec_ui_asset(assets, name) != NULL;
+    return index >= 0 ? &assets->textures[index] : NULL;
 }
 
 void runec_ui_draw_asset(const RuneCUiAssets *assets, const char *name,
@@ -2728,18 +2611,8 @@ void runec_ui_draw_asset(const RuneCUiAssets *assets, const char *name,
     DrawTexturePro(*tex, src, dst, (Vector2){0, 0}, 0.0f, tint);
 }
 
-Font runec_ui_font(const RuneCUiAssets *assets) {
-    if (assets->font_loaded)
-        return assets->font;
-    if (assets->small_font_loaded)
-        return assets->small_font;
-    return (Font){0};
-}
-
 Font runec_ui_font_for_size(const RuneCUiAssets *assets, float size) {
-    if (size <= 12.0f && assets->small_font_loaded)
-        return assets->small_font;
-    return runec_ui_font(assets);
+    return size <= 12.0f ? assets->small_font : assets->font;
 }
 
 void runec_ui_draw_text_shadow(const RuneCUiAssets *assets, const char *text,
@@ -2749,8 +2622,6 @@ void runec_ui_draw_text_shadow(const RuneCUiAssets *assets, const char *text,
     if (size < 12.0f)
         size = 12.0f;
     Font font = runec_ui_font_for_size(assets, size);
-    if (font.texture.id == 0)
-        return;
     x = (float)((int)(x + 0.5f));
     y = (float)((int)(y + 0.5f));
     DrawTextEx(font, text, (Vector2){x + 1.0f, y + 1.0f}, size, 0.0f, BLACK);
@@ -3270,7 +3141,6 @@ typedef struct RuneCUiIntent {
 
 typedef struct RuneCUiSlot {
     uint32_t item_id;
-    uint32_t icon_item_id;
     int quantity;
     char label[24];
     int enabled;
@@ -3292,7 +3162,6 @@ typedef struct RuneCUiMinimapDot {
 typedef struct RuneCUiItemIcon {
     uint32_t item_id;
     Texture2D texture;
-    int ready;
 } RuneCUiItemIcon;
 
 typedef struct RuneCUiCombatStyleOption {
@@ -3377,7 +3246,6 @@ typedef struct RuneCUiState {
     int minimap_dot_count;
     float minimap_rotation;
     Texture2D minimap_texture;
-    int minimap_texture_ready;
     RuneCUiItemIcon item_icons[RUNEC_UI_ITEM_ICON_CACHE];
     int item_icon_count;
 
@@ -3388,8 +3256,6 @@ typedef struct RuneCUiState {
 #define OSRS_YELLOW ((Color){255, 255, 0, 255})
 #define OSRS_GREEN  ((Color){0, 255, 0, 255})
 #define OSRS_RED    ((Color){255, 40, 25, 255})
-#define OSRS_BLUE   ((Color){90, 170, 255, 255})
-#define OSRS_PANEL  ((Color){31, 25, 18, 232})
 #define OSRS_TAB_PRESS_SECONDS 0.12f
 #define RUNEC_UI_SPELL_COUNT 80
 #define RUNEC_UI_SPELL_COLS 8
@@ -4100,21 +3966,15 @@ void runec_ui_init(RuneCUiState *ui) {
     Image minimap = GenImageColor(152, 152, BLANK);
     ui->minimap_texture = LoadTextureFromImage(minimap);
     UnloadImage(minimap);
-    if (ui->minimap_texture.id != 0) {
+    if (ui->minimap_texture.id != 0)
         SetTextureFilter(ui->minimap_texture, TEXTURE_FILTER_POINT);
-        ui->minimap_texture_ready = 1;
-    }
 }
 
 void runec_ui_shutdown(RuneCUiState *ui) {
-    if (ui->minimap_texture_ready) {
+    if (ui->minimap_texture.id != 0)
         UnloadTexture(ui->minimap_texture);
-        ui->minimap_texture_ready = 0;
-    }
-    for (int i = 0; i < ui->item_icon_count; i++) {
-        if (ui->item_icons[i].ready && ui->item_icons[i].texture.id != 0)
-            UnloadTexture(ui->item_icons[i].texture);
-    }
+    for (int i = 0; i < ui->item_icon_count; i++)
+        UnloadTexture(ui->item_icons[i].texture);
     ui->item_icon_count = 0;
     runec_ui_assets_unload(&ui->assets);
 }
@@ -4127,15 +3987,13 @@ void runec_ui_add_minimap_dot(RuneCUiState *ui, float dx, float dy,
         (RuneCUiMinimapDot){dx, dy, kind};
 }
 
-void runec_ui_set_item_icon(RuneCUiState *ui, uint32_t icon_item_id, Texture2D texture) {
-    if (!ui || icon_item_id == 0 || texture.id == 0)
+void runec_ui_set_item_icon(RuneCUiState *ui, uint32_t item_id, Texture2D texture) {
+    if (!ui || item_id == 0 || texture.id == 0)
         return;
     for (int i = 0; i < ui->item_icon_count; i++) {
-        if (ui->item_icons[i].item_id == icon_item_id) {
-            if (ui->item_icons[i].ready && ui->item_icons[i].texture.id != 0)
-                UnloadTexture(ui->item_icons[i].texture);
+        if (ui->item_icons[i].item_id == item_id) {
+            UnloadTexture(ui->item_icons[i].texture);
             ui->item_icons[i].texture = texture;
-            ui->item_icons[i].ready = 1;
             return;
         }
     }
@@ -4143,8 +4001,7 @@ void runec_ui_set_item_icon(RuneCUiState *ui, uint32_t icon_item_id, Texture2D t
         UnloadTexture(texture);
         return;
     }
-    ui->item_icons[ui->item_icon_count++] =
-        (RuneCUiItemIcon){icon_item_id, texture, 1};
+    ui->item_icons[ui->item_icon_count++] = (RuneCUiItemIcon){item_id, texture};
 }
 
 static int handle_context_click(RuneCUiState *ui, Vector2 mouse) {
@@ -4801,10 +4658,8 @@ static int draw_asset_centered(const RuneCUiState *ui, const char *name,
 static void draw_asset_tiled(const RuneCUiState *ui, const char *name,
                              Rectangle dst, Color tint) {
     const Texture2D *tex = runec_ui_asset(&ui->assets, name);
-    if (!tex) {
-        DrawRectangleRec(dst, OSRS_PANEL);
+    if (!tex)
         return;
-    }
     for (float y = dst.y; y < dst.y + dst.height; y += (float)tex->height) {
         for (float x = dst.x; x < dst.x + dst.width; x += (float)tex->width) {
             float w = fmin2((float)tex->width, dst.x + dst.width - x);
@@ -4818,8 +4673,6 @@ static void draw_asset_tiled(const RuneCUiState *ui, const char *name,
 static void draw_side_chrome(const RuneCUiState *ui, const RuneCUiLayout *layout) {
     Rectangle backing = {layout->side.x + 20, layout->side.y + 27, 200, 281};
     draw_asset_tiled(ui, "tradebacking_dark", backing, WHITE);
-    if (!runec_ui_asset_ready(&ui->assets, "tradebacking_dark"))
-        DrawRectangleRec(backing, OSRS_PANEL);
 
     runec_ui_draw_asset(&ui->assets, "osrs_stretch_side_topbottom_0",
                         (Rectangle){layout->side.x, layout->side.y + RUNEC_OSRS_SIDE_TOP_Y,
@@ -4859,16 +4712,11 @@ static void draw_side_chrome(const RuneCUiState *ui, const RuneCUiLayout *layout
 }
 
 static void draw_orb(const RuneCUiState *ui, Rectangle rect, const char *filler,
-                     const char *icon, int value, int max_value, Color color) {
+                     const char *icon, int value, int max_value) {
     runec_ui_draw_asset(&ui->assets, "orb_frame_0", rect, WHITE);
-    if (!runec_ui_asset_ready(&ui->assets, "orb_frame_0"))
-        DrawRectangleRounded((Rectangle){rect.x + 0, rect.y + 7, 34, 20}, 0.22f, 5,
-                             (Color){50, 46, 37, 235});
     Rectangle fill = {rect.x + 27, rect.y + 4, 26, 26};
     runec_ui_draw_asset(&ui->assets, "orb_filler_0", fill, WHITE);
     runec_ui_draw_asset(&ui->assets, filler, fill, WHITE);
-    if (!runec_ui_asset_ready(&ui->assets, filler))
-        DrawCircle((int)(fill.x + 14), (int)(fill.y + 14), 12, color);
     draw_asset_centered(ui, icon, fill, 22, 22, WHITE);
 
     char text[16];
@@ -4914,7 +4762,7 @@ static void draw_run_orb(const RuneCUiState *ui, Rectangle rect) {
     if (energy > 100) energy = 100;
     int empty_height = 26 * (100 - energy) / 100;
     const Texture2D *empty = runec_ui_asset(&ui->assets, "orb_filler_0");
-    if (empty && empty_height > 0) {
+    if (empty_height > 0) {
         float source_height = (float)empty->height * (float)empty_height /
                               fill.height;
         DrawTexturePro(*empty,
@@ -4935,13 +4783,9 @@ static void draw_run_orb(const RuneCUiState *ui, Rectangle rect) {
 static void draw_minimap(const RuneCUiState *ui, const RuneCUiLayout *layout) {
     Vector2 center = {layout->minimap.x + layout->minimap.width * 0.5f,
                       layout->minimap.y + layout->minimap.height * 0.5f};
-    if (ui->minimap_texture_ready) {
-        DrawTexturePro(ui->minimap_texture,
-                       (Rectangle){0, 0, 152, 152},
-                       layout->minimap, (Vector2){0, 0}, 0, WHITE);
-    } else {
-        DrawCircle((int)center.x, (int)center.y, 72.0f, (Color){85, 124, 52, 255});
-    }
+    DrawTexturePro(ui->minimap_texture,
+                   (Rectangle){0, 0, 152, 152},
+                   layout->minimap, (Vector2){0, 0}, 0, WHITE);
 
     for (int i = 0; i < ui->minimap_dot_count; i++) {
         const RuneCUiMinimapDot *dot = &ui->minimap_dots[i];
@@ -4966,152 +4810,42 @@ static void draw_minimap(const RuneCUiState *ui, const RuneCUiLayout *layout) {
     }
 
     const Texture2D *compass = runec_ui_asset(&ui->assets, "compass");
-    if (compass) {
-        Rectangle source = {0, 0, (float)compass->width,
-                            (float)compass->height};
-        Rectangle destination = {
-            layout->compass.x + layout->compass.width * 0.5f,
-            layout->compass.y + layout->compass.height * 0.5f,
-            layout->compass.width,
-            layout->compass.height,
-        };
-        Vector2 origin = {layout->compass.width * 0.5f,
-                          layout->compass.height * 0.5f};
-        DrawTexturePro(*compass, source, destination, origin,
-                       ui->minimap_rotation *
-                           (180.0f / 3.14159265358979323846f),
-                       WHITE);
-    } else {
-        runec_ui_draw_asset(&ui->assets, "resize_compass_mask", layout->compass, WHITE);
-        draw_text_shadow(ui, "N", layout->compass.x + 16, layout->compass.y + 12, 14, OSRS_ORANGE);
-    }
+    Rectangle source = {0, 0, (float)compass->width, (float)compass->height};
+    Rectangle destination = {
+        layout->compass.x + layout->compass.width * 0.5f,
+        layout->compass.y + layout->compass.height * 0.5f,
+        layout->compass.width,
+        layout->compass.height,
+    };
+    Vector2 origin = {layout->compass.width * 0.5f,
+                      layout->compass.height * 0.5f};
+    DrawTexturePro(*compass, source, destination, origin,
+                   ui->minimap_rotation * (180.0f / 3.14159265358979323846f),
+                   WHITE);
 
     Rectangle cover = {layout->map.x + RUNEC_OSRS_MAP_SURROUND_X,
                        layout->map.y + RUNEC_OSRS_MAP_SURROUND_Y,
                        RUNEC_OSRS_MAP_SURROUND_W, RUNEC_OSRS_MAP_SURROUND_H};
     runec_ui_draw_asset(&ui->assets, "osrs_stretch_mapsurround", cover, WHITE);
-    if (!runec_ui_asset_ready(&ui->assets, "osrs_stretch_mapsurround")) {
-        DrawCircleLines((int)center.x, (int)center.y, 73.0f, (Color){51, 48, 35, 255});
-        DrawCircleLines((int)center.x, (int)center.y, 70.0f, (Color){180, 166, 104, 255});
-    }
 
     draw_orb(ui, layout->hp_orb, "orb_filler_1", "orb_icon_0",
-             ui->hitpoints, ui->hitpoints_max, OSRS_RED);
+             ui->hitpoints, ui->hitpoints_max);
     draw_orb(ui, layout->prayer_orb, "orb_filler_4", "orb_icon_1",
-             ui->prayer_points, ui->prayer_points_max, OSRS_BLUE);
+             ui->prayer_points, ui->prayer_points_max);
     draw_run_orb(ui, layout->run_orb);
     draw_orb(ui, layout->spec_orb, "orb_filler_9", "orb_icon_6",
-             ui->special_attack_energy, 100, OSRS_YELLOW);
+             ui->special_attack_energy, 100);
 
     runec_ui_draw_asset(&ui->assets, "ring_30", layout->worldmap_button, WHITE);
     draw_asset_centered(ui, "worldmap_icon_0", layout->worldmap_button, 22, 22, WHITE);
-    if (!runec_ui_asset_ready(&ui->assets, "worldmap_icon_0"))
-        draw_centered_text(ui, "?", layout->worldmap_button, 14, OSRS_YELLOW);
 }
 
 static void draw_chat_panel_chrome(const RuneCUiState *ui,
                                    const RuneCUiLayout *layout) {
     runec_ui_draw_asset(&ui->assets, "chatbox_bg", layout->chat, WHITE);
-    if (!runec_ui_asset_ready(&ui->assets, "chatbox_bg"))
-        DrawRectangleRec(layout->chat, (Color){22, 19, 15, 235});
-
     DrawRectangleRec(layout->chat_messages, (Color){0, 0, 0, 104});
     runec_ui_draw_asset(&ui->assets, "main_stones_bottom",
                         layout->chat_controls, WHITE);
-    if (!runec_ui_asset_ready(&ui->assets, "main_stones_bottom"))
-        DrawRectangleRec(layout->chat_controls, (Color){74, 62, 48, 235});
-}
-
-static Color item_color(uint32_t item_id) {
-    switch (item_id) {
-    case 4151: return (Color){176, 178, 164, 255};
-    case 385: return (Color){80, 154, 178, 255};
-    case 2434: return (Color){110, 190, 70, 255};
-    case 995: return (Color){228, 188, 58, 255};
-    default: return (Color){128, 92, 52, 255};
-    }
-}
-
-static int coin_stack_visual_quantity(int quantity) {
-    if (quantity <= 1) return 1;
-    if (quantity == 2) return 2;
-    if (quantity == 3) return 3;
-    if (quantity == 4) return 4;
-    if (quantity < 25) return 5;
-    if (quantity < 100) return 25;
-    if (quantity < 250) return 100;
-    if (quantity < 1000) return 250;
-    if (quantity < 10000) return 1000;
-    return 10000;
-}
-
-static void item_icon_asset_name(const RuneCUiSlot *slot, char *dst, size_t cap) {
-    uint32_t icon_item_id = slot->icon_item_id ? slot->icon_item_id : slot->item_id;
-    if (icon_item_id != slot->item_id) {
-        snprintf(dst, cap, "item_%u", icon_item_id);
-        return;
-    }
-    if (slot->item_id == 995) {
-        snprintf(dst, cap, "item_995_%d", coin_stack_visual_quantity(slot->quantity));
-        return;
-    }
-    snprintf(dst, cap, "item_%u", slot->item_id);
-}
-
-static int label_word_is_filler(const char *word, int len) {
-    return (len == 2 && strncmp(word, "of", 2) == 0) ||
-           (len == 3 && strncmp(word, "the", 3) == 0) ||
-           (len == 3 && strncmp(word, "and", 3) == 0);
-}
-
-static void slot_label_abbrev(const RuneCUiSlot *slot, char *dst, size_t cap) {
-    if (!dst || cap == 0)
-        return;
-    dst[0] = '\0';
-    if (!slot || !slot->label[0])
-        return;
-
-    int out = 0;
-    const char *p = slot->label;
-    while (*p && out < (int)cap - 1) {
-        while (*p && !isalnum((unsigned char)*p))
-            p++;
-        if (!*p)
-            break;
-
-        char word[16];
-        int len = 0;
-        unsigned char first = (unsigned char)*p;
-        while (*p && isalnum((unsigned char)*p)) {
-            if (len < (int)sizeof(word) - 1)
-                word[len++] = (char)tolower((unsigned char)*p);
-            p++;
-        }
-        word[len] = '\0';
-        if (len > 0 && !label_word_is_filler(word, len))
-            dst[out++] = (char)toupper(first);
-    }
-    dst[out] = '\0';
-}
-
-static void draw_slot_label_fallback(const RuneCUiState *ui, const RuneCUiSlot *slot,
-                                     Rectangle r) {
-    char abbr[4];
-    slot_label_abbrev(slot, abbr, sizeof(abbr));
-    if (!abbr[0])
-        return;
-
-    float size = 10.0f;
-    Font font = runec_ui_font_for_size(&ui->assets, size);
-    Vector2 m = MeasureTextEx(font, abbr, size, 0);
-    if (m.x > r.width - 4.0f) {
-        size = 8.0f;
-        font = runec_ui_font_for_size(&ui->assets, size);
-        m = MeasureTextEx(font, abbr, size, 0);
-    }
-    draw_text_shadow(ui, abbr, r.x + (r.width - m.x) * 0.5f,
-                     r.y + (r.height - m.y) * 0.5f, size,
-                     (Color){238, 218, 162, 245});
 }
 
 static Color stack_text_color(int quantity) {
@@ -5133,65 +4867,30 @@ static void format_stack_quantity(int quantity, char *dst, size_t cap) {
 }
 
 static const Texture2D *ui_item_icon_texture(const RuneCUiState *ui,
-                                             uint32_t icon_item_id) {
+                                             uint32_t item_id) {
     for (int i = 0; i < ui->item_icon_count; i++) {
-        if (ui->item_icons[i].ready && ui->item_icons[i].item_id == icon_item_id)
+        if (ui->item_icons[i].item_id == item_id)
             return &ui->item_icons[i].texture;
     }
     return NULL;
 }
 
 static void draw_inventory_item(const RuneCUiState *ui, const RuneCUiSlot *slot, Rectangle r) {
-    uint32_t icon_item_id = slot->icon_item_id ? slot->icon_item_id : slot->item_id;
-    const Texture2D *runtime_icon = ui_item_icon_texture(ui, icon_item_id);
-    if (runtime_icon && runtime_icon->id != 0) {
-        float sx = r.width / (float)runtime_icon->width;
-        float sy = r.height / (float)runtime_icon->height;
-        float scale = sx < sy ? sx : sy;
-        Rectangle dst = {
-            r.x + (r.width - (float)runtime_icon->width * scale) * 0.5f,
-            r.y + (r.height - (float)runtime_icon->height * scale) * 0.5f,
-            (float)runtime_icon->width * scale,
-            (float)runtime_icon->height * scale
-        };
-        DrawTexturePro(*runtime_icon,
-                       (Rectangle){0, 0, (float)runtime_icon->width,
-                                   (float)runtime_icon->height},
-                       dst, (Vector2){0, 0}, 0.0f, WHITE);
+    const Texture2D *icon = ui_item_icon_texture(ui, slot->item_id);
+    if (!icon)
         return;
-    }
-
-    char icon_name[32];
-    item_icon_asset_name(slot, icon_name, sizeof(icon_name));
-    if (draw_asset_centered(ui, icon_name, r, RUNEC_OSRS_INVENTORY_SLOT_W,
-                            RUNEC_OSRS_INVENTORY_SLOT_H, WHITE))
-        return;
-
-    Color c = item_color(slot->item_id);
-    if (slot->item_id == 4151) {
-        DrawLineEx((Vector2){r.x + 9, r.y + 25}, (Vector2){r.x + 24, r.y + 6}, 4.0f,
-                   (Color){42, 40, 38, 255});
-        DrawLineEx((Vector2){r.x + 11, r.y + 23}, (Vector2){r.x + 25, r.y + 7}, 2.0f, c);
-        DrawCircle((int)(r.x + 9), (int)(r.y + 25), 4.0f, (Color){83, 50, 38, 255});
-    } else if (slot->item_id == 385) {
-        DrawEllipse((int)(r.x + 16), (int)(r.y + 17), 12.0f, 7.0f, c);
-        DrawTriangle((Vector2){r.x + 5, r.y + 17}, (Vector2){r.x + 1, r.y + 11},
-                     (Vector2){r.x + 1, r.y + 23}, c);
-        DrawCircle((int)(r.x + 23), (int)(r.y + 15), 1.5f, BLACK);
-    } else if (slot->item_id == 2434) {
-        DrawRectangleRounded((Rectangle){r.x + 11, r.y + 5, 10, 22}, 0.35f, 4,
-                             (Color){52, 42, 34, 255});
-        DrawRectangleRounded((Rectangle){r.x + 12, r.y + 10, 8, 15}, 0.35f, 4, c);
-        DrawRectangleRec((Rectangle){r.x + 11, r.y + 4, 10, 4}, (Color){196, 196, 182, 255});
-    } else if (slot->item_id == 995) {
-        DrawCircle((int)(r.x + 14), (int)(r.y + 14), 7.0f, c);
-        DrawCircle((int)(r.x + 19), (int)(r.y + 18), 7.0f, (Color){210, 156, 40, 255});
-        DrawCircle((int)(r.x + 13), (int)(r.y + 21), 6.0f, (Color){238, 204, 72, 255});
-    } else {
-        DrawRectangleRounded((Rectangle){r.x + 6, r.y + 6, 20, 20}, 0.22f, 4, c);
-        draw_slot_label_fallback(ui, slot, r);
-    }
-    (void)ui;
+    float sx = r.width / (float)icon->width;
+    float sy = r.height / (float)icon->height;
+    float scale = sx < sy ? sx : sy;
+    Rectangle dst = {
+        r.x + (r.width - (float)icon->width * scale) * 0.5f,
+        r.y + (r.height - (float)icon->height * scale) * 0.5f,
+        (float)icon->width * scale,
+        (float)icon->height * scale
+    };
+    DrawTexturePro(*icon,
+                   (Rectangle){0, 0, (float)icon->width, (float)icon->height},
+                   dst, (Vector2){0, 0}, 0.0f, WHITE);
 }
 
 static void draw_inventory(const RuneCUiState *ui, const RuneCUiLayout *layout) {
@@ -5247,10 +4946,6 @@ static void draw_equipment(const RuneCUiState *ui, const RuneCUiLayout *layout) 
                           layout->side_content.y + ref->icon_rect.y,
                           ref->icon_rect.width, ref->icon_rect.height};
         runec_ui_draw_asset(&ui->assets, "combatboxes_0", b, WHITE);
-        if (!runec_ui_asset_ready(&ui->assets, "combatboxes_0")) {
-            DrawRectangleRounded(b, 0.18f, 5, (Color){54, 46, 35, 235});
-            DrawRectangleLinesEx(b, 1, (Color){119, 99, 68, 255});
-        }
         draw_asset_centered(ui, ref->asset, icon, icon.width, icon.height, WHITE);
     }
 }
@@ -5281,10 +4976,8 @@ static void draw_spellbook(const RuneCUiState *ui, const RuneCUiLayout *layout) 
         char name[32];
         snprintf(name, sizeof(name), "standard_spell_on_%d",
                  g_standard_spell_slots[i].standard_icon_frame);
-        int drew = draw_asset_centered(ui, name, r, RUNEC_UI_SPELL_ICON_SIZE,
-                                       RUNEC_UI_SPELL_ICON_SIZE, WHITE);
-        if (!drew)
-            draw_centered_text(ui, TextFormat("%d", i + 1), r, 10, OSRS_ORANGE);
+        draw_asset_centered(ui, name, r, RUNEC_UI_SPELL_ICON_SIZE,
+                            RUNEC_UI_SPELL_ICON_SIZE, WHITE);
     }
 }
 
@@ -5334,10 +5027,6 @@ static void draw_skills(const RuneCUiState *ui, const RuneCUiLayout *layout) {
 static void draw_combat_box(const RuneCUiState *ui, Rectangle r, int selected) {
     const char *asset = selected ? "combatboxes_1" : "combatboxes_0";
     runec_ui_draw_asset(&ui->assets, asset, r, WHITE);
-    if (!runec_ui_asset_ready(&ui->assets, asset)) {
-        DrawRectangleRec(r, selected ? (Color){83, 61, 43, 245} : (Color){45, 39, 31, 235});
-        DrawRectangleLinesEx(r, 1, selected ? OSRS_YELLOW : (Color){103, 89, 63, 255});
-    }
     if (selected)
         DrawRectangleRec(r, (Color){120, 27, 20, 54});
 }
@@ -5383,8 +5072,6 @@ static void draw_combat(const RuneCUiState *ui, const RuneCUiLayout *layout) {
 
     Rectangle spec = side_ref_rect(layout, RUNEC_OSRS_COMBAT_SPECIAL_BAR);
     runec_ui_draw_asset(&ui->assets, "combatboxes_special_attack", spec, WHITE);
-    if (!runec_ui_asset_ready(&ui->assets, "combatboxes_special_attack"))
-        DrawRectangleRec(spec, (Color){32, 28, 22, 235});
     Rectangle empty = {spec.x + 2, spec.y + 7, spec.width - 4, 12};
     DrawRectangleRec(empty, (Color){115, 6, 6, 255});
     Rectangle fill = empty;
@@ -8929,14 +8616,12 @@ static void viewer_trace_log_to_stderr(int log_level, const char* text,
     fputc('\n', stderr);
 }
 
-static void set_ui_slot(RuneCUiSlot* slot, uint32_t item_id,
-                        uint32_t icon_item_id, int quantity,
+static void set_ui_slot(RuneCUiSlot* slot, uint32_t item_id, int quantity,
                         const char* label) {
     if (!slot) return;
     memset(slot, 0, sizeof(*slot));
     if (item_id == 0 || quantity <= 0) return;
     slot->item_id = item_id;
-    slot->icon_item_id = icon_item_id ? icon_item_id : item_id;
     slot->quantity = quantity;
     snprintf(slot->label, sizeof(slot->label), "%s", label ? label : "Item");
     slot->enabled = 1;
@@ -9014,8 +8699,7 @@ static void sync_item_slots(RuneCUiSlot *slots, const FcItemStack *items, int co
         memset(&slots[i], 0, sizeof(slots[i]));
         const FcItemDef *item = fc_item_definition(items[i].item_id);
         if (!item) continue;
-        set_ui_slot(&slots[i], (uint32_t)item->id, (uint32_t)item->id,
-                    items[i].quantity, item->name);
+        set_ui_slot(&slots[i], (uint32_t)item->id, items[i].quantity, item->name);
         slots[i].action = item->slot == FC_EQUIP_SLOT_WEAPON ? "Wield" :
             item->slot >= 0 ? "Wear" : item->id == 385 ? "Eat" :
             item->id == 229 ? "Use" : "Drink";
@@ -9078,8 +8762,7 @@ static void sync_fc_ui_minimap(ViewerState* v) {
     Color pixels[FC_MINIMAP_DISPLAY_SIZE * FC_MINIMAP_DISPLAY_SIZE];
     fc_minimap_render(&v->minimap_scene, player_x, player_y, v->cam_yaw,
                       pixels);
-    if (v->ui.minimap_texture_ready)
-        UpdateTexture(v->ui.minimap_texture, pixels);
+    UpdateTexture(v->ui.minimap_texture, pixels);
     v->ui.minimap_rotation = v->cam_yaw;
 
     v->ui.minimap_dot_count = 0;
@@ -11031,12 +10714,12 @@ static ViewerState* fc_viewer_create(int replay) {
             required_resources_ready = 0;                                    \
         }                                                                    \
     } while (0)
-    REQUIRE_VIEWER_RESOURCE(v->ui.assets.missing_required_count == 0,
+    REQUIRE_VIEWER_RESOURCE(v->ui.assets.missing_count == 0,
                             "RuneC UI sprites");
-    REQUIRE_VIEWER_RESOURCE(v->ui.assets.font_loaded &&
-                            v->ui.assets.small_font_loaded,
+    REQUIRE_VIEWER_RESOURCE(v->ui.assets.font.texture.id > 0 &&
+                            v->ui.assets.small_font.texture.id > 0,
                             "RuneC UI fonts");
-    REQUIRE_VIEWER_RESOURCE(v->ui.minimap_texture_ready,
+    REQUIRE_VIEWER_RESOURCE(v->ui.minimap_texture.id > 0,
                             "minimap render texture");
     REQUIRE_VIEWER_RESOURCE(item_icons_ready, "Fight Caves item icons");
     REQUIRE_VIEWER_RESOURCE(v->terrain, "terrain mesh");
