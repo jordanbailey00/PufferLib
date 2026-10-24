@@ -5231,6 +5231,23 @@ FcVisualPose fc_visual_scene_npc_pose(const FcVisualScene* scene, int slot) {
 
 /* Actor Animation */
 
+/* How an attack's projectile looks and flies, in client units: spot
+ * animation ids (0 = none), heights in 1/128 tile above the ground, and
+ * client cycles (30 per game tick). */
+typedef struct {
+    uint32_t travel_spot;
+    uint32_t launch_spot;
+    uint32_t impact_spot;
+    float start_height;
+    float end_height;
+    float launch_cycle;       /* when it leaves the source */
+    float angle;              /* launch elevation, 1/256 turn */
+    float length_adjustment;  /* flight cycles at any distance */
+    float progress;           /* start offset toward the target, 1/128 tile */
+    float step_multiplier;    /* flight cycles per tile of distance */
+    int fixed_target;         /* lands where the target stood at launch */
+} FcProjectileProfile;
+
 typedef struct {
     uint16_t idle_anim;
     uint16_t walk_anim;
@@ -5240,16 +5257,7 @@ typedef struct {
     uint16_t turn_anim;
     uint16_t run_anim;
     uint16_t attack_anim;
-    uint32_t projectile_travel_spot;
-    uint32_t projectile_launch_spot;
-    uint32_t projectile_impact_spot;
-    float projectile_start_height;
-    float projectile_end_height;
-    float projectile_launch_delay_client_ticks;
-    float projectile_angle;
-    float projectile_length_adjustment;
-    float projectile_progress;
-    float projectile_step_multiplier;
+    FcProjectileProfile projectile;
 } FcPlayerVisualProfile;
 
 /* One NPC slot: its posed vertices, the pose (idle/walk) and action
@@ -5302,78 +5310,50 @@ typedef struct {
 #define JAD_ANIM_MELEE 2655
 #define JAD_ANIM_MAGIC 2656
 
+/* Indexed by the wielded weapon's visual_profile (FcItemDef). Projectile
+ * columns follow FcProjectileProfile. */
 static const FcPlayerVisualProfile PLAYER_VISUALS[FC_NUM_LOADOUTS] = {
     [FC_LOADOUT_BLACK_DHIDE_RCB] = {
         PLAYER_ANIM_XBOW_IDLE, PLAYER_ANIM_XBOW_WALK,
         PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
         PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
         PLAYER_ANIM_XBOW_RUN, PLAYER_ANIM_XBOW_ATTACK,
-        27, 0, 0,
-        155.0f, 146.0f, 41.0f, 5.0f, 5.0f, 11.0f, 5.0f,
+        {27, 0, 0, 155.0f, 146.0f, 41.0f, 5.0f, 5.0f, 11.0f, 5.0f, 0},
     },
     [FC_LOADOUT_SOTA_TBOW] = {
         PLAYER_ANIM_HUMAN_IDLE, PLAYER_ANIM_HUMAN_WALK,
         PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
         PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
         PLAYER_ANIM_HUMAN_RUN, PLAYER_ANIM_BOW_ATTACK,
-        1120, 1116, 0,
-        163.0f, 146.0f, 41.0f, 15.0f, 5.0f, 11.0f, 5.0f,
-    },
-    [FC_LOADOUT_LOW_DEF_RCB] = {
-        PLAYER_ANIM_XBOW_IDLE, PLAYER_ANIM_XBOW_WALK,
-        PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
-        PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
-        PLAYER_ANIM_XBOW_RUN, PLAYER_ANIM_XBOW_ATTACK,
-        27, 0, 0,
-        155.0f, 146.0f, 41.0f, 5.0f, 5.0f, 11.0f, 5.0f,
-    },
-    [FC_LOADOUT_RCB_PURE] = {
-        PLAYER_ANIM_XBOW_IDLE, PLAYER_ANIM_XBOW_WALK,
-        PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
-        PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
-        PLAYER_ANIM_XBOW_RUN, PLAYER_ANIM_XBOW_ATTACK,
-        27, 0, 0,
-        155.0f, 146.0f, 41.0f, 5.0f, 5.0f, 11.0f, 5.0f,
+        {1120, 1116, 0, 163.0f, 146.0f, 41.0f, 15.0f, 5.0f, 11.0f, 5.0f, 0},
     },
     [FC_LOADOUT_MSBI_PURE] = {
         PLAYER_ANIM_HUMAN_IDLE, PLAYER_ANIM_HUMAN_WALK,
         PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
         PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
         PLAYER_ANIM_HUMAN_RUN, PLAYER_ANIM_BOW_ATTACK,
-        15, 24, 0,
-        163.0f, 146.0f, 41.0f, 15.0f, 5.0f, 11.0f, 5.0f,
+        {15, 24, 0, 163.0f, 146.0f, 41.0f, 15.0f, 5.0f, 11.0f, 5.0f, 0},
     },
     [FC_LOADOUT_BLOWPIPE_PURE] = {
         PLAYER_ANIM_HUMAN_IDLE, PLAYER_ANIM_HUMAN_WALK,
         PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
         PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
         PLAYER_ANIM_HUMAN_RUN, PLAYER_ANIM_BLOWPIPE_ATTACK,
-        230, 236, 0,
-        163.0f, 146.0f, 32.0f, 15.0f, 0.0f, 11.0f, 5.0f,
+        {230, 236, 0, 163.0f, 146.0f, 32.0f, 15.0f, 0.0f, 11.0f, 5.0f, 0},
     },
     [FC_LOADOUT_ACB_ARMADYL] = {
         PLAYER_ANIM_XBOW_IDLE, PLAYER_ANIM_XBOW_WALK,
         PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
         PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
         PLAYER_ANIM_XBOW_RUN, PLAYER_ANIM_XBOW_ATTACK,
-        1468, 0, 0,
-        155.0f, 146.0f, 41.0f, 5.0f, 5.0f, 11.0f, 5.0f,
+        {1468, 0, 0, 155.0f, 146.0f, 41.0f, 5.0f, 5.0f, 11.0f, 5.0f, 0},
     },
     [FC_LOADOUT_BOWFA_CRYSTAL] = {
         PLAYER_ANIM_HUMAN_IDLE, PLAYER_ANIM_HUMAN_WALK,
         PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
         PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
         PLAYER_ANIM_HUMAN_RUN, PLAYER_ANIM_BOW_ATTACK,
-        1922, 1923, 0,
-        163.0f, 146.0f, 41.0f, 15.0f, 5.0f, 11.0f, 5.0f,
-    },
-    [FC_LOADOUT_TBOW_MASORI] = {
-        PLAYER_ANIM_HUMAN_IDLE, PLAYER_ANIM_HUMAN_WALK,
-        PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
-        PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
-        PLAYER_ANIM_HUMAN_RUN, PLAYER_ANIM_BOW_ATTACK,
-        1120, 1116, 0,
-        163.0f, 146.0f, 41.0f, 15.0f, 5.0f, 11.0f, 5.0f,
+        {1922, 1923, 0, 163.0f, 146.0f, 41.0f, 15.0f, 5.0f, 11.0f, 5.0f, 0},
     },
 };
 
@@ -5402,16 +5382,17 @@ static const FcNpcAnims *npc_anims(int npc_type) {
     return &NPC_ANIMS[npc_type];
 }
 
-const FcPlayerVisualProfile *fc_player_visual_profile(int active_loadout) {
+/* visual_profile -1 is unarmed: no projectile. */
+const FcPlayerVisualProfile *fc_player_visual_profile(int visual_profile) {
     static const FcPlayerVisualProfile unarmed = {
         .idle_anim=808, .walk_anim=819, .walk_back_anim=820,
         .walk_left_anim=822, .walk_right_anim=821, .turn_anim=823,
         .run_anim=824, .attack_anim=422,
     };
-    if (active_loadout == -1) return &unarmed;
-    if (active_loadout < 0 || active_loadout >= FC_NUM_LOADOUTS)
-        active_loadout = FC_ACTIVE_LOADOUT;
-    return &PLAYER_VISUALS[active_loadout];
+    if (visual_profile == -1) return &unarmed;
+    if (visual_profile < 0 || visual_profile >= FC_NUM_LOADOUTS)
+        visual_profile = FC_ACTIVE_LOADOUT;
+    return &PLAYER_VISUALS[visual_profile];
 }
 
 int fc_player_equipment_visual_profile(const FcPlayer *player) {
@@ -5907,120 +5888,6 @@ int fc_actor_animation_previous_npc_active(const FcActorAnimation *animation,
         ? animation->npcs[npc_slot].previous_active : 0;
 }
 
-/* Projectile Visual */
-
-typedef struct {
-    float source_x;
-    float source_y;
-    float source_z;
-    float target_x;
-    float target_y;
-    float target_z;
-    float duration;
-    float angle;
-    float progress;
-} FcProjectilePath;
-
-typedef struct {
-    float x;
-    float y;
-    float z;
-    float velocity_x;
-    float velocity_z;
-} FcProjectileSample;
-
-typedef struct {
-    float launch_delay;
-    float flight_duration;
-    float total_duration;
-} FcProjectileTiming;
-
-float fc_projectile_profile_end_cycle(float launch_cycle,
-                                      float length_adjustment,
-                                      float step_multiplier,
-                                      int tile_distance) {
-    if (tile_distance < 0) tile_distance = 0;
-    float end_cycle = launch_cycle + length_adjustment +
-                      step_multiplier * (float)tile_distance;
-    return end_cycle > launch_cycle ? end_cycle : launch_cycle + 1.0f;
-}
-
-/* Convert the client's 30-cycle-per-game-tick projectile profile to viewer
- * seconds. The extra client cycle in flight_duration matches the client
- * endpoint convention used by RuneC's projectile sampler. */
-int fc_projectile_timing_from_client_cycles(float launch_cycle,
-                                            float end_cycle,
-                                            float ticks_per_second,
-                                            FcProjectileTiming* timing) {
-    if (!timing || ticks_per_second <= 0.0f || launch_cycle < 0.0f ||
-        end_cycle <= launch_cycle)
-        return 0;
-
-    float seconds_per_client_cycle = 1.0f / (30.0f * ticks_per_second);
-    timing->launch_delay = launch_cycle * seconds_per_client_cycle;
-    timing->flight_duration =
-        (end_cycle + 1.0f - launch_cycle) * seconds_per_client_cycle;
-    timing->total_duration = timing->launch_delay + timing->flight_duration;
-    return 1;
-}
-
-/* Effects are retained only until either their animation ends or the client
- * retention window closes. This prevents short spot animations from looping. */
-float fc_projectile_effect_duration_seconds(float animation_client_cycles,
-                                            float retain_client_cycles,
-                                            float ticks_per_second) {
-    if (ticks_per_second <= 0.0f || retain_client_cycles <= 0.0f)
-        return 0.0f;
-    if (animation_client_cycles <= 0.0f)
-        animation_client_cycles = 30.0f;
-    float visible_cycles = animation_client_cycles < retain_client_cycles
-        ? animation_client_cycles : retain_client_cycles;
-    return visible_cycles / (30.0f * ticks_per_second);
-}
-
-/* Sample the client projectile curve at an absolute point in its flight.
- * The target may be replaced on every render frame to reproduce the client's
- * actor-targeted homing behavior without frame-rate-dependent integration. */
-int fc_projectile_path_sample(const FcProjectilePath* path,
-                              float elapsed,
-                              FcProjectileSample* sample) {
-    if (!path || !sample || path->duration <= 0.0f)
-        return 0;
-
-    float dx = path->target_x - path->source_x;
-    float dz = path->target_z - path->source_z;
-    float horizontal = sqrtf(dx * dx + dz * dz);
-    float direction_x = 0.0f;
-    float direction_z = 1.0f;
-    if (horizontal > 0.00001f) {
-        direction_x = dx / horizontal;
-        direction_z = dz / horizontal;
-    }
-
-    float source_x = path->source_x + direction_x * path->progress;
-    float source_z = path->source_z + direction_z * path->progress;
-    float velocity_x = (path->target_x - source_x) / path->duration;
-    float velocity_z = (path->target_z - source_z) / path->duration;
-    float horizontal_speed = sqrtf(
-        velocity_x * velocity_x + velocity_z * velocity_z);
-    float velocity_y = horizontal_speed *
-        tanf(path->angle * (3.14159265358979323846f / 128.0f));
-    float acceleration_y = 2.0f *
-        (path->target_y - path->source_y - velocity_y * path->duration) /
-        (path->duration * path->duration);
-
-    float t = elapsed;
-    if (t < 0.0f) t = 0.0f;
-    if (t > path->duration) t = path->duration;
-    sample->x = source_x + velocity_x * t;
-    sample->y = path->source_y + velocity_y * t +
-                0.5f * acceleration_y * t * t;
-    sample->z = source_z + velocity_z * t;
-    sample->velocity_x = velocity_x;
-    sample->velocity_z = velocity_z;
-    return 1;
-}
-
 /* Click Feedback */
 
 #define FC_CLICK_CROSS_FRAME_COUNT 4
@@ -6263,7 +6130,6 @@ typedef struct {
     float hitsplat_world_z;
     int hitsplat_damage;
     uint32_t spot_id;
-    uint32_t launch_spot_id;
     uint32_t impact_spot_id;
     float projectile_angle;
     float projectile_progress;
@@ -6428,57 +6294,6 @@ void fc_combat_presentation_clear_npc_healthbar(
     presentation->npc_healthbar_timers[npc_slot] = 0.0f;
 }
 
-static VisualEffect *spawn_effect(FcCombatPresentation *presentation,
-                                  uint32_t spot_id, float x, float y, float z,
-                                  float duration, float yaw_degrees) {
-    if (!presentation || spot_id == 0) return NULL;
-    for (int i = 0; i < MAX_VISUAL_EFFECTS; i++) {
-        if (!presentation->effects[i].active) {
-            VisualEffect *effect = &presentation->effects[i];
-            memset(effect, 0, sizeof(*effect));
-            effect->active = 1;
-            effect->x = x;
-            effect->y = y;
-            effect->z = z;
-            effect->total_time = duration;
-            effect->spot_id = spot_id;
-            effect->yaw_degrees = yaw_degrees;
-            return effect;
-        }
-    }
-    return NULL;
-}
-
-static VisualProjectile *spawn_projectile(FcCombatPresentation *presentation,
-    float source_x, float source_y, float source_z,
-    float target_x, float target_y, float target_z, float travel_seconds,
-    uint32_t travel_spot, uint32_t launch_spot, uint32_t impact_spot) {
-    if (!presentation ||
-        (travel_spot == 0 && launch_spot == 0 && impact_spot == 0)) return NULL;
-    for (int i = 0; i < MAX_PROJECTILES; i++) {
-        if (!presentation->projectiles[i].active) {
-            VisualProjectile *projectile = &presentation->projectiles[i];
-            free_projectile(projectile);
-            projectile->active = 1;
-            projectile->src_x = source_x;
-            projectile->src_y = source_y;
-            projectile->src_z = source_z;
-            projectile->dst_x = target_x;
-            projectile->dst_y = target_y;
-            projectile->dst_z = target_z;
-            projectile->x = source_x;
-            projectile->y = source_y;
-            projectile->z = source_z;
-            projectile->total_time = travel_seconds;
-            projectile->spot_id = travel_spot;
-            projectile->launch_spot_id = launch_spot;
-            projectile->impact_spot_id = impact_spot;
-            return projectile;
-        }
-    }
-    return NULL;
-}
-
 static int actor_world_point(const FcCombatPresentationContext *context,
                              FcVisualTargetKind kind, int slot,
                              float *x, float *y, float *z) {
@@ -6508,6 +6323,12 @@ static int tile_distance(int source_x, int source_y,
     return dx > dy ? dx : dy;
 }
 
+static int clamp_int(int value, int lo, int hi) {
+    if (value < lo) return lo;
+    if (value > hi) return hi;
+    return value;
+}
+
 static float animation_client_cycles(const AnimSequence *sequence) {
     if (!sequence || sequence->frame_count == 0) return 0.0f;
     float total = 0.0f;
@@ -6516,45 +6337,93 @@ static float animation_client_cycles(const AnimSequence *sequence) {
     return total;
 }
 
-static float effect_duration(const FcCombatPresentation *presentation,
-                             const FcCombatPresentationContext *context,
-                             uint32_t spot_id, float retained_cycles) {
-    const SpotAnimDef *spot = presentation && presentation->spotanims
-        ? spotanim_find(presentation->spotanims, (int)spot_id) : NULL;
+/* Starts a spot animation at a point. It shows until its animation ends (30
+ * client cycles without one) or the client stops retaining it after
+ * retained_cycles, whichever is sooner, so short spot animations never loop. */
+static VisualEffect *spawn_effect(FcCombatPresentation *presentation,
+                                  const FcCombatPresentationContext *context,
+                                  uint32_t spot_id, float x, float y, float z,
+                                  float retained_cycles, float yaw_degrees) {
+    if (spot_id == 0) return NULL;
+    const SpotAnimDef *spot = spotanim_find(presentation->spotanims,
+                                            (int)spot_id);
     float cycles = 0.0f;
-    if (spot && spot->animation_id >= 0 && context && context->anim_cache) {
+    if (spot && spot->animation_id >= 0) {
         cycles = animation_client_cycles(anim_get_sequence(
             context->anim_cache, (uint16_t)spot->animation_id));
     }
-    return fc_projectile_effect_duration_seconds(cycles, retained_cycles,
-        context && context->tps > 0.0f
-            ? context->tps : POLICY_REPLAY_BASE_TPS);
+    if (cycles <= 0.0f) cycles = 30.0f;
+    if (cycles > retained_cycles) cycles = retained_cycles;
+    for (int i = 0; i < MAX_VISUAL_EFFECTS; i++) {
+        if (!presentation->effects[i].active) {
+            VisualEffect *effect = &presentation->effects[i];
+            memset(effect, 0, sizeof(*effect));
+            effect->active = 1;
+            effect->x = x;
+            effect->y = y;
+            effect->z = z;
+            effect->total_time = cycles / (30.0f * context->tps);
+            effect->spot_id = spot_id;
+            effect->yaw_degrees = yaw_degrees;
+            return effect;
+        }
+    }
+    return NULL;
 }
 
-static void configure_tracking(FcCombatPresentation *presentation,
-    const FcCombatPresentationContext *context, VisualProjectile *projectile,
+/* Fires a projectile from a source tile at a target footprint, timed in
+ * client cycles (30 per game tick): it leaves at launch_cycle and flies
+ * through end_cycle, length_adjustment + step_multiplier per tile later. Each
+ * end then follows its actor (the target only when tracked), keeping the
+ * profile's height as an offset. Also starts the launch spot animation. */
+static void launch_projectile(FcCombatPresentation *presentation,
+    const FcCombatPresentationContext *context,
+    const FcProjectileProfile *profile, int attack_style,
     FcVisualTargetKind source_kind, int source_slot,
-    FcVisualTargetKind target_kind, int target_slot, int attack_style,
-    float launch_cycles, float end_cycles, float angle, float progress,
-    int track_target) {
-    if (!presentation || !context || !projectile) return;
+    int source_x, int source_y,
+    FcVisualTargetKind target_kind, int target_slot,
+    int target_x, int target_y, int target_size) {
+    if (!profile->travel_spot && !profile->launch_spot && !profile->impact_spot)
+        return; /* nothing to show, e.g. unarmed */
+    VisualProjectile *projectile = NULL;
+    for (int i = 0; i < MAX_PROJECTILES && !projectile; i++) {
+        if (!presentation->projectiles[i].active)
+            projectile = &presentation->projectiles[i];
+    }
+    if (!projectile) return;
+    free_projectile(projectile);
+    projectile->active = 1;
+    projectile->spot_id = profile->travel_spot;
+    projectile->impact_spot_id = profile->impact_spot;
     projectile->source_kind = source_kind;
     projectile->source_slot = source_slot;
     projectile->target_kind = target_kind;
     projectile->target_slot = target_slot;
-    projectile->track_target = track_target;
+    projectile->track_target = !profile->fixed_target;
     projectile->attack_style = attack_style;
     projectile->launch_tick = context->state->tick;
-    projectile->projectile_angle = angle >= 0.0f ? angle : 15.0f;
-    projectile->projectile_progress = progress >= 0.0f ? progress : 0.0f;
-    FcProjectileTiming timing = {0};
-    if (fc_projectile_timing_from_client_cycles(
-            launch_cycles, end_cycles, context->tps, &timing)) {
-        projectile->launch_delay = timing.launch_delay;
-        projectile->total_time = timing.total_duration;
-    } else {
-        projectile->launch_delay = 0.0f;
-    }
+    projectile->projectile_angle = profile->angle;
+    projectile->projectile_progress = profile->progress;
+
+    float end_cycle = profile->launch_cycle + profile->length_adjustment +
+        profile->step_multiplier *
+        (float)tile_distance(source_x, source_y, target_x, target_y);
+    if (end_cycle <= profile->launch_cycle)
+        end_cycle = profile->launch_cycle + 1.0f;
+    float seconds_per_cycle = 1.0f / (30.0f * context->tps);
+    float flight = (end_cycle + 1.0f - profile->launch_cycle) *
+                   seconds_per_cycle;
+    projectile->launch_delay = profile->launch_cycle * seconds_per_cycle;
+    projectile->total_time = projectile->launch_delay + flight;
+
+    projectile->src_x = (float)source_x + 0.5f;
+    projectile->src_y = ground_height(context, source_x, source_y) +
+                        profile->start_height / 128.0f;
+    projectile->src_z = -((float)source_y + 0.5f);
+    projectile->dst_x = (float)target_x + (float)target_size * 0.5f;
+    projectile->dst_y = ground_height(context, target_x, target_y) +
+                        profile->end_height / 128.0f;
+    projectile->dst_z = -((float)target_y + (float)target_size * 0.5f);
     float x;
     float y;
     float z;
@@ -6564,7 +6433,7 @@ static void configure_tracking(FcCombatPresentation *presentation,
         projectile->src_y = y + projectile->source_y_offset;
         projectile->src_z = z;
     }
-    if (track_target &&
+    if (projectile->track_target &&
         actor_world_point(context, target_kind, target_slot, &x, &y, &z)) {
         projectile->target_y_offset = projectile->dst_y - y;
         projectile->dst_x = x;
@@ -6574,15 +6443,14 @@ static void configure_tracking(FcCombatPresentation *presentation,
     projectile->x = projectile->src_x;
     projectile->y = projectile->src_y;
     projectile->z = projectile->src_z;
-    if (projectile->launch_spot_id != 0) {
-        float retain = launch_cycles > 30.0f ? launch_cycles : 30.0f;
-        float duration = effect_duration(presentation, context,
-                                         projectile->launch_spot_id, retain);
+    if (profile->launch_spot != 0) {
+        float retain = profile->launch_cycle > 30.0f
+            ? profile->launch_cycle : 30.0f;
         float yaw = atan2f(projectile->dst_x - projectile->src_x,
                            projectile->dst_z - projectile->src_z) * RAD2DEG;
-        VisualEffect *effect = spawn_effect(presentation,
-            projectile->launch_spot_id, projectile->src_x, projectile->src_y,
-            projectile->src_z, duration, yaw);
+        VisualEffect *effect = spawn_effect(presentation, context,
+            profile->launch_spot, projectile->src_x, projectile->src_y,
+            projectile->src_z, retain, yaw);
         if (effect) {
             effect->attached = 1;
             effect->attached_kind = source_kind;
@@ -6736,130 +6604,58 @@ void fc_combat_presentation_deferred_deaths(
 static void ingest_player_attack(FcCombatPresentation *presentation,
     const FcCombatPresentationContext *context) {
     const FcRenderEvents *events = context->events;
-    const FcPlayerVisualProfile *profile = context->player_profile;
-    if (!profile->projectile_travel_spot) return; /* unarmed: no projectile */
-    int sx = events->player_attack_source_x;
-    int sy = events->player_attack_source_y;
-    int tx = events->player_attack_target_x;
-    int ty = events->player_attack_target_y;
-    int target_size = events->player_attack_target_size;
-    float source_x = (float)sx + 0.5f;
-    float source_y = ground_height(context, sx, sy) +
-                     profile->projectile_start_height / 128.0f;
-    float source_z = -((float)sy + 0.5f);
-    float target_x = (float)tx + (float)target_size * 0.5f;
-    float target_y = ground_height(context, tx, ty) +
-                     profile->projectile_end_height / 128.0f;
-    float target_z = -((float)ty + (float)target_size * 0.5f);
-    float end_cycle = fc_projectile_profile_end_cycle(
-        profile->projectile_launch_delay_client_ticks,
-        profile->projectile_length_adjustment,
-        profile->projectile_step_multiplier, tile_distance(sx, sy, tx, ty));
-    VisualProjectile *projectile = spawn_projectile(presentation,
-        source_x, source_y, source_z, target_x, target_y, target_z, 0.1f,
-        profile->projectile_travel_spot, profile->projectile_launch_spot,
-        profile->projectile_impact_spot);
-    configure_tracking(presentation, context, projectile,
-        FC_VISUAL_TARGET_PLAYER, 0, FC_VISUAL_TARGET_NPC,
-        events->player_attack_target_npc_slot, ATTACK_RANGED,
-        profile->projectile_launch_delay_client_ticks, end_cycle,
-        profile->projectile_angle, profile->projectile_progress, 1);
+    launch_projectile(presentation, context,
+        &context->player_profile->projectile, ATTACK_RANGED,
+        FC_VISUAL_TARGET_PLAYER, 0,
+        events->player_attack_source_x, events->player_attack_source_y,
+        FC_VISUAL_TARGET_NPC, events->player_attack_target_npc_slot,
+        events->player_attack_target_x, events->player_attack_target_y,
+        events->player_attack_target_size);
 }
+
+/* NPC projectiles by attacker type and attack style; melee attacks have
+ * none. Profile columns follow FcProjectileProfile. */
+static const struct {
+    int npc_type;
+    int attack_style;
+    FcProjectileProfile profile;
+} NPC_PROJECTILES[] = {
+    {NPC_TOK_XIL, ATTACK_RANGED,
+     {PROJ_TOK_XIL_SPINE, 0, PROJ_TOK_XIL_IMPACT,
+      296.0f, 40.0f, 32.0f, 16.0f, 0.0f, 0.0f, 5.0f, 0}},
+    {NPC_KET_ZEK, ATTACK_MAGIC,
+     {PROJ_KET_ZEK_FIRE, 0, PROJ_KET_ZEK_IMPACT,
+      192.0f, 40.0f, 28.0f, 16.0f, 8.0f, 0.0f, 8.0f, 0}},
+    {NPC_TZTOK_JAD, ATTACK_MAGIC,
+     {PROJ_JAD_MAGIC_TRAVEL, PROJ_JAD_MAGIC_LAUNCH, PROJ_JAD_MAGIC_IMPACT,
+      172.0f, 124.0f, 41.0f, 16.0f, 0.0f, 64.0f, 5.0f, 0}},
+    /* Jad's ranged attack has no flight model: its impact lands 60 cycles
+     * after the attack where the player stood. */
+    {NPC_TZTOK_JAD, ATTACK_RANGED,
+     {0, 0, PROJ_JAD_RANGED_IMPACT,
+      768.0f, 52.0f, 0.0f, 0.0f, 60.0f, 0.0f, 0.0f, 1}},
+};
 
 static void ingest_npc_attack(FcCombatPresentation *presentation,
     const FcCombatPresentationContext *context,
     const FcRenderNpcAttack *attack) {
-    if (!attack->hit_queued || attack->attack_style == ATTACK_MELEE) return;
-    int source_x = attack->source_x;
-    int source_y = attack->source_y;
-    if (attack->source_size > 1) {
-        if (attack->target_x < attack->source_x) source_x = attack->source_x;
-        else if (attack->target_x >= attack->source_x + attack->source_size)
-            source_x = attack->source_x + attack->source_size - 1;
-        else source_x = attack->target_x;
-        if (attack->target_y < attack->source_y) source_y = attack->source_y;
-        else if (attack->target_y >= attack->source_y + attack->source_size)
-            source_y = attack->source_y + attack->source_size - 1;
-        else source_y = attack->target_y;
+    if (!attack->hit_queued) return;
+    const FcProjectileProfile *profile = NULL;
+    int rows = (int)(sizeof(NPC_PROJECTILES) / sizeof(NPC_PROJECTILES[0]));
+    for (int i = 0; i < rows && !profile; i++) {
+        if (NPC_PROJECTILES[i].npc_type == attack->npc_type &&
+            NPC_PROJECTILES[i].attack_style == attack->attack_style)
+            profile = &NPC_PROJECTILES[i].profile;
     }
-    float source_ground = ground_height(context, source_x, source_y);
-    float source_world_x = (float)source_x + 0.5f;
-    float source_world_y = source_ground + 1.0f +
-                           (float)attack->source_size * 0.3f;
-    float source_world_z = -((float)source_y + 0.5f);
-    float target_ground = ground_height(
-        context, attack->target_x, attack->target_y);
-    float target_world_x = (float)attack->target_x + 0.5f;
-    float target_world_y = target_ground + 1.5f;
-    float target_world_z = -((float)attack->target_y + 0.5f);
-    uint32_t travel_spot = 0;
-    uint32_t launch_spot = 0;
-    uint32_t impact_spot = 0;
-    float start_height = -1.0f;
-    float end_height = -1.0f;
-    float start_cycle = 0.0f;
-    float angle = -1.0f;
-    float length_adjustment = 0.0f;
-    float progress = -1.0f;
-    float step_multiplier = 0.0f;
-    float fixed_end_cycle = -1.0f;
-    int track_target = 1;
-    if (attack->npc_type == NPC_TOK_XIL) {
-        travel_spot = PROJ_TOK_XIL_SPINE;
-        impact_spot = PROJ_TOK_XIL_IMPACT;
-        start_height = 296.0f;
-        end_height = 40.0f;
-        start_cycle = 32.0f;
-        angle = 16.0f;
-        progress = 0.0f;
-        step_multiplier = 5.0f;
-    } else if (attack->npc_type == NPC_KET_ZEK) {
-        travel_spot = PROJ_KET_ZEK_FIRE;
-        impact_spot = PROJ_KET_ZEK_IMPACT;
-        start_height = 192.0f;
-        end_height = 40.0f;
-        start_cycle = 28.0f;
-        angle = 16.0f;
-        length_adjustment = 8.0f;
-        progress = 0.0f;
-        step_multiplier = 8.0f;
-    } else if (attack->npc_type == NPC_TZTOK_JAD &&
-               attack->attack_style == ATTACK_MAGIC) {
-        launch_spot = PROJ_JAD_MAGIC_LAUNCH;
-        travel_spot = PROJ_JAD_MAGIC_TRAVEL;
-        impact_spot = PROJ_JAD_MAGIC_IMPACT;
-        start_height = 172.0f;
-        end_height = 124.0f;
-        start_cycle = 41.0f;
-        angle = 16.0f;
-        progress = 64.0f;
-        step_multiplier = 5.0f;
-    } else if (attack->npc_type == NPC_TZTOK_JAD &&
-               attack->attack_style == ATTACK_RANGED) {
-        impact_spot = PROJ_JAD_RANGED_IMPACT;
-        start_height = 768.0f;
-        end_height = 52.0f;
-        angle = 0.0f;
-        progress = 0.0f;
-        fixed_end_cycle = 60.0f;
-        track_target = 0;
-    }
-    if (start_height >= 0.0f)
-        source_world_y = source_ground + start_height / 128.0f;
-    if (end_height >= 0.0f)
-        target_world_y = target_ground + end_height / 128.0f;
-    float end_cycle = fixed_end_cycle >= 0.0f ? fixed_end_cycle
-        : fc_projectile_profile_end_cycle(start_cycle, length_adjustment,
-            step_multiplier, tile_distance(source_x, source_y,
-                                             attack->target_x, attack->target_y));
-    VisualProjectile *projectile = spawn_projectile(presentation,
-        source_world_x, source_world_y, source_world_z,
-        target_world_x, target_world_y, target_world_z,
-        0.1f, travel_spot, launch_spot, impact_spot);
-    configure_tracking(presentation, context, projectile,
+    if (!profile) return;
+    /* Large NPCs fire from their footprint tile nearest the target. */
+    int last_x = attack->source_x + attack->source_size - 1;
+    int last_y = attack->source_y + attack->source_size - 1;
+    launch_projectile(presentation, context, profile, attack->attack_style,
         FC_VISUAL_TARGET_NPC, attack->npc_slot,
-        FC_VISUAL_TARGET_PLAYER, 0, attack->attack_style,
-        start_cycle, end_cycle, angle, progress, track_target);
+        clamp_int(attack->target_x, attack->source_x, last_x),
+        clamp_int(attack->target_y, attack->source_y, last_y),
+        FC_VISUAL_TARGET_PLAYER, 0, attack->target_x, attack->target_y, 1);
 }
 
 void fc_combat_presentation_ingest_tick(
@@ -6868,13 +6664,9 @@ void fc_combat_presentation_ingest_tick(
     if (!presentation || !context || !context->state || !context->events ||
         !context->player_profile) return;
     const FcState *state = context->state;
-    int player_x = state->player.x;
-    int player_y = state->player.y;
-    if (player_x < 0) player_x = 0;
-    if (player_y < 0) player_y = 0;
-    if (player_x >= FC_ARENA_WIDTH) player_x = FC_ARENA_WIDTH - 1;
-    if (player_y >= FC_ARENA_HEIGHT) player_y = FC_ARENA_HEIGHT - 1;
-    float player_ground = ground_height(context, player_x, player_y);
+    float player_ground = ground_height(context,
+        clamp_int(state->player.x, 0, FC_ARENA_WIDTH - 1),
+        clamp_int(state->player.y, 0, FC_ARENA_HEIGHT - 1));
     float player_world_x = (float)state->player.x + 0.5f;
     float player_world_z = -((float)state->player.y + 0.5f);
     if (state->tz_kih_prayer_drain_this_tick > 0) {
@@ -6962,26 +6754,39 @@ static int update_projectile(const FcCombatPresentationContext *context,
     projectile->launched = 1;
     float duration = projectile->total_time - projectile->launch_delay;
     if (duration < 0.001f) duration = 0.001f;
-    FcProjectilePath path = {
-        .source_x = projectile->src_x,
-        .source_y = projectile->src_y,
-        .source_z = projectile->src_z,
-        .target_x = projectile->dst_x,
-        .target_y = projectile->dst_y,
-        .target_z = projectile->dst_z,
-        .duration = duration,
-        .angle = projectile->projectile_angle,
-        .progress = projectile->projectile_progress / 128.0f,
-    };
-    FcProjectileSample sample = {0};
-    if (fc_projectile_path_sample(&path, end - projectile->launch_delay,
-                                  &sample)) {
-        projectile->x = sample.x;
-        projectile->y = sample.y;
-        projectile->z = sample.z;
-        projectile->velocity_x = sample.velocity_x;
-        projectile->velocity_z = sample.velocity_z;
+    /* Sample the client projectile curve at an absolute point t of the
+     * flight (0..duration): the start moves `progress` toward the target,
+     * leaves at `angle` and accelerates to the target height. The ends may
+     * move every frame, reproducing the client's homing without
+     * frame-rate-dependent integration. */
+    float dx = projectile->dst_x - projectile->src_x;
+    float dz = projectile->dst_z - projectile->src_z;
+    float horizontal = sqrtf(dx * dx + dz * dz);
+    float direction_x = 0.0f;
+    float direction_z = 1.0f;
+    if (horizontal > 0.00001f) {
+        direction_x = dx / horizontal;
+        direction_z = dz / horizontal;
     }
+    float progress = projectile->projectile_progress / 128.0f;
+    float source_x = projectile->src_x + direction_x * progress;
+    float source_z = projectile->src_z + direction_z * progress;
+    float velocity_x = (projectile->dst_x - source_x) / duration;
+    float velocity_z = (projectile->dst_z - source_z) / duration;
+    float horizontal_speed = sqrtf(
+        velocity_x * velocity_x + velocity_z * velocity_z);
+    float velocity_y = horizontal_speed *
+        tanf(projectile->projectile_angle * (3.14159265358979323846f / 128.0f));
+    float acceleration_y = 2.0f *
+        (projectile->dst_y - projectile->src_y - velocity_y * duration) /
+        (duration * duration);
+    float t = end - projectile->launch_delay;
+    projectile->x = source_x + velocity_x * t;
+    projectile->y = projectile->src_y + velocity_y * t +
+                    0.5f * acceleration_y * t * t;
+    projectile->z = source_z + velocity_z * t;
+    projectile->velocity_x = velocity_x;
+    projectile->velocity_z = velocity_z;
     projectile->elapsed = end;
     if (end >= projectile->total_time) {
         projectile->x = projectile->dst_x;
@@ -7020,10 +6825,8 @@ void fc_combat_presentation_update(
         VisualProjectile *projectile = &presentation->projectiles[i];
         if (!projectile->active || !update_projectile(context, projectile, dt))
             continue;
-        float duration = effect_duration(presentation, context,
-                                         projectile->impact_spot_id, 90.0f);
-        spawn_effect(presentation, projectile->impact_spot_id,
-            projectile->x, projectile->y, projectile->z, duration, 0.0f);
+        spawn_effect(presentation, context, projectile->impact_spot_id,
+            projectile->x, projectile->y, projectile->z, 90.0f, 0.0f);
         if (projectile->has_deferred_hitsplat) {
             spawn_hitsplat(presentation, projectile->hitsplat_actor_kind,
                 projectile->hitsplat_actor_slot, projectile->hitsplat_world_x,
