@@ -1013,10 +1013,10 @@ static void replay_controls_test(FightCaves* env) {
     assert(v->pending_tile_x == -1 && v->pending_attack_npc == -1);
     assert(!v->godmode && fc_state_hash(&v->state) == hash);
     v->paused = 1;
-    assert(fc_viewer_frame(v, 1) == 0);
+    assert(fc_viewer_frame(v) == 0);
     v->step_once = 1;
-    assert(fc_viewer_frame(v, 1) == 1);
-    assert(fc_viewer_frame(v, 1) == 0);
+    assert(fc_viewer_frame(v) == 1);
+    assert(fc_viewer_frame(v) == 0);
     assert(fc_state_hash(&v->state) == hash);
     assert(fc_state_hash(&env->state) == hash);
     v->paused = 0;

@@ -1,6 +1,7 @@
 /*
  * viewer.c — Fight Caves viewer: asset loading, the game interface, 3D rendering
- * and debug overlays, and the playable window and replay loop.
+ * and debug overlays, and the playable window and replay loop. It is compiled
+ * only as part of binding.c, after the core and fc_apply_env_config.
  *
  * Controls:
  *   Space       — pause/resume              Right      — single-step one tick
@@ -30,11 +31,7 @@
 #include "raylib.h"
 #include "raymath.h"
 #include "rlgl.h"
-#ifndef FC_VIEWER_EMBEDDED
-#define FC_CORE_IMPLEMENTATION
-#endif
-#include "core.h"
-#undef FC_CORE_IMPLEMENTATION
+#include "fight_caves.h"
 
 #include <errno.h>
 #include <float.h>
@@ -6944,12 +6941,11 @@ static const FcRenderEntity *find_actor(
     return NULL;
 }
 
-static FcVisualPose entity_pose(const FcCombatPresentationDrawContext *context,
+static FcVisualPose entity_pose(const FcVisualScene *scene,
                                 const FcRenderEntity *entity) {
     return entity->entity_type == ENTITY_PLAYER
-        ? fc_visual_scene_player_pose(context->presentation.scene)
-        : fc_visual_scene_npc_pose(context->presentation.scene,
-                                   entity->npc_slot);
+        ? fc_visual_scene_player_pose(scene)
+        : fc_visual_scene_npc_pose(scene, entity->npc_slot);
 }
 
 static float entity_model_top(const FcCombatPresentationDrawContext *context,
@@ -6975,7 +6971,7 @@ static float entity_model_top(const FcCombatPresentationDrawContext *context,
 static Vector3 overlay_anchor(const FcCombatPresentationDrawContext *context,
                               const FcRenderEntity *entity,
                               float height_fraction, float extra_height) {
-    FcVisualPose pose = entity_pose(context, entity);
+    FcVisualPose pose = entity_pose(context->presentation.scene, entity);
     return (Vector3){
         pose.x,
         smooth_ground_height(context->presentation.terrain, pose.x, pose.y) +
@@ -7794,9 +7790,6 @@ typedef struct ViewerState {
     float cam_yaw, cam_pitch, cam_dist;
     int camera_locked;
     int actions[FC_NUM_ACTION_HEADS];
-    uint32_t seed, last_hash;
-    int episode_count;
-    int attack_target;   /* NPC slot index for attack (-1 = none) */
     /* Terrain + Objects + NPC models */
     TerrainMesh* terrain;
     FcMinimapScene minimap_scene;
@@ -7856,17 +7849,6 @@ static void viewer_trace_log_to_stderr(int log_level, const char* text,
     fputc('\n', stderr);
 }
 
-static void set_ui_slot(RuneCUiSlot* slot, uint32_t item_id, int quantity,
-                        const char* label) {
-    if (!slot) return;
-    memset(slot, 0, sizeof(*slot));
-    if (item_id == 0 || quantity <= 0) return;
-    slot->item_id = item_id;
-    slot->quantity = quantity;
-    snprintf(slot->label, sizeof(slot->label), "%s", label ? label : "Item");
-    slot->enabled = 1;
-}
-
 /* The FC_PROTECTION_PRAYERS row of a PRAYER_PROTECT_* value, or -1. */
 static int protection_prayer_index(int prayer) {
     for (int i = 0; i < FC_PROTECTION_PRAYER_COUNT; i++) {
@@ -7924,11 +7906,17 @@ static int load_fc_ui_item_icons(ViewerState* v) {
 
 static void sync_item_slots(RuneCUiSlot *slots, const FcItemStack *items, int count) {
     for (int i = 0; i < count; i++) {
-        memset(&slots[i], 0, sizeof(slots[i]));
+        RuneCUiSlot *slot = &slots[i];
+        memset(slot, 0, sizeof(*slot));
         const FcItemDef *item = fc_item_definition(items[i].item_id);
         if (!item) continue;
-        set_ui_slot(&slots[i], (uint32_t)item->id, items[i].quantity, item->name);
-        slots[i].action = item->slot == FC_EQUIP_SLOT_WEAPON ? "Wield" :
+        if (items[i].quantity > 0) {
+            slot->item_id = (uint32_t)item->id;
+            slot->quantity = items[i].quantity;
+            snprintf(slot->label, sizeof(slot->label), "%s", item->name);
+            slot->enabled = 1;
+        }
+        slot->action = item->slot == FC_EQUIP_SLOT_WEAPON ? "Wield" :
             item->slot >= 0 ? "Wear" : item->id == 385 ? "Eat" :
             item->id == 229 ? "Use" : "Drink";
     }
@@ -8066,7 +8054,7 @@ static void use_inventory_slot(ViewerState *v, int slot) {
     FcItemResult result;
     if (item->slot >= 0) {
         result = fc_equip_item(&v->state, slot);
-        if (result == FC_ITEM_OK) v->pending_attack_npc = v->attack_target = -1;
+        if (result == FC_ITEM_OK) v->pending_attack_npc = -1;
     } else {
         result = fc_select_consumable(&v->state, slot);
         if (result == FC_ITEM_OK) {
@@ -8347,7 +8335,8 @@ static void print_replay_episode_summary(const ViewerState* v) {
         "\"env/jad_healing_total\":%.6f,"
         "\"env/episode_length\":%d,"
         "\"env/n\":1.0}\n",
-        v->replay_episode_count + 1, v->seed, fc_terminal_name(v->state.terminal),
+        v->replay_episode_count + 1, v->state.rng_seed,
+        fc_terminal_name(v->state.terminal),
         summary.zero_progress_ticks,
         summary.wave_reached,
         summary.wrong_prayer_hits,
@@ -8376,14 +8365,10 @@ static void sync_player_appearance(ViewerState *v) {
 }
 
 static void fc_viewer_reset_presentation(ViewerState* v) {
-    v->seed = v->state.rng_seed;
     sync_player_appearance(v);
     v->item_message_seconds = 0.0f;
     fc_fill_render_entities(&v->state, v->entities, &v->entity_count);
     fc_fill_render_events(&v->state, &v->render_events);
-    v->last_hash = fc_state_hash(&v->state);
-    v->episode_count++;
-    v->attack_target = -1;
     memset(v->actions, 0, sizeof(v->actions));
     fc_combat_presentation_reset(v->combat_presentation);
     fc_actor_animation_reset(&v->actor_animation, &v->state,
@@ -8403,8 +8388,7 @@ static void reset_ep(ViewerState* v) {
     v->scene_right_tracking = v->scene_right_dragged = 0;
     load_reward_params(v);
     reset_reward_tracking(v);
-    v->seed = (uint32_t)GetRandomValue(1, 999999);
-    fc_reset(&v->state, v->seed);
+    fc_reset(&v->state, (uint32_t)GetRandomValue(1, 999999));
     /* Skip to start_wave if set */
     if (v->start_wave > 1 && v->start_wave <= FC_NUM_WAVES) {
         for (int i = 0; i < FC_MAX_NPCS; i++) {
@@ -8446,7 +8430,6 @@ static void viewer_jump_to_wave(ViewerState* v, int wave) {
     fc_combat_presentation_reset(v->combat_presentation);
     fc_actor_animation_reset(&v->actor_animation, &v->state,
                              v->appearance.model, v->active_loadout);
-    v->attack_target = -1;
     fc_click_feedback_reset(&v->click_feedback);
     dbg_log_clear();
 }
@@ -8619,25 +8602,6 @@ static void build_human_actions(ViewerState* v) {
     v->pending_tile_y = -1;
 }
 
-typedef struct {
-    float x;
-    float y;
-    float face_angle;
-} EntityRenderPose;
-
-static EntityRenderPose entity_render_pose(const ViewerState* v,
-                                           const FcRenderEntity* e) {
-    EntityRenderPose pose = {0};
-    if (!v || !e) return pose;
-    FcVisualPose visual = e->entity_type == ENTITY_PLAYER
-        ? fc_visual_scene_player_pose(&v->actor_animation.scene)
-        : fc_visual_scene_npc_pose(&v->actor_animation.scene, e->npc_slot);
-    pose.x = visual.x;
-    pose.y = visual.y;
-    pose.face_angle = visual.yaw_degrees;
-    return pose;
-}
-
 static Vector2 click_route_point_to_screen(ViewerState* v,
                                            float tile_x, float tile_y) {
     Vector3 world = {
@@ -8710,7 +8674,7 @@ static Vector3 camera_follow_target(const ViewerState* v) {
     float cx = FC_ARENA_WIDTH * 0.5f;
     float cy = -(FC_ARENA_HEIGHT * 0.5f);
     if (v->entity_count > 0) {
-        EntityRenderPose pose = entity_render_pose(v, &v->entities[0]);
+        FcVisualPose pose = entity_pose(&v->actor_animation.scene, &v->entities[0]);
         cx = pose.x;
         cy = -pose.y;
     }
@@ -8730,7 +8694,7 @@ static void draw_npc_prayer_window_indicators(ViewerState* v) {
             continue;
         }
 
-        EntityRenderPose pose = entity_render_pose(v, entity);
+        FcVisualPose pose = entity_pose(&v->actor_animation.scene, entity);
         Vector3 anchor = {
             pose.x,
             smooth_ground_height(v->terrain, pose.x, pose.y) +
@@ -8876,7 +8840,7 @@ static void draw_scene(ViewerState* v) {
     for (int i = 0; i < v->entity_count; i++) {
         FcRenderEntity* e = &v->entities[i];
 
-        EntityRenderPose pose = entity_render_pose(v, e);
+        FcVisualPose pose = entity_pose(&v->actor_animation.scene, e);
         float ex = pose.x;
         float ey = -pose.y;
 
@@ -8903,7 +8867,7 @@ static void draw_scene(ViewerState* v) {
         }
         rlDisableBackfaceCulling();
         DrawModelEx(model->model, (Vector3){ex, gy, ey}, (Vector3){0,1,0},
-                    pose.face_angle, (Vector3){1,1,1}, WHITE);
+                    pose.yaw_degrees, (Vector3){1,1,1}, WHITE);
         rlEnableBackfaceCulling();
     }
 
@@ -8955,7 +8919,7 @@ static void draw_scene(ViewerState* v) {
     int prayer_row = protection_prayer_index(fc_actor_animation_render_prayer(
         &v->actor_animation, &v->state));
     if (v->entity_count > 0 && prayer_row >= 0) {
-        EntityRenderPose pose = entity_render_pose(v, &v->entities[0]);
+        FcVisualPose pose = entity_pose(&v->actor_animation.scene, &v->entities[0]);
         float p_gy = smooth_ground_height(v->terrain, pose.x, pose.y);
         Vector3 head_pos = {pose.x, p_gy + 3.0f, -pose.y};
         Vector2 scr = GetWorldToScreen(head_pos, v->camera);
@@ -9578,7 +9542,6 @@ static ViewerState* fc_viewer_create(int replay) {
     int item_icons_ready = load_fc_ui_item_icons(v);
     v->paused = 1; v->tps = POLICY_REPLAY_BASE_TPS;
     v->active_loadout = FC_ACTIVE_LOADOUT;
-    v->attack_target = -1;
     v->cam_yaw = 0; v->cam_pitch = 0.8f; v->cam_dist = 30;
     v->camera_locked = 1;
     v->camera.up = (Vector3){0,1,0}; v->camera.fovy = 32;
@@ -9755,7 +9718,6 @@ static void fc_viewer_ingest_tick(ViewerState* v) {
     }
 
     fc_fill_render_entities(&v->state, v->entities, &v->entity_count);
-    v->last_hash = fc_state_hash(&v->state);
 
     FcCombatPresentationContext combat_context = {
         .state = &v->state,
@@ -9768,21 +9730,11 @@ static void fc_viewer_ingest_tick(ViewerState* v) {
     };
     fc_combat_presentation_ingest_tick(v->combat_presentation,
                                         &combat_context);
-    /* Sync viewer attack_target with player's backend target */
-    v->attack_target = v->state.player.attack_target_idx;
-    /* Auto-clear if target NPC died */
-    if (v->state.player.attack_target_idx >= 0) {
-        FcNpc* tn = &v->state.npcs[v->state.player.attack_target_idx];
-        if (!tn->active || tn->is_dead) {
-            v->attack_target = -1;
-        }
-    }
-
 }
 
 /* Return 1 when a simulation tick is due, 0 for another display frame,
- * and -1 when the window closes. External evaluation never steps a copy. */
-static int fc_viewer_frame(ViewerState* v, int external) {
+ * and -1 when the window closes. Policy replay never steps its state copy. */
+static int fc_viewer_frame(ViewerState* v) {
     if (WindowShouldClose()) return -1;
     int ui_capture = 0;
     /* Age the previous click before capturing this frame's input. A newly
@@ -9827,10 +9779,8 @@ static int fc_viewer_frame(ViewerState* v, int external) {
             toggle_debug_overlay(v);
         }
     }
-    /* D: match the on-screen controls without interfering with east movement */
-    if (IsKeyPressed(KEY_D) && !IsKeyDown(KEY_W) && !IsKeyDown(KEY_A) && !IsKeyDown(KEY_S)) {
-        toggle_debug_overlay(v);
-    }
+    /* D: the same toggle as O */
+    if (IsKeyPressed(KEY_D)) toggle_debug_overlay(v);
     /* Camera presets */
     if ((!v->policy_replay && IsKeyPressed(KEY_FOUR)) ||
         (v->policy_replay &&
@@ -9912,7 +9862,7 @@ static int fc_viewer_frame(ViewerState* v, int external) {
         process_human_keys(v);
     }
 
-    if (!external && tick && v->state.terminal == TERMINAL_NONE) {
+    if (!v->policy_replay && tick && v->state.terminal == TERMINAL_NONE) {
         build_human_actions(v);
 
         fc_actor_animation_capture_tick_start(&v->actor_animation,
@@ -9989,8 +9939,6 @@ static int fc_viewer_frame(ViewerState* v, int external) {
     return tick;
 }
 
-#ifdef FC_VIEWER_EMBEDDED
-
 /* Consume the latest authoritative transition, including a terminal snapshot
  * saved before Puffer's same-step autoreset. State is copied, never advanced. */
 static void fc_viewer_present_pending(ViewerState* v) {
@@ -10013,8 +9961,6 @@ static void fc_viewer_present_pending(ViewerState* v) {
     }
     v->pending_frame = 0;
 }
-
-#endif
 
 int fc_viewer_main(int argc, char** argv) {
     const char* screenshot_path = NULL;
@@ -10044,7 +9990,7 @@ int fc_viewer_main(int argc, char** argv) {
     v->start_wave = start_wave;
     reset_ep(v);
     int frame_count = 0;
-    while (fc_viewer_frame(v, 0) >= 0) {
+    while (fc_viewer_frame(v) >= 0) {
         if (screenshot_path && ++frame_count == 6) {
             TakeScreenshot(screenshot_path);
             break;
@@ -10053,9 +9999,3 @@ int fc_viewer_main(int argc, char** argv) {
     fc_viewer_destroy(v);
     return EXIT_SUCCESS;
 }
-
-#ifndef FC_VIEWER_EMBEDDED
-int main(int argc, char** argv) {
-    return fc_viewer_main(argc, argv);
-}
-#endif

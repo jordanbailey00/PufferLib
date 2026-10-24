@@ -26,9 +26,7 @@ static void fc_apply_env_config(Dict* kwargs, FcRewardParams* reward,
     *initial_prayer_doses = item ? (int)item->value : 0;
 }
 
-#define FC_VIEWER_EMBEDDED
 #include "viewer.c"
-#undef FC_VIEWER_EMBEDDED
 
 static void fc_puffer_accumulate_episode_summary(
     Log* log, const FcEpisodeSummary* summary) {
@@ -195,7 +193,7 @@ void puf_render(Env* env) {
     fc_viewer_present_pending(v);
     int frame;
     do {
-        frame = fc_viewer_frame(env->viewer, 1);
+        frame = fc_viewer_frame(env->viewer);
     } while (frame == 0);
     if (frame < 0) {
         fc_viewer_destroy(env->viewer);
