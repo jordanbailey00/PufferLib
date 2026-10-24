@@ -1836,8 +1836,8 @@ void fc_player_appearance_free(FcPlayerAppearance *appearance) {
 
 /*
  * OSRS UI reference constants copied from the osrs-dumps interface
- * definitions (toplevel_osrs_stretch, orbs, inventory,
- * combat_interface and wornitems). These mirror what Void/RSMod open
+ * definitions (toplevel_osrs_stretch, orbs, inventory and
+ * combat_interface). These mirror what Void/RSMod open
  * server-side; the viewer should use these as layout authority instead of
  * hand-tuned gameframe coordinates.
  */
@@ -1897,16 +1897,16 @@ typedef struct RuneCUiStoneRef {
 static const RuneCUiStoneRef RUNEC_OSRS_SIDE_STONES[] = {
     {0, "side_stone_highlights_0", "side_icon_combat",    {0,   0, 38, 36}, {4,   0, 33, 36}},
     {-1, "side_stone_highlights_4", "side_icon_stats",    {38,  0, 33, 36}, {38,  0, 33, 36}},
-    {1, "side_stone_highlights_4", "side_icon_quests",    {71,  0, 38, 36}, {71,  0, 33, 36}},
-    {2, "side_stone_highlights_4", "side_icon_inventory", {104, 0, 33, 36}, {104, 0, 33, 36}},
-    {3, "side_stone_highlights_4", "side_icon_equipment", {137, 0, 33, 36}, {137, 0, 33, 36}},
-    {4, "side_stone_highlights_4", "side_icon_prayer",    {170, 0, 33, 36}, {170, 0, 33, 36}},
+    {-1, "side_stone_highlights_4", "side_icon_quests",   {71,  0, 38, 36}, {71,  0, 33, 36}},
+    {1, "side_stone_highlights_4", "side_icon_inventory", {104, 0, 33, 36}, {104, 0, 33, 36}},
+    {2, "side_stone_highlights_4", "side_icon_equipment", {137, 0, 33, 36}, {137, 0, 33, 36}},
+    {3, "side_stone_highlights_4", "side_icon_prayer",    {170, 0, 33, 36}, {170, 0, 33, 36}},
     {-1, "side_stone_highlights_1", "side_icon_magic",    {203, 0, 38, 36}, {204, 0, 33, 36}},
-    {6, "side_stone_highlights_2", "side_icon_clan",     {0,   0, 38, 36}, {4,   0, 33, 36}},
-    {7, "side_stone_highlights_4", "side_icon_friends",  {38,  0, 33, 36}, {38,  0, 33, 36}},
+    {-1, "side_stone_highlights_2", "side_icon_clan",     {0,   0, 38, 36}, {4,   0, 33, 36}},
+    {-1, "side_stone_highlights_4", "side_icon_friends",  {38,  0, 33, 36}, {38,  0, 33, 36}},
     {-1, "side_stone_highlights_4", "side_icon_grouping", {71,  0, 33, 36}, {71,  0, 33, 36}},
     {-1, "side_stone_highlights_4", "side_icon_logout",   {104, 0, 33, 36}, {104, 0, 33, 36}},
-    {5, "side_stone_highlights_4", "side_icon_options",   {137, 0, 33, 36}, {137, 0, 33, 36}},
+    {-1, "side_stone_highlights_4", "side_icon_options",  {137, 0, 33, 36}, {137, 0, 33, 36}},
     {-1, "side_stone_highlights_4", "side_icon_emotes",   {170, 0, 33, 36}, {170, 0, 33, 36}},
     {-1, "side_stone_highlights_3", "side_icon_music",    {203, 0, 38, 36}, {204, 0, 33, 36}},
 };
@@ -1928,19 +1928,6 @@ static const Rectangle RUNEC_OSRS_COMBAT_HEADER = {10, 0, 170, 44};
 static const Rectangle RUNEC_OSRS_COMBAT_TITLE = {10, 6, 170, 14};
 static const Rectangle RUNEC_OSRS_COMBAT_LEVEL = {10, 26, 170, 12};
 static const Rectangle RUNEC_OSRS_COMBAT_CATEGORY = {0, 233, 190, 28};
-
-typedef struct RuneCUiWornButtonRef {
-    const char *asset;
-    Rectangle rect;
-    Rectangle icon_rect;
-} RuneCUiWornButtonRef;
-
-static const RuneCUiWornButtonRef RUNEC_OSRS_WORN_BUTTONS[] = {
-    {"options_icons_16", {7,   208, 40, 40}, {10,  210, 32, 32}},
-    {"options_icons_28", {52,  208, 40, 40}, {56,  212, 32, 32}},
-    {"options_icons_18", {97,  208, 40, 40}, {99,  211, 34, 34}},
-    {"whistle",          {142, 208, 40, 40}, {145, 211, 32, 32}},
-};
 
 /* Ui Assets */
 
@@ -1975,10 +1962,6 @@ static const char *const g_ui_asset_names[] = {
     "side_icon_emotes",
     "side_icon_music",
     "side_icon_grouping",
-    "options_icons_16",
-    "options_icons_18",
-    "options_icons_28",
-    "whistle",
     "orb_frame_0",
     "orb_frame_1",
     "orb_filler_0",
@@ -2612,13 +2595,9 @@ int fc_menu_action_at(FcMenuLayout menu, int rows, int x, int y) {
 typedef enum RuneCUiTab {
     RUNEC_UI_TAB_NONE = -1,
     RUNEC_UI_TAB_COMBAT = 0,
-    RUNEC_UI_TAB_QUESTS,
     RUNEC_UI_TAB_INVENTORY,
     RUNEC_UI_TAB_EQUIPMENT,
     RUNEC_UI_TAB_PRAYER,
-    RUNEC_UI_TAB_SETTINGS,
-    RUNEC_UI_TAB_CLAN_CHAT,
-    RUNEC_UI_TAB_FRIENDS,
     RUNEC_UI_TAB_COUNT
 } RuneCUiTab;
 
@@ -2833,20 +2812,6 @@ static float fmin2(float a, float b) {
     return a < b ? a : b;
 }
 
-const char *runec_ui_tab_name(RuneCUiTab tab) {
-    switch (tab) {
-    case RUNEC_UI_TAB_COMBAT: return "Combat";
-    case RUNEC_UI_TAB_QUESTS: return "Quests";
-    case RUNEC_UI_TAB_INVENTORY: return "Inventory";
-    case RUNEC_UI_TAB_EQUIPMENT: return "Equipment";
-    case RUNEC_UI_TAB_PRAYER: return "Prayer";
-    case RUNEC_UI_TAB_SETTINGS: return "Settings";
-    case RUNEC_UI_TAB_CLAN_CHAT: return "Clan Chat";
-    case RUNEC_UI_TAB_FRIENDS: return "Friends";
-    default: return "Unknown";
-    }
-}
-
 static void ui_layout(int screen_w, int screen_h, RuneCUiLayout *out) {
     memset(out, 0, sizeof(*out));
 
@@ -3005,20 +2970,6 @@ void runec_ui_init(RuneCUiState *ui) {
     ui->combat_profile = &g_combat_profiles[0];
     ui->context_source_slot = -1;
     ui->drag.source_slot = -1;
-    const char *start_tab = getenv("RUNEC_UI_START_TAB");
-    if (start_tab && start_tab[0]) {
-        for (int i = 0; i < RUNEC_UI_TAB_COUNT; i++) {
-            if (strcmp(start_tab, runec_ui_tab_name((RuneCUiTab)i)) == 0) {
-                ui->active_tab = (RuneCUiTab)i;
-                break;
-            }
-        }
-        if (start_tab[0] >= '0' && start_tab[0] <= '9') {
-            int tab_index = atoi(start_tab);
-            if (tab_index >= 0 && tab_index < RUNEC_UI_TAB_COUNT)
-                ui->active_tab = (RuneCUiTab)tab_index;
-        }
-    }
 
     runec_ui_assets_load(&ui->assets);
     Image minimap = GenImageColor(FC_MINIMAP_DISPLAY_SIZE, FC_MINIMAP_DISPLAY_SIZE, BLANK);
@@ -3695,14 +3646,6 @@ static void draw_equipment(const RuneCUiState *ui, const RuneCUiLayout *layout) 
         else if (g_worn_icon_names[i])
             draw_asset_centered(ui, g_worn_icon_names[i], r, 28, 28, (Color){190, 178, 150, 175});
     }
-
-    for (int i = 0; i < (int)(sizeof(RUNEC_OSRS_WORN_BUTTONS) / sizeof(RUNEC_OSRS_WORN_BUTTONS[0])); i++) {
-        const RuneCUiWornButtonRef *ref = &RUNEC_OSRS_WORN_BUTTONS[i];
-        Rectangle b = side_ref_rect(layout, ref->rect);
-        Rectangle icon = side_ref_rect(layout, ref->icon_rect);
-        runec_ui_draw_asset(&ui->assets, "combatboxes_0", b, WHITE);
-        draw_asset_centered(ui, ref->asset, icon, icon.width, icon.height, WHITE);
-    }
 }
 
 static void draw_combat_box(const RuneCUiState *ui, Rectangle r, int selected) {
@@ -3746,14 +3689,6 @@ static void draw_combat(const RuneCUiState *ui, const RuneCUiLayout *layout) {
                        12, OSRS_ORANGE);
 }
 
-static void draw_placeholder_tab(const RuneCUiState *ui, const RuneCUiLayout *layout,
-                                 const char *title, const char *body) {
-    draw_centered_text(ui, title, side_ref_rect(layout, (Rectangle){0, 26, 190, 20}),
-                       15, OSRS_YELLOW);
-    draw_centered_text(ui, body, side_ref_rect(layout, (Rectangle){10, 105, 170, 36}),
-                       12, OSRS_ORANGE);
-}
-
 static void draw_side(RuneCUiState *ui, const RuneCUiLayout *layout) {
     draw_side_chrome(ui, layout);
 
@@ -3769,16 +3704,6 @@ static void draw_side(RuneCUiState *ui, const RuneCUiLayout *layout) {
         break;
     case RUNEC_UI_TAB_COMBAT:
         draw_combat(ui, layout);
-        break;
-    case RUNEC_UI_TAB_QUESTS:
-        draw_placeholder_tab(ui, layout, "Quest List", "Quest journal surface.");
-        break;
-    case RUNEC_UI_TAB_SETTINGS:
-        draw_placeholder_tab(ui, layout, "Settings", "Viewer options surface.");
-        break;
-    case RUNEC_UI_TAB_CLAN_CHAT:
-        break;
-    case RUNEC_UI_TAB_FRIENDS:
         break;
     default:
         break;
