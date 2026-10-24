@@ -506,10 +506,13 @@ typedef struct {
     uint16_t pad;
 } FcTextureAnimRow;
 
+/* The texture atlas shared by terrain objects and textured models. Its
+ * animated cells scroll every frame: each one is rebuilt from base_pixels in
+ * cell_pixels and uploaded on its own. */
 typedef struct {
     Texture2D texture;
     unsigned char* base_pixels;
-    unsigned char* pixels;
+    unsigned char* cell_pixels;
     FcTextureAnimRow* anims;
     int width;
     int height;
@@ -549,8 +552,7 @@ static void fc_animated_atlas_load_anims(FcAnimatedAtlas* atlas,
     char path[FC_ASSET_PATH_MAX];
     FcReader r;
 
-    if (!atlas || !atlas->base_pixels || !atlas->pixels
-            || !fc_companion_path(path, sizeof(path), atlas_path, ".tanim")
+    if (!fc_companion_path(path, sizeof(path), atlas_path, ".tanim")
             || !fc_asset_exists(path) || !fc_reader_open(&r, path))
         return;
     uint32_t magic = fc_read_u32(&r);
@@ -560,16 +562,24 @@ static void fc_animated_atlas_load_anims(FcAnimatedAtlas* atlas,
                           && version == FC_TEXTURE_ANIM_VERSION,
                       "unsupported texture animation format");
     FcTextureAnimRow* rows = fc_read_array(&r, count, sizeof(*rows));
+    size_t cell_size = 0;
+    for (uint32_t i = 0; rows && i < count; i++) {
+        size_t size = (size_t)rows[i].w * rows[i].h * 4;
+        if (size > cell_size) cell_size = size;
+    }
+    atlas->cell_pixels = fc_alloc_array(&r, cell_size, 1);
     fc_reader_close(&r);
-    if (!r.ok) return;
+    if (!r.ok) {
+        free(rows);
+        return;
+    }
     atlas->anims = rows;
     atlas->anim_count = (int)count;
     fprintf(stderr, "animated atlas: %d cells loaded from %s\n",
             atlas->anim_count, path);
 }
 
-int fc_animated_atlas_load(FcAnimatedAtlas* atlas, const char* atlas_path,
-                           int enable_animation) {
+int fc_animated_atlas_load(FcAnimatedAtlas* atlas, const char* atlas_path) {
     FcAnimatedAtlas loaded = {0};
     FcReader r;
     Image image;
@@ -582,14 +592,12 @@ int fc_animated_atlas_load(FcAnimatedAtlas* atlas, const char* atlas_path,
     uint32_t height = fc_read_u32(&r);
     fc_reader_require(&r, magic == FC_ATLAS_MAGIC && width > 0 && height > 0,
                       "not a texture atlas");
-    unsigned char* source_pixels =
-        fc_read_array(&r, (size_t)width * height, 4);
+    loaded.base_pixels = fc_read_array(&r, (size_t)width * height, 4);
     fc_reader_close(&r);
     if (!r.ok) return 0;
-    size_t pixel_size = (size_t)width * height * 4;
 
     image = (Image) {
-        .data = source_pixels,
+        .data = loaded.base_pixels,
         .width = (int)width,
         .height = (int)height,
         .mipmaps = 1,
@@ -597,28 +605,13 @@ int fc_animated_atlas_load(FcAnimatedAtlas* atlas, const char* atlas_path,
     };
     loaded.texture = LoadTextureFromImage(image);
     if (loaded.texture.id == 0) {
-        free(source_pixels);
+        free(loaded.base_pixels);
         return 0;
     }
     SetTextureFilter(loaded.texture, TEXTURE_FILTER_POINT);
     loaded.width = (int)width;
     loaded.height = (int)height;
-    if (enable_animation) {
-        loaded.base_pixels = malloc(pixel_size);
-        loaded.pixels = malloc(pixel_size);
-        if (loaded.base_pixels && loaded.pixels) {
-            memcpy(loaded.base_pixels, source_pixels, pixel_size);
-            memcpy(loaded.pixels, source_pixels, pixel_size);
-        } else {
-            free(loaded.base_pixels);
-            free(loaded.pixels);
-            loaded.base_pixels = NULL;
-            loaded.pixels = NULL;
-        }
-    }
-    free(source_pixels);
-    if (enable_animation)
-        fc_animated_atlas_load_anims(&loaded, atlas_path);
+    fc_animated_atlas_load_anims(&loaded, atlas_path);
     *atlas = loaded;
     fprintf(stderr, "animated atlas: %ux%u loaded from %s\n",
             width, height, atlas_path);
@@ -626,16 +619,13 @@ int fc_animated_atlas_load(FcAnimatedAtlas* atlas, const char* atlas_path,
 }
 
 void fc_animated_atlas_update(FcAnimatedAtlas* atlas, float dt) {
-    size_t total;
-    if (!atlas || !atlas->pixels || !atlas->base_pixels
-            || atlas->texture.id == 0 || atlas->anim_count <= 0)
+    if (!atlas || atlas->texture.id == 0 || atlas->anim_count <= 0)
         return;
 
     atlas->anim_ticks += dt * 50.0f;
-    total = (size_t)atlas->width * (size_t)atlas->height * 4;
-    memcpy(atlas->pixels, atlas->base_pixels, total);
     for (int r = 0; r < atlas->anim_count; r++) {
         FcTextureAnimRow* row = &atlas->anims[r];
+        unsigned char* cell = atlas->cell_pixels;
         int shift;
         if (row->w == 0 || row->h == 0
                 || row->x + row->w > atlas->width
@@ -655,11 +645,10 @@ void fc_animated_atlas_update(FcAnimatedAtlas* atlas, float dt) {
                 if (sy < 0) sy += center_h;
                 sy += pad;
                 for (int x = 0; x < row->w; x++) {
-                    size_t dst = ((size_t)(row->y + y) * atlas->width
-                                  + row->x + x) * 4;
+                    size_t dst = ((size_t)y * row->w + x) * 4;
                     size_t src = ((size_t)(row->y + sy) * atlas->width
                                   + row->x + x) * 4;
-                    memcpy(&atlas->pixels[dst], &atlas->base_pixels[src], 4);
+                    memcpy(&cell[dst], &atlas->base_pixels[src], 4);
                 }
             }
         } else if (row->direction == 2 || row->direction == 4) {
@@ -671,23 +660,25 @@ void fc_animated_atlas_update(FcAnimatedAtlas* atlas, float dt) {
                     size_t dst;
                     size_t src;
                     if (sx < 0) sx += row->w;
-                    dst = ((size_t)(row->y + y) * atlas->width
-                           + row->x + x) * 4;
+                    dst = ((size_t)y * row->w + x) * 4;
                     src = ((size_t)(row->y + y) * atlas->width
                            + row->x + sx) * 4;
-                    memcpy(&atlas->pixels[dst], &atlas->base_pixels[src], 4);
+                    memcpy(&cell[dst], &atlas->base_pixels[src], 4);
                 }
             }
+        } else {
+            continue;
         }
+        Rectangle area = {row->x, row->y, row->w, row->h};
+        UpdateTextureRec(atlas->texture, area, cell);
     }
-    UpdateTexture(atlas->texture, atlas->pixels);
 }
 
 void fc_animated_atlas_unload(FcAnimatedAtlas* atlas) {
     if (!atlas) return;
     if (atlas->texture.id > 0) UnloadTexture(atlas->texture);
     free(atlas->base_pixels);
-    free(atlas->pixels);
+    free(atlas->cell_pixels);
     free(atlas->anims);
     *atlas = (FcAnimatedAtlas) {0};
 }
@@ -1938,17 +1929,16 @@ void fc_model_animation_update(NpcModelEntry *entry,
  *   v1 (OBJS): vertices + colors only (flat vertex coloring)
  *   v2 (OBJ2): vertices + colors + texcoords (texture atlas support)
  *
- * When v2 format is detected, also loads the companion .atlas file (raw RGBA)
- * and assigns it as the model's diffuse texture. Vertex colors are multiplied
- * by the texture sample: textured faces use white vertex color + real texture,
- * non-textured faces use HSL vertex color + white atlas pixel.
+ * In the v2 format the shared texture atlas becomes the model's diffuse
+ * texture. Vertex colors are multiplied by the texture sample: textured faces
+ * use white vertex color + real texture, non-textured faces use HSL vertex
+ * color + white atlas pixel.
  */
 
 #define OANM_FLAG_DYNAMIC_REPLACEMENT 2u
 
 typedef struct {
     Model model;
-    FcAnimatedAtlas atlas;
     int placement_count;
     int total_vertex_count;
     int min_world_x;
@@ -1983,7 +1973,7 @@ typedef struct {
 #define OBJ2_MAGIC 0x4F424A32  /* "OBJ2" v2 with texcoords */
 #define OANM_MAGIC 0x4D4E414F  /* "OANM" animated object placements */
 #define OANM_VERSION 1
-ObjectMesh* objects_load(const char* path) {
+ObjectMesh* objects_load(const char* path, Texture2D atlas_texture) {
     ObjectMesh* om = (ObjectMesh*)calloc(1, sizeof(ObjectMesh));
     FcReader r;
     if (!om || !fc_reader_open(&r, path)) {
@@ -2054,27 +2044,9 @@ ObjectMesh* objects_load(const char* path) {
     om->min_world_y = min_wy;
     om->has_textures = has_textures;
     om->loaded = 1;
-
-    /* load atlas texture if v2 format */
-    if (has_textures) {
-        /* derive atlas path from objects path: replace .objects with .atlas */
-        char atlas_path[1024];
-        strncpy(atlas_path, path, sizeof(atlas_path) - 1);
-        atlas_path[sizeof(atlas_path) - 1] = '\0';
-        char* dot = strrchr(atlas_path, '.');
-        if (dot) {
-            strcpy(dot, ".atlas");
-        } else {
-            strncat(atlas_path, ".atlas", sizeof(atlas_path) - strlen(atlas_path) - 1);
-        }
-
-        if (fc_animated_atlas_load(&om->atlas, atlas_path, 1)) {
-            /* assign atlas as diffuse map for the model's material */
-            om->model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture =
-                om->atlas.texture;
-        }
-    }
-
+    if (has_textures)
+        om->model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture =
+            atlas_texture;
     return om;
 }
 
@@ -2143,7 +2115,6 @@ void objects_offset(ObjectMesh* om, int wx, int wy) {
 
 void objects_free(ObjectMesh* om) {
     if (!om) return;
-    fc_animated_atlas_unload(&om->atlas);
     if (om->loaded) UnloadModel(om->model);
     free(om);
 }
@@ -9313,7 +9284,7 @@ typedef struct ViewerState {
     FcMinimapScene minimap_scene;
     ObjectMesh* objects;
     ObjectAnimSet* object_anims;
-    FcAnimatedAtlas shared_model_atlas;
+    FcAnimatedAtlas atlas;
     NpcModelSet* object_anim_models;
     ObjectAnimRuntime* object_anim_runtimes;
     int object_anim_runtime_count;
@@ -10089,9 +10060,10 @@ static TerrainMesh* load_terrain(ViewerState* v) {
 }
 
 /* Objects loader — no modifications */
-static ObjectMesh* load_objects_with_terrain(TerrainMesh* tm) {
+static ObjectMesh* load_objects_with_terrain(TerrainMesh* tm,
+                                             Texture2D atlas_texture) {
     (void)tm;
-    ObjectMesh* om = objects_load("fightcaves.objects");
+    ObjectMesh* om = objects_load("fightcaves.objects", atlas_texture);
     if (om && om->loaded) {
         objects_offset(om, FC_WORLD_ORIGIN_X, FC_WORLD_ORIGIN_Y);
 
@@ -11316,7 +11288,7 @@ static void fc_viewer_destroy(ViewerState* v) {
     fc_player_appearance_free(&v->appearance);
     if (v->npc_models) fc_npc_models_unload(v->npc_models);
     if (v->object_anim_models) fc_npc_models_unload(v->object_anim_models);
-    fc_animated_atlas_unload(&v->shared_model_atlas);
+    fc_animated_atlas_unload(&v->atlas);
     if (v->object_anims) object_anims_free(v->object_anims);
     objects_free(v->objects);
     fc_minimap_scene_free(&v->minimap_scene);
@@ -11404,16 +11376,16 @@ static ViewerState* fc_viewer_create(int replay) {
     } else {
         fprintf(stderr, "error: missing fightcaves.minimap.png\n");
     }
-    v->objects = load_objects_with_terrain(v->terrain);
+    if (!fc_animated_atlas_load(&v->atlas, "fightcaves.atlas"))
+        fprintf(stderr, "error: texture atlas failed to load\n");
+    v->objects = load_objects_with_terrain(v->terrain, v->atlas.texture);
     if (fc_asset_exists("fightcaves.oanim"))
         v->object_anims = object_anims_load("fightcaves.oanim");
     if (v->object_anims)
         object_anims_offset(v->object_anims, FC_WORLD_ORIGIN_X, FC_WORLD_ORIGIN_Y);
-    if (!fc_animated_atlas_load(&v->shared_model_atlas, "fightcaves.atlas", 0))
-        fprintf(stderr, "error: shared model atlas failed to load\n");
     if (fc_asset_exists("fightcaves.object_anim.models"))
         v->object_anim_models = fc_npc_models_load(
-            "fightcaves.object_anim.models", v->shared_model_atlas.texture);
+            "fightcaves.object_anim.models", v->atlas.texture);
     if (v->object_anims && v->object_anims->count > 0) {
         v->object_anim_runtimes = (ObjectAnimRuntime*)calloc(
             (size_t)v->object_anims->count, sizeof(*v->object_anim_runtimes));
@@ -11439,8 +11411,7 @@ static ViewerState* fc_viewer_create(int replay) {
     /* Load the animation cache shared by actor and combat presentation. */
     if (fc_asset_exists("fc_all.anims"))
         v->anim_cache = anim_cache_load("fc_all.anims");
-    v->combat_presentation = fc_combat_presentation_create(
-        v->shared_model_atlas.texture);
+    v->combat_presentation = fc_combat_presentation_create(v->atlas.texture);
     if (!v->combat_presentation)
         fprintf(stderr, "error: combat presentation initialization failed\n");
 
@@ -11511,13 +11482,12 @@ static ViewerState* fc_viewer_create(int replay) {
     REQUIRE_VIEWER_RESOURCE(item_icons_ready, "Fight Caves item icons");
     REQUIRE_VIEWER_RESOURCE(v->terrain && v->terrain->loaded, "terrain mesh");
     REQUIRE_VIEWER_RESOURCE(v->minimap_scene.ready, "minimap scene raster");
+    REQUIRE_VIEWER_RESOURCE(v->atlas.texture.id > 0, "texture atlas");
     REQUIRE_VIEWER_RESOURCE(v->objects && v->objects->loaded &&
-                            v->objects->atlas.texture.id > 0,
-                            "terrain objects and atlas");
+                            v->objects->has_textures,
+                            "textured terrain objects");
     REQUIRE_VIEWER_RESOURCE(v->object_anims && v->object_anims->loaded,
                             "object animation placements");
-    REQUIRE_VIEWER_RESOURCE(v->shared_model_atlas.texture.id > 0,
-                            "shared model atlas");
     REQUIRE_VIEWER_RESOURCE(v->object_anim_models &&
                             v->object_anim_models->loaded,
                             "animated object models");
@@ -11785,8 +11755,7 @@ static int fc_viewer_frame(ViewerState* v, int external) {
     fc_actor_animation_update_scene(
         &v->actor_animation, &v->state, v->anim_cache, v->tps, frame_dt,
         !v->paused || v->policy_replay, deferred_deaths);
-    if (v->objects)
-        fc_animated_atlas_update(&v->objects->atlas, frame_dt);
+    fc_animated_atlas_update(&v->atlas, frame_dt);
     fc_combat_presentation_update(v->combat_presentation,
                                   &combat_context, frame_dt);
     fc_combat_presentation_deferred_deaths(
