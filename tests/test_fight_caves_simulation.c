@@ -326,10 +326,11 @@ static int constant_tables(void) {
         }
         FcPlayer player = {0};
         apply_loadout_combat_fields(&player, loadout);
-        CHECK(fc_player_ranged_base_max_hit_hp(&player) > 0);
         for (int type = NPC_TZ_KIH; type < NPC_TYPE_COUNT; type++) {
             FcNpc target = {.npc_type = type};
-            CHECK(fc_player_ranged_final_max_hit_hp(&player, &target) > 0);
+            int attack_roll, max_hit;
+            fc_player_ranged_rolls(&player, &target, &attack_roll, &max_hit);
+            CHECK(max_hit > 0);
         }
     }
     /* NPC reach and attack rules assume a melee-style NPC has a melee hit. */
@@ -527,7 +528,7 @@ static int combat(void) {
         s.walkable, s.movement_flags, s.los_flags, route_x, route_y, 64);
     CHECK(len > 0);
     CHECK(fc_npc_can_melee_player(route_x[len-1], route_y[len-1], 25, 25, 5,
-                                s.walkable, s.movement_flags));
+                                s.movement_flags));
     return 0;
 }
 

@@ -7714,13 +7714,6 @@ int dbg_draw_panel_tabs(const FcState* state,
 #define MAX_TPS         60.0f
 #define MIN_TPS         0.25f
 
-#define FC_UI_ITEM_VIAL          229u
-#define FC_UI_ITEM_SHARK         385u
-#define FC_UI_ITEM_PRAYER_POT_3  139u
-#define FC_UI_ITEM_PRAYER_POT_2  141u
-#define FC_UI_ITEM_PRAYER_POT_1  143u
-#define FC_UI_ITEM_PRAYER_POT_4  2434u
-
 /* Colors */
 #define COL_BG          CLITERAL(Color){ 80, 80, 85, 255 }
 #define COL_PANEL       CLITERAL(Color){ 62, 53, 41, 255 }
@@ -7887,9 +7880,9 @@ static int load_ui_item_icon(RuneCUiState* ui, uint32_t item_id) {
 
 static int load_fc_ui_item_icons(ViewerState* v) {
     static const uint32_t ids[] = {
-        FC_UI_ITEM_VIAL, FC_UI_ITEM_SHARK,
-        FC_UI_ITEM_PRAYER_POT_1, FC_UI_ITEM_PRAYER_POT_2,
-        FC_UI_ITEM_PRAYER_POT_3, FC_UI_ITEM_PRAYER_POT_4,
+        FC_ITEM_ID_VIAL, FC_ITEM_ID_SHARK,
+        FC_ITEM_ID_PRAYER_POTION_1, FC_ITEM_ID_PRAYER_POTION_2,
+        FC_ITEM_ID_PRAYER_POTION_3, FC_ITEM_ID_PRAYER_POTION_4,
     };
     if (!v) return 0;
     int ready = 1;
@@ -7917,8 +7910,8 @@ static void sync_item_slots(RuneCUiSlot *slots, const FcItemStack *items, int co
             slot->enabled = 1;
         }
         slot->action = item->slot == FC_EQUIP_SLOT_WEAPON ? "Wield" :
-            item->slot >= 0 ? "Wear" : item->id == 385 ? "Eat" :
-            item->id == 229 ? "Use" : "Drink";
+            item->slot >= 0 ? "Wear" : item->id == FC_ITEM_ID_SHARK ? "Eat" :
+            item->id == FC_ITEM_ID_VIAL ? "Use" : "Drink";
     }
 }
 
@@ -8064,7 +8057,7 @@ static void use_inventory_slot(ViewerState *v, int slot) {
     } else {
         result = fc_select_consumable(&v->state, slot);
         if (result == FC_ITEM_OK) {
-            if (item->id == 385) v->pending_eat = FC_EAT_SHARK;
+            if (item->id == FC_ITEM_ID_SHARK) v->pending_eat = FC_EAT_SHARK;
             else v->pending_drink = FC_DRINK_PRAYER_POT;
         }
     }

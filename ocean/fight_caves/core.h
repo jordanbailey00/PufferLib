@@ -416,14 +416,7 @@ typedef struct {
     int x, y;
     int size;           /* tile size */
     int current_hp, max_hp;
-    int attack_style;   /* FcAttackStyle: current/last attack style */
-    int prayer;         /* FcPrayer: active prayer (player only) */
     int is_dead;
-
-    /* Per-tick events for hitsplat/animation rendering */
-    int damage_taken_this_tick;
-    int healing_received_this_tick;
-    int hit_landed_this_tick;
     int died_this_tick;
 
     int npc_slot;       /* NPC array index (for stable interpolation lookup) */
@@ -445,7 +438,6 @@ typedef struct {
     int source_size;
     int target_x;
     int target_y;
-    int hit_delay_ticks;
     int prayer_lock_tick;
     int hit_queued;
 } FcRenderNpcAttack;
@@ -456,7 +448,6 @@ typedef struct {
     int source_npc_slot;     /* -1 when the player is the source */
     int attack_style;
     int damage;
-    int blocked;
 } FcRenderHit;
 
 /*
@@ -466,12 +457,8 @@ typedef struct {
  * in combat, observations, rewards, or action validation.
  */
 typedef struct {
-    /* Prayer transition. A successful flick can begin and end on the same
-     * prayer, so final player.prayer alone cannot represent the off edge. */
-    int prayer_prior;
-    int prayer_final;
-    int prayer_off_performed;
-    int prayer_on_succeeded;
+    /* A successful flick can begin and end on the same prayer, so the final
+     * player.prayer alone cannot show its off edge. */
     int prayer_flick_performed;
 
     /* Player ranged attack, captured at its authoritative stationary launch
@@ -964,15 +951,8 @@ typedef struct {
 /* Prayer */
 
 typedef struct {
-    int prior_prayer;
-    int requested_final_prayer;
-    int actual_final_prayer;
-    int off_requested;
-    int off_performed;
-    int on_requested;
-    int on_succeeded;
-    int explicit_off_then_on;
-    int final_state_changed;
+    int changed;   /* the overhead prayer differs from before the action */
+    int flicked;   /* a flick action turned an active prayer off and back on */
 } FcPrayerTransition;
 
 
@@ -1147,6 +1127,17 @@ typedef enum {
     FC_ITEM_BUSY
 } FcItemResult;
 
+/* Item ids the rules and the viewer refer to by name. */
+enum {
+    FC_ITEM_ID_SHARK = 385,
+    FC_ITEM_ID_VIAL = 229,
+    FC_ITEM_ID_PRAYER_POTION_1 = 143,
+    FC_ITEM_ID_PRAYER_POTION_2 = 141,
+    FC_ITEM_ID_PRAYER_POTION_3 = 139,
+    FC_ITEM_ID_PRAYER_POTION_4 = 2434,
+    FC_ITEM_ID_TOXIC_BLOWPIPE = 12926,
+};
+
 
 #ifdef FC_CORE_IMPLEMENTATION
 
@@ -1169,7 +1160,6 @@ static int fc_has_los_between_areas(
     const uint8_t los_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]);
 static int fc_npc_can_melee_player(int player_x, int player_y,
                                    int npc_x, int npc_y, int npc_size,
-                                   const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
                                    const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]);
 static void fc_build_occupancy(const FcState* state,
                                uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
@@ -1190,7 +1180,7 @@ static void fc_write_reward_features(const FcState* state, float* out);
 static void fc_wave_spawn(FcState* state, int wave_num);
 static void fc_tick(FcState* state, const int actions[FC_NUM_ACTION_HEADS]);
 static void fc_spawn_position(int spawn_dir, int* x, int* y);
-static int fc_wave_check_advance(FcState* state);
+static void fc_wave_check_advance(FcState* state);
 
 /* Combat */
 
@@ -1231,51 +1221,20 @@ static int fc_player_def_roll(const FcPlayer* p, FcAttackType attack_type) {
     return eff_def * (def_bonus + 64);
 }
 
-static int fc_player_effective_ranged_level(const FcPlayer* p) {
-    /* Rapid is the active DPS style for both RCB and TBow in this sim. */
-    return p->ranged_level + 8;
-}
-
-static int fc_player_ranged_base_attack_roll(const FcPlayer* p) {
-    int eff_ranged = fc_player_effective_ranged_level(p);
-    return eff_ranged * (p->ranged_attack_bonus + 64);
-}
-
-static int fc_tbow_target_magic_level(const FcNpc* target) {
-    const FcNpcStats* stats = fc_npc_get_stats(target->npc_type);
-    int magic_level = stats->attack_level[ATTACK_MAGIC];
-
-    if (magic_level < 0) magic_level = 0;
-    if (magic_level > 250) magic_level = 250;  /* non-CoX cap */
-    return magic_level;
-}
-
-/* Twisted-bow staged multipliers (percent) against the target's Magic level. */
-static int fc_tbow_accuracy_multiplier_pct(int target_magic_level) {
+/* Twisted-bow multiplier in percent against the target's Magic level m
+ * (capped at 250 outside the Chambers of Xeric):
+ *   cap + (3m - center/10) / 100 - (3m/10 - center)^2 / 100, within [0, cap].
+ * Accuracy uses cap 140 and center 100; damage uses cap 250 and center 140. */
+static int fc_tbow_multiplier_pct(int target_magic_level, int cap, int center) {
     int64_t magic = target_magic_level;
     if (magic < 0) magic = 0;
     if (magic > 250) magic = 250;
 
-    int64_t inner = 3 * magic / 10;
-    int64_t delta = inner - 100;
-    int64_t pct = 140 + (3 * magic - 10) / 100 -
+    int64_t delta = 3 * magic / 10 - center;
+    int64_t pct = cap + (3 * magic - center / 10) / 100 -
                   delta * delta / 100;
     if (pct < 0) pct = 0;
-    if (pct > 140) pct = 140;
-    return (int)pct;
-}
-
-static int fc_tbow_damage_multiplier_pct(int target_magic_level) {
-    int64_t magic = target_magic_level;
-    if (magic < 0) magic = 0;
-    if (magic > 250) magic = 250;
-
-    int64_t inner = 3 * magic / 10;
-    int64_t delta = inner - 140;
-    int64_t pct = 250 + (3 * magic - 14) / 100 -
-                  delta * delta / 100;
-    if (pct < 0) pct = 0;
-    if (pct > 250) pct = 250;
+    if (pct > cap) pct = cap;
     return (int)pct;
 }
 
@@ -1303,72 +1262,37 @@ static int fc_apply_basis_points(int value, int bonus_bp) {
     return (int)((int64_t)value * (10000 + bonus_bp) / 10000);
 }
 
-static int fc_player_ranged_attack_roll(const FcPlayer* p, const FcNpc* target) {
-    int attack_roll = fc_player_ranged_base_attack_roll(p);
-
-    if (p->weapon_kind == FC_WEAPON_TWISTED_BOW && target) {
-        attack_roll = (int)((int64_t)attack_roll *
-            fc_tbow_accuracy_multiplier_pct(fc_tbow_target_magic_level(target)) /
-            100);
+/* Player ranged attack roll and max hit (whole HP) against a target. Rapid is
+ * the active style for every ranged weapon here, so the effective level is
+ * Ranged + 8. The Twisted bow scales both by the target's Magic level and the
+ * Bow of faerdhinen by the crystal armour pieces worn. */
+static void fc_player_ranged_rolls(const FcPlayer* p, const FcNpc* target,
+                                   int* attack_roll, int* max_hit) {
+    int level = p->ranged_level + 8;
+    *attack_roll = level * (p->ranged_attack_bonus + 64);
+    *max_hit = (int)(((int64_t)level * (p->ranged_strength_bonus + 64) + 320) /
+                     640);
+    if (p->weapon_kind == FC_WEAPON_TWISTED_BOW) {
+        const FcNpcStats* stats = fc_npc_get_stats(target->npc_type);
+        int magic = stats->attack_level[ATTACK_MAGIC];
+        *attack_roll = (int)((int64_t)*attack_roll *
+                             fc_tbow_multiplier_pct(magic, 140, 100) / 100);
+        *max_hit = (int)((int64_t)*max_hit *
+                         fc_tbow_multiplier_pct(magic, 250, 140) / 100);
     } else if (p->weapon_kind == FC_WEAPON_BOW_OF_FAERDHINEN) {
-        int accuracy_bp;
-        int damage_bp;
-        fc_crystal_modifiers_bp(p->crystal_piece_mask,
-                                &accuracy_bp, &damage_bp);
-        (void)damage_bp;
-        attack_roll = fc_apply_basis_points(attack_roll, accuracy_bp);
+        int accuracy_bp, damage_bp;
+        fc_crystal_modifiers_bp(p->crystal_piece_mask, &accuracy_bp, &damage_bp);
+        *attack_roll = fc_apply_basis_points(*attack_roll, accuracy_bp);
+        *max_hit = fc_apply_basis_points(*max_hit, damage_bp);
     }
-
-    return attack_roll;
 }
 
-static int fc_player_ranged_base_max_hit_hp(const FcPlayer* p) {
-    int eff_str = fc_player_effective_ranged_level(p);
-    return (int)(((int64_t)eff_str * (p->ranged_strength_bonus + 64) + 320) /
-                 640);
-}
-
-static int fc_player_ranged_final_max_hit_hp(const FcPlayer* p, const FcNpc* target) {
-    int base_hp = fc_player_ranged_base_max_hit_hp(p);
-
-    if (p->weapon_kind == FC_WEAPON_TWISTED_BOW && target) {
-        base_hp = (int)((int64_t)base_hp *
-            fc_tbow_damage_multiplier_pct(fc_tbow_target_magic_level(target)) /
-            100);
-    } else if (p->weapon_kind == FC_WEAPON_BOW_OF_FAERDHINEN) {
-        int accuracy_bp;
-        int damage_bp;
-        fc_crystal_modifiers_bp(p->crystal_piece_mask,
-                                &accuracy_bp, &damage_bp);
-        (void)accuracy_bp;
-        base_hp = fc_apply_basis_points(base_hp, damage_bp);
-    }
-
-    return base_hp;
-}
-
-static int fc_damage_max_valid(const FcState* state, int final_max_hit_hp) {
-    return state != NULL && final_max_hit_hp >= 0 &&
-           final_max_hit_hp <= INT_MAX / 10;
-}
-
-/* Damage helpers accept a whole-HP maximum and return tenths storage units. */
-static int fc_roll_player_damage_tenths(FcState* state, int final_max_hit_hp) {
-    if (!fc_damage_max_valid(state, final_max_hit_hp) ||
-        final_max_hit_hp == 0) {
-        return 0;
-    }
-    int rolled_hp = fc_rng_int(state, final_max_hit_hp + 1);
-    if (rolled_hp == 0) rolled_hp = 1;
-    return rolled_hp * 10;
-}
-
-static int fc_roll_npc_damage_tenths(FcState* state, int final_max_hit_hp) {
-    if (!fc_damage_max_valid(state, final_max_hit_hp) ||
-        final_max_hit_hp == 0) {
-        return 0;
-    }
-    return fc_rng_int(state, final_max_hit_hp + 1) * 10;
+/* Damage of a successful hit in tenths: a uniform roll of 0..max_hit whole HP,
+ * raised to min_hit (the player's hits deal at least 1). */
+static int fc_roll_damage_tenths(FcState* state, int max_hit, int min_hit) {
+    if (max_hit <= 0) return 0;
+    int rolled = fc_rng_int(state, max_hit + 1);
+    return (rolled < min_hit ? min_hit : rolled) * 10;
 }
 
 /* PvM protection: the matching protection prayer blocks all of a hit's
@@ -1439,10 +1363,20 @@ static int fc_queue_pending_hit(FcPendingHit hits[], int* num_hits, int max_hits
     return 1;
 }
 
+/* Set the player's attack target (-1 clears it) and forget any approach
+ * toward the previous one. */
+static void set_player_target(FcPlayer* p, int target_idx) {
+    p->attack_target_idx = target_idx;
+    p->approach_target = 0;
+    p->approach_target_x = -1;
+    p->approach_target_y = -1;
+    p->approach_target_size = 0;
+}
+
 /* Record a resolved hit for the viewer. */
 static void record_render_hit(FcState* state, int target_entity_type,
                               int target_npc_slot, int source_npc_slot,
-                              int attack_style, int damage, int blocked) {
+                              int attack_style, int damage) {
     FcRenderEvents* events = &state->render_events;
     if (events->hit_count >= FC_MAX_RENDER_HITS) return;
 
@@ -1452,7 +1386,6 @@ static void record_render_hit(FcState* state, int target_entity_type,
     hit->source_npc_slot = source_npc_slot;
     hit->attack_style = attack_style;
     hit->damage = damage;
-    hit->blocked = blocked;
 }
 
 /* Resolve the hits on the player whose delay ran out; run each tick after
@@ -1463,11 +1396,10 @@ static void fc_resolve_player_pending_hits(FcState* state) {
 
     for (int i = 0; i < p->num_pending_hits; i++) {
         FcPendingHit* h = &p->pending_hits[i];
-        if (!h->active) continue;
-
         h->ticks_remaining--;
         if (h->ticks_remaining <= 0) {
             /* Hit resolves now — use the prayer locked into this hit. */
+            FcNpc* source = &state->npcs[h->source_npc_idx];
             int locked_prayer = h->prayer_snapshot >= 0
                 ? h->prayer_snapshot : PRAYER_NONE;
             int blocked = fc_prayer_blocks_style(locked_prayer, h->attack_style);
@@ -1482,19 +1414,12 @@ static void fc_resolve_player_pending_hits(FcState* state) {
             p->hit_landed_this_tick = 1;
             record_render_hit(state, ENTITY_PLAYER, -1,
                               h->source_npc_idx, h->attack_style,
-                              final_damage, blocked);
+                              final_damage);
 
             /* Auto-retaliate: if player has no target, target the attacker.
              * approach_target stays 0 — player attacks in place, doesn't chase. */
-            if (p->attack_target_idx < 0 && h->source_npc_idx >= 0) {
-                FcNpc* attacker = &state->npcs[h->source_npc_idx];
-                if (attacker->active && !attacker->is_dead) {
-                    p->attack_target_idx = h->source_npc_idx;
-                    p->approach_target = 0;  /* don't chase, attack from here */
-                    p->approach_target_x = -1;
-                    p->approach_target_y = -1;
-                    p->approach_target_size = 0;
-                }
+            if (p->attack_target_idx < 0 && source->active && !source->is_dead) {
+                set_player_target(p, h->source_npc_idx);
             }
 
             /* Tz-Kih drains damage dealt + 1 Prayer point, with the base point
@@ -1502,33 +1427,26 @@ static void fc_resolve_player_pending_hits(FcState* state) {
              * both use tenths internally, so final_damage can be added directly. */
             if (h->prayer_drain > 0) {
                 int drain = h->prayer_drain;
-                if (h->source_npc_idx >= 0 && h->source_npc_idx < FC_MAX_NPCS &&
-                    state->npcs[h->source_npc_idx].npc_type == NPC_TZ_KIH) {
-                    drain += final_damage;
-                }
+                if (source->npc_type == NPC_TZ_KIH) drain += final_damage;
                 int actual_drain = fc_prayer_apply_loss_tenths(p, drain);
                 state->prayer_lost_this_tick += actual_drain;
                 state->tz_kih_prayer_drain_this_tick += actual_drain;
-                if (h->source_npc_idx >= 0 && h->source_npc_idx < FC_MAX_NPCS) {
-                    state->npcs[h->source_npc_idx].prayer_drain_dealt_this_tick +=
-                        actual_drain;
-                }
+                source->prayer_drain_dealt_this_tick += actual_drain;
             }
 
             /* Track prayer correctness. Correctly blocked Jad hits also use
              * the shared correct-prayer reward applied to every NPC. */
-            if (state->npcs[h->source_npc_idx].npc_type == NPC_TZTOK_JAD) {
+            if (source->npc_type == NPC_TZTOK_JAD) {
                 if (blocked) {
                     state->correct_jad_prayer = 1;
                     state->correct_danger_prayer = 1;
                 } else {
                     state->wrong_jad_prayer = 1;
                 }
-            } else if (h->attack_style == ATTACK_RANGED ||
-                       h->attack_style == ATTACK_MAGIC ||
-                       h->attack_style == ATTACK_MELEE) {
-                if (blocked) state->correct_danger_prayer = 1;
-                else state->wrong_danger_prayer = 1;
+            } else if (blocked) {
+                state->correct_danger_prayer = 1;
+            } else {
+                state->wrong_danger_prayer = 1;
             }
 
             if (locked_prayer != PRAYER_NONE && !blocked)
@@ -1596,8 +1514,6 @@ static void fc_resolve_npc_pending_hits(FcState* state, int npc_idx) {
 
     for (int i = 0; i < npc->num_pending_hits; i++) {
         FcPendingHit* h = &npc->pending_hits[i];
-        if (!h->active) continue;
-
         h->ticks_remaining--;
         if (h->ticks_remaining <= 0) {
             /* Player's hit lands on NPC */
@@ -1611,7 +1527,7 @@ static void fc_resolve_npc_pending_hits(FcState* state, int npc_idx) {
                 state->hits_landed_this_tick++;
             }
             record_render_hit(state, ENTITY_NPC, npc_idx, -1,
-                              h->attack_style, h->damage, 0);
+                              h->attack_style, h->damage);
 
             /* Track Jad-specific damage */
             if (npc->npc_type == NPC_TZTOK_JAD) {
@@ -2020,7 +1936,7 @@ static const FcItemDef ITEMS[] = {
     {.id=12788, .name="Magic shortbow (i)", .slot=FC_EQUIP_SLOT_WEAPON,
      .ranged_attack=75, .ranged_strength=0, .two_handed=1, .ranged_level=50,
      .weapon_kind=0, .speed=3, .range=7, .ammo_kind=AMMO_ARROW, .visual_profile=4},
-    {.id=12926, .name="Toxic blowpipe", .slot=FC_EQUIP_SLOT_WEAPON,
+    {.id=FC_ITEM_ID_TOXIC_BLOWPIPE, .name="Toxic blowpipe", .slot=FC_EQUIP_SLOT_WEAPON,
      .ranged_attack=30, .ranged_strength=20, .two_handed=1, .ranged_level=75,
      .weapon_kind=0, .speed=2, .range=5, .ammo_kind=AMMO_LOADED_DART, .visual_profile=5},
     {.id=11785, .name="Armadyl crossbow", .slot=FC_EQUIP_SLOT_WEAPON,
@@ -2037,12 +1953,12 @@ static const FcItemDef ITEMS[] = {
      .stackable=1, .ranged_strength=49, .ammo_kind=AMMO_ARROW},
     {.id=21946, .name="Diamond dragon bolts (e)", .slot=FC_EQUIP_SLOT_AMMO,
      .stackable=1, .ranged_strength=122, .ammo_kind=AMMO_BOLT, .ammo_tier=1},
-    {.id=385, .name="Shark", .slot=-1},
-    {.id=2434, .name="Prayer potion(4)", .slot=-1},
-    {.id=139, .name="Prayer potion(3)", .slot=-1},
-    {.id=141, .name="Prayer potion(2)", .slot=-1},
-    {.id=143, .name="Prayer potion(1)", .slot=-1},
-    {.id=229, .name="Vial", .slot=-1},
+    {.id=FC_ITEM_ID_SHARK, .name="Shark", .slot=-1},
+    {.id=FC_ITEM_ID_PRAYER_POTION_4, .name="Prayer potion(4)", .slot=-1},
+    {.id=FC_ITEM_ID_PRAYER_POTION_3, .name="Prayer potion(3)", .slot=-1},
+    {.id=FC_ITEM_ID_PRAYER_POTION_2, .name="Prayer potion(2)", .slot=-1},
+    {.id=FC_ITEM_ID_PRAYER_POTION_1, .name="Prayer potion(1)", .slot=-1},
+    {.id=FC_ITEM_ID_VIAL, .name="Vial", .slot=-1},
 };
 
 static const FcItemDef *fc_item_definition(int item_id) {
@@ -2094,10 +2010,10 @@ static void recalculate_equipment(FcPlayer *p) {
 
 static int potion_doses(int id) {
     switch (id) {
-        case 2434: return 4;
-        case 139: return 3;
-        case 141: return 2;
-        case 143: return 1;
+        case FC_ITEM_ID_PRAYER_POTION_4: return 4;
+        case FC_ITEM_ID_PRAYER_POTION_3: return 3;
+        case FC_ITEM_ID_PRAYER_POTION_2: return 2;
+        case FC_ITEM_ID_PRAYER_POTION_1: return 1;
         default: return 0;
     }
 }
@@ -2110,7 +2026,8 @@ static void reset_supplies(FcPlayer *p, int sharks, int doses) {
     memset(p->inventory, 0, sizeof(p->inventory));
     p->sharks_remaining = sharks;
     p->prayer_doses_remaining = doses;
-    const int pots[] = {0, 143, 141, 139, 2434};
+    const int pots[] = {0, FC_ITEM_ID_PRAYER_POTION_1, FC_ITEM_ID_PRAYER_POTION_2,
+                        FC_ITEM_ID_PRAYER_POTION_3, FC_ITEM_ID_PRAYER_POTION_4};
     int slot = 0;
     while (doses > 0) {
         int count = doses > 4 ? 4 : doses;
@@ -2118,7 +2035,7 @@ static void reset_supplies(FcPlayer *p, int sharks, int doses) {
         doses -= count;
     }
     for (int i = 0; i < sharks; i++)
-        p->inventory[slot++] = (FcItemStack){385, 1, 0};
+        p->inventory[slot++] = (FcItemStack){FC_ITEM_ID_SHARK, 1, 0};
     p->selected_food_slot = p->selected_potion_slot = -1;
 }
 
@@ -2134,7 +2051,7 @@ static void fc_items_init(FcPlayer *p, const FcLoadout *loadout) {
         const FcItemDef *item = fc_item_definition(loadout->equipment[i]);
         p->equipment[item->slot] = (FcItemStack){
             item->id, item->slot == FC_EQUIP_SLOT_AMMO ? loadout->ammo : 1,
-            item->id == 12926 ? loadout->ammo : 0
+            item->id == FC_ITEM_ID_TOXIC_BLOWPIPE ? loadout->ammo : 0
         };
     }
     recalculate_equipment(p);
@@ -2222,10 +2139,7 @@ static FcItemResult fc_equip_item(FcState *state, int index) {
     memcpy(p->inventory, inventory, sizeof(inventory));
     memcpy(p->equipment, equipment, sizeof(equipment));
     recalculate_equipment(p);
-    p->attack_target_idx = -1; /* held-item action interrupts interaction */
-    p->approach_target = 0;
-    p->approach_target_x = p->approach_target_y = -1;
-    p->approach_target_size = 0;
+    set_player_target(p, -1); /* held-item action interrupts interaction */
     return FC_ITEM_OK;
 }
 
@@ -2260,7 +2174,7 @@ static FcItemResult fc_select_consumable(FcState *state, int slot) {
     if (!can_change_items(state)) return FC_ITEM_BUSY;
     if (slot < 0 || slot >= FC_INVENTORY_SLOTS) return FC_ITEM_INVALID;
     int id = state->player.inventory[slot].item_id;
-    if (id == 385) state->player.selected_food_slot = slot;
+    if (id == FC_ITEM_ID_SHARK) state->player.selected_food_slot = slot;
     else if (potion_doses(id)) state->player.selected_potion_slot = slot;
     else return FC_ITEM_INVALID;
     return FC_ITEM_OK;
@@ -2274,11 +2188,13 @@ static void fc_items_consume(FcPlayer *p, int potion) {
         FcItemStack *item = &p->inventory[slot];
         int doses = potion_doses(item->item_id);
         if (potion && doses) {
-            const int replacement[] = {229, 143, 141, 139};
+            const int replacement[] = {
+                FC_ITEM_ID_VIAL, FC_ITEM_ID_PRAYER_POTION_1,
+                FC_ITEM_ID_PRAYER_POTION_2, FC_ITEM_ID_PRAYER_POTION_3};
             item->item_id = replacement[doses - 1];
             break;
         }
-        if (!potion && item->item_id == 385) {
+        if (!potion && item->item_id == FC_ITEM_ID_SHARK) {
             *item = (FcItemStack){0};
             break;
         }
@@ -2290,7 +2206,7 @@ static void fc_items_consume(FcPlayer *p, int potion) {
 static void fc_items_spend_ammo(FcPlayer *p) {
     p->ammo_count--;
     FcItemStack *weapon = &p->equipment[FC_EQUIP_SLOT_WEAPON];
-    if (weapon->item_id == 12926) weapon->charges--;
+    if (weapon->item_id == FC_ITEM_ID_TOXIC_BLOWPIPE) weapon->charges--;
     else {
         FcItemStack *ammo = &p->equipment[FC_EQUIP_SLOT_AMMO];
         if (ammo->quantity > 0 && --ammo->quantity == 0) {
@@ -2824,7 +2740,7 @@ static void npc_reach(const FcState* state, const FcNpc* npc,
     int dist = fc_distance_to_npc(p->x, p->y, npc);
     *melee = stats->max_hit[ATTACK_MELEE] > 0 &&
         fc_npc_can_melee_player(p->x, p->y, npc->x, npc->y, npc->size,
-                                state->walkable, state->movement_flags);
+                                state->movement_flags);
     *distant = npc->attack_style != ATTACK_MELEE &&
         dist > 0 && dist <= npc->attack_range &&
         fc_has_los_between_areas(npc->x, npc->y, npc->size,
@@ -2875,8 +2791,8 @@ static void fc_npc_tz_kek_split(FcState* state, int dead_x, int dead_y) {
 
 /* Record an NPC attack launched this tick for the viewer. */
 static void record_npc_attack(FcState* state, const FcNpc* npc, int npc_idx,
-                              int attack_style, int hit_delay_ticks,
-                              int prayer_lock_tick, int hit_queued) {
+                              int attack_style, int prayer_lock_tick,
+                              int hit_queued) {
     FcRenderEvents* events = &state->render_events;
     if (events->npc_attack_count >= FC_MAX_RENDER_NPC_ATTACKS) return;
 
@@ -2890,7 +2806,6 @@ static void record_npc_attack(FcState* state, const FcNpc* npc, int npc_idx,
     attack->source_size = npc->size;
     attack->target_x = state->player.x;
     attack->target_y = state->player.y;
-    attack->hit_delay_ticks = hit_delay_ticks;
     attack->prayer_lock_tick = prayer_lock_tick;
     attack->hit_queued = hit_queued;
 }
@@ -2931,7 +2846,7 @@ static void npc_attack(FcState* state, FcNpc* npc, int npc_idx) {
     float hit_chance = fc_hit_chance(attack_roll,
                                      fc_player_def_roll(player, attack_type));
     int hit = fc_rng_float(state) < hit_chance;
-    int damage = hit ? fc_roll_npc_damage_tenths(state, stats->max_hit[style]) : 0;
+    int damage = hit ? fc_roll_damage_tenths(state, stats->max_hit[style], 0) : 0;
     int delay = fc_npc_hit_delay(npc->npc_type, style,
                                  fc_distance_to_npc(player->x, player->y, npc));
 
@@ -2953,8 +2868,7 @@ static void npc_attack(FcState* state, FcNpc* npc, int npc_idx) {
         }
     }
 
-    record_npc_attack(state, npc, npc_idx, style, delay,
-                      prayer_lock_tick, hit_queued);
+    record_npc_attack(state, npc, npc_idx, style, prayer_lock_tick, hit_queued);
     npc->attack_timer = npc->attack_speed;
 }
 
@@ -3015,7 +2929,7 @@ static int yt_mejkot_try_heal(FcState* state, FcNpc* npc) {
     if (npc->attack_timer > 0) return 0;
     if (!fc_npc_can_melee_player(state->player.x, state->player.y,
                                  npc->x, npc->y, npc->size,
-                                 state->walkable, state->movement_flags)) {
+                                 state->movement_flags)) {
         return 0;
     }
 
@@ -3448,7 +3362,6 @@ static int fc_has_los_between_areas(
 
 static int fc_npc_can_melee_player(int player_x, int player_y,
                                    int npc_x, int npc_y, int npc_size,
-                                   const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
                                    const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
     if (npc_size <= 0) return 0;
     int npc_max_x = npc_x + npc_size - 1;
@@ -3456,7 +3369,6 @@ static int fc_npc_can_melee_player(int player_x, int player_y,
 
     /* Rectangular-exclusive reach: shared cardinal edges are valid; diagonal
      * corner contact and overlapping footprints are not. */
-    (void)walkable;
     uint8_t source_wall;
     if (player_x == npc_x - 1 && player_y >= npc_y && player_y <= npc_max_y)
         source_wall = FC_MOVE_WALL_EAST;
@@ -3477,6 +3389,22 @@ static int fc_npc_can_melee_player(int player_x, int player_y,
            (movement_flags[player_x][player_y] & source_wall) == 0;
 }
 
+/* An attacker on tile (x, y) can hit the target rectangle: through open
+ * cardinal contact when range is FC_ROUTE_MELEE_RANGE, otherwise within range
+ * and in projectile line of sight. */
+static int fc_can_attack_from(
+    int x, int y, int dst_x, int dst_y, int dst_size, int range,
+    const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
+    const uint8_t los_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
+    if (range == FC_ROUTE_MELEE_RANGE)
+        return fc_npc_can_melee_player(x, y, dst_x, dst_y, dst_size,
+                                       movement_flags);
+    int distance = fc_distance_between_areas(x, y, 1, dst_x, dst_y, dst_size);
+    return distance > 0 && distance <= range &&
+           fc_has_los_between_areas(x, y, 1, dst_x, dst_y, dst_size,
+                                    los_flags);
+}
+
 /* BFS routes for click-to-move and attack approach. */
 static const int FC_ROUTE_DIRECTIONS[8][2] = {
     {-1, 0}, {1, 0}, {0, -1}, {0, 1},
@@ -3491,17 +3419,11 @@ typedef enum {
 static int fc_route_goal_reached(
     FcRouteGoalKind kind, int x, int y,
     int dst_x, int dst_y, int dst_size, int attack_range,
-    const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
     const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
     const uint8_t los_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
     if (kind == FC_ROUTE_EXACT) return x == dst_x && y == dst_y;
-    if (attack_range == FC_ROUTE_MELEE_RANGE)
-        return fc_npc_can_melee_player(x, y, dst_x, dst_y, dst_size,
-                                       walkable, movement_flags);
-    int distance = fc_distance_between_areas(x, y, 1, dst_x, dst_y, dst_size);
-    return distance > 0 && distance <= attack_range &&
-           fc_has_los_between_areas(x, y, 1, dst_x, dst_y, dst_size,
-                                    los_flags);
+    return fc_can_attack_from(x, y, dst_x, dst_y, dst_size, attack_range,
+                              movement_flags, los_flags);
 }
 
 static int fc_reconstruct_route(
@@ -3533,7 +3455,7 @@ static int fc_reconstruct_route(
 
 static int fc_bfs_route(
     int sx, int sy, int dst_x, int dst_y, int dst_size,
-    int move_near, FcRouteGoalKind goal_kind, int attack_range,
+    FcRouteGoalKind goal_kind, int attack_range,
     const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
     const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
     const uint8_t los_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
@@ -3558,7 +3480,7 @@ static int fc_bfs_route(
     while (qh < qt) {
         int cx = qx[qh], cy = qy[qh]; qh++;
         if (fc_route_goal_reached(goal_kind, cx, cy, dst_x, dst_y, dst_size,
-                                  attack_range, walkable, movement_flags, los_flags)) {
+                                  attack_range, movement_flags, los_flags)) {
             found_x = cx;
             found_y = cy;
             break;
@@ -3579,7 +3501,7 @@ static int fc_bfs_route(
         }
     }
 
-    if (found_x < 0 && move_near && goal_kind == FC_ROUTE_EXACT) {
+    if (found_x < 0 && goal_kind == FC_ROUTE_EXACT) {
         int best_cost = 1000;
         int best_distance = 100;
         for (int x = dst_x - 10; x <= dst_x + 10; x++) {
@@ -3613,7 +3535,7 @@ static int fc_pathfind_bfs_move_near(
     const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
     const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
     int out_x[], int out_y[], int max_steps) {
-    return fc_bfs_route(sx, sy, dx, dy, 1, 1, FC_ROUTE_EXACT, 0,
+    return fc_bfs_route(sx, sy, dx, dy, 1, FC_ROUTE_EXACT, 0,
                         walkable, movement_flags, NULL,
                         out_x, out_y, max_steps);
 }
@@ -3627,7 +3549,7 @@ static int fc_pathfind_attack_position(
     const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
     const uint8_t los_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
     int out_x[], int out_y[], int max_steps) {
-    return fc_bfs_route(sx, sy, target_x, target_y, target_size, 0,
+    return fc_bfs_route(sx, sy, target_x, target_y, target_size,
                         FC_ROUTE_ATTACK, attack_range, walkable,
                         movement_flags, los_flags, out_x, out_y, max_steps);
 }
@@ -3676,7 +3598,7 @@ static void enforce_post_loss_invariant(FcPlayer* p) {
 /* Drain prayer points based on active prayer and bonus. prayer_at_tick_start
  * is the prayer before this tick's actions, so 1-tick flicks do not drain. */
 static int fc_prayer_drain_tick(FcPlayer* p, int prayer_at_tick_start,
-                                const FcPrayerTransition* transition) {
+                                int flicked) {
     int prayer_before = p->current_prayer;
 
     if (p->current_prayer <= 0) {
@@ -3686,12 +3608,7 @@ static int fc_prayer_drain_tick(FcPlayer* p, int prayer_at_tick_start,
 
     if (p->prayer == PRAYER_NONE) return 0;
     if (prayer_at_tick_start == PRAYER_NONE) return 0;
-
-    int performed_flick = transition != NULL &&
-        transition->explicit_off_then_on &&
-        transition->off_performed &&
-        transition->on_succeeded;
-    if (performed_flick) return 0;
+    if (flicked) return 0;
 
     /* Counter-based drain matching OSRS PrayerDrain.kt exactly:
      * Accumulate drain rate each tick, drain 1 point when counter exceeds resistance. */
@@ -3713,63 +3630,28 @@ static int fc_prayer_drain_tick(FcPlayer* p, int prayer_at_tick_start,
     return prayer_before - p->current_prayer;
 }
 
-/* Apply an FC_PRAYER_* action. */
+/* Apply an FC_PRAYER_* action. Turning a protection prayer on needs prayer
+ * points. The flick actions turn the current prayer off first; they count as a
+ * flick when an active prayer went off and the new one came on. */
 static FcPrayerTransition fc_prayer_apply_action(FcPlayer* p, int prayer_action) {
+    static const int protection[FC_PRAYER_DIM] = {
+        [FC_PRAYER_MAGIC] = PRAYER_PROTECT_MAGIC,
+        [FC_PRAYER_RANGE] = PRAYER_PROTECT_RANGE,
+        [FC_PRAYER_MELEE] = PRAYER_PROTECT_MELEE,
+        [FC_PRAYER_FLICK_MAGIC] = PRAYER_PROTECT_MAGIC,
+        [FC_PRAYER_FLICK_RANGE] = PRAYER_PROTECT_RANGE,
+        [FC_PRAYER_FLICK_MELEE] = PRAYER_PROTECT_MELEE,
+    };
     FcPrayerTransition result = {0};
-    result.prior_prayer = p->prayer;
-    result.requested_final_prayer = p->prayer;
-
-    switch (prayer_action) {
-        case FC_PRAYER_NO_CHANGE:
-            break;
-        case FC_PRAYER_OFF:
-            result.requested_final_prayer = PRAYER_NONE;
-            result.off_requested = (p->prayer != PRAYER_NONE);
-            p->prayer = PRAYER_NONE;
-            break;
-        case FC_PRAYER_MAGIC:
-            result.requested_final_prayer = PRAYER_PROTECT_MAGIC;
-            result.on_requested = (p->prayer != PRAYER_PROTECT_MAGIC);
-            p->prayer = (p->current_prayer > 0) ? PRAYER_PROTECT_MAGIC : PRAYER_NONE;
-            break;
-        case FC_PRAYER_RANGE:
-            result.requested_final_prayer = PRAYER_PROTECT_RANGE;
-            result.on_requested = (p->prayer != PRAYER_PROTECT_RANGE);
-            p->prayer = (p->current_prayer > 0) ? PRAYER_PROTECT_RANGE : PRAYER_NONE;
-            break;
-        case FC_PRAYER_MELEE:
-            result.requested_final_prayer = PRAYER_PROTECT_MELEE;
-            result.on_requested = (p->prayer != PRAYER_PROTECT_MELEE);
-            p->prayer = (p->current_prayer > 0) ? PRAYER_PROTECT_MELEE : PRAYER_NONE;
-            break;
-        case FC_PRAYER_FLICK_MAGIC:
-        case FC_PRAYER_FLICK_RANGE:
-        case FC_PRAYER_FLICK_MELEE: {
-            int requested_prayer = prayer_action == FC_PRAYER_FLICK_MAGIC
-                ? PRAYER_PROTECT_MAGIC
-                : (prayer_action == FC_PRAYER_FLICK_RANGE
-                    ? PRAYER_PROTECT_RANGE : PRAYER_PROTECT_MELEE);
-            result.requested_final_prayer = requested_prayer;
-            result.off_requested = 1;
-            result.off_performed = p->prayer != PRAYER_NONE;
-            result.on_requested = 1;
-            result.explicit_off_then_on = 1;
-            p->prayer = PRAYER_NONE;
-            if (p->current_prayer > 0) p->prayer = requested_prayer;
-            break;
-        }
-        default:
-            break;
+    int prior = p->prayer;
+    if (prayer_action == FC_PRAYER_OFF) {
+        p->prayer = PRAYER_NONE;
+    } else if (prayer_action > FC_PRAYER_OFF && prayer_action < FC_PRAYER_DIM) {
+        p->prayer = p->current_prayer > 0 ? protection[prayer_action] : PRAYER_NONE;
+        result.flicked = prayer_action >= FC_PRAYER_FLICK_MAGIC &&
+                         prior != PRAYER_NONE && p->prayer != PRAYER_NONE;
     }
-
-    result.actual_final_prayer = p->prayer;
-    if (!result.explicit_off_then_on) {
-        result.off_performed = result.off_requested;
-    }
-    result.on_succeeded = result.on_requested &&
-        result.actual_final_prayer == result.requested_final_prayer;
-    result.final_state_changed =
-        result.actual_final_prayer != result.prior_prayer;
+    result.changed = p->prayer != prior;
     return result;
 }
 
@@ -3777,7 +3659,6 @@ static FcPrayerTransition fc_prayer_apply_action(FcPlayer* p, int prayer_action)
  * boundary so depletion always deactivates the overhead and clears the drain
  * counter. */
 static int fc_prayer_apply_loss_tenths(FcPlayer* p, int requested_loss_tenths) {
-    if (p == NULL) return 0;
     int prayer_before = p->current_prayer;
     if (requested_loss_tenths > 0 && p->current_prayer > 0) {
         int loss = requested_loss_tenths;
@@ -3902,7 +3783,7 @@ static void fc_reward_runtime_reset(FcRewardRuntime* runtime) {
     memset(runtime, 0, sizeof(*runtime));
 }
 
-static float reward_clamp01(float value) {
+static float clamp01(float value) {
     if (value < 0.0f) return 0.0f;
     if (value > 1.0f) return 1.0f;
     return value;
@@ -3912,8 +3793,8 @@ static float fc_reward_player_death_scale(
         const FcRewardParams* params, float cave_progress) {
     if (!params->scale_player_death_with_progress) return 1.0f;
 
-    float floor = reward_clamp01(params->player_death_min_scale);
-    float progress = reward_clamp01(cave_progress);
+    float floor = clamp01(params->player_death_min_scale);
+    float progress = clamp01(cave_progress);
     return floor + (1.0f - floor) * progress;
 }
 
@@ -3960,7 +3841,7 @@ static float reward_current_wave_progress(
         return (required_work_remaining <= 0.0f) ? 1.0f : 0.0f;
     }
 
-    return reward_clamp01(
+    return clamp01(
         1.0f - required_work_remaining / runtime->required_work_at_wave_start);
 }
 
@@ -3973,7 +3854,7 @@ static float reward_cave_progress(
     int waves_cleared = state->current_wave - 1;
     if (waves_cleared < 0) waves_cleared = 0;
     if (waves_cleared > FC_NUM_WAVES) waves_cleared = FC_NUM_WAVES;
-    return reward_clamp01(
+    return clamp01(
         ((float)waves_cleared + current_wave_progress) / (float)FC_NUM_WAVES);
 }
 
@@ -4316,11 +4197,6 @@ static FcArenaMapCache g_collision_cache;
 static FcArenaMapCache g_movement_cache;
 static FcArenaMapCache g_los_cache;
 
-static const char* const g_arena_asset_path_formats[] = {
-    "resources/fight_caves/runtime/%s",
-    NULL
-};
-
 static void fail_required_arena_asset(const char* filename,
                                       const char* override_name) {
     fprintf(stderr,
@@ -4356,13 +4232,8 @@ static void load_required_arena_map(FcArenaMapCache* cache,
             fail_required_arena_asset(filename, override_name);
         }
     } else {
-        for (int i = 0; !file && g_arena_asset_path_formats[i]; i++) {
-            int length = snprintf(path, sizeof(path),
-                                  g_arena_asset_path_formats[i], filename);
-            if (length > 0 && (size_t)length < sizeof(path)) {
-                file = fopen(path, "rb");
-            }
-        }
+        snprintf(path, sizeof(path), "resources/fight_caves/runtime/%s", filename);
+        file = fopen(path, "rb");
     }
     if (!file) fail_required_arena_asset(filename, override_name);
 
@@ -4411,6 +4282,7 @@ static void apply_loadout_combat_fields(FcPlayer* p,
     fc_items_init(p, loadout);
 }
 
+/* fc_reset has zeroed the player; this sets the non-zero starting values. */
 static void init_player(FcPlayer* p) {
     const FcLoadout* loadout = &FC_LOADOUTS[FC_ACTIVE_LOADOUT];
     apply_loadout_combat_fields(p, loadout);
@@ -4418,22 +4290,9 @@ static void init_player(FcPlayer* p) {
     p->y = FC_ARENA_HEIGHT / 2;
     p->current_hp = p->max_hp;
     p->current_prayer = p->max_prayer;
-    p->prayer = PRAYER_NONE;
-    p->prayer_at_tick_start = PRAYER_NONE;
-    p->attack_timer = 0;
-    p->food_timer = 0;
-    p->potion_timer = 0;
-    p->combo_timer = 0;
     p->run_energy = FC_RUN_ENERGY_MAX;
     p->is_running = 1;
-    p->hp_regen_counter = 0;
-    p->route_len = 0;
-    p->route_idx = 0;
-    p->attack_target_idx = -1;
-    p->approach_target = 0;
-    p->approach_target_x = -1;
-    p->approach_target_y = -1;
-    p->approach_target_size = 0;
+    set_player_target(p, -1);
 }
 
 void fc_init(FcState* state) {
@@ -4465,7 +4324,6 @@ static void fc_reset(FcState* state, uint32_t seed) {
 
     /* Spawn wave 1 NPCs */
     state->current_wave = 1;
-    state->next_spawn_index = 0;
     fc_wave_spawn(state, 1);
 }
 
@@ -4622,12 +4480,6 @@ static float normalize_incoming_count(int count) {
     return (float)count / 4.0f;
 }
 
-static float clamp01(float value) {
-    if (value < 0.0f) return 0.0f;
-    if (value > 1.0f) return 1.0f;
-    return value;
-}
-
 static float normalize_prayer_drain_counter(const FcPlayer* p) {
     int resistance = 60 + 2 * p->prayer_bonus;
     if (resistance <= 0) return 0.0f;
@@ -4710,7 +4562,6 @@ static int npc_telegraph_style(const FcState* state, const FcNpc* npc) {
     const FcNpcStats* stats = fc_npc_get_stats(npc->npc_type);
     int can_melee = fc_npc_can_melee_player(state->player.x, state->player.y,
                                             npc->x, npc->y, npc->size,
-                                            state->walkable,
                                             state->movement_flags);
     if (npc->npc_type == NPC_KET_ZEK && can_melee &&
         fc_has_los_between_areas(
@@ -4800,7 +4651,6 @@ void fc_write_obs(const FcState* state, float* out) {
     player[FC_OBS_PLAYER_IN_MEL_2T] = normalize_incoming_count(incoming_counts[1][0]);
     player[FC_OBS_PLAYER_IN_RNG_2T] = normalize_incoming_count(incoming_counts[1][1]);
     player[FC_OBS_PLAYER_IN_MAG_2T] = normalize_incoming_count(incoming_counts[1][2]);
-    player[FC_OBS_PLAYER_TARGET]    = 0.0f;  /* filled after NPC slot computation below */
     player[FC_OBS_PLAYER_PRAY_DDL_MEL] = prayer_deadline_urgency[0];
     player[FC_OBS_PLAYER_PRAY_DDL_RNG] = prayer_deadline_urgency[1];
     player[FC_OBS_PLAYER_PRAY_DDL_MAG] = prayer_deadline_urgency[2];
@@ -4856,10 +4706,6 @@ void fc_write_obs(const FcState* state, float* out) {
         }
 
         /* Pending attack from this NPC — scan player's pending hits */
-        npc_out[FC_NPC_PENDING_STYLE] = 0.0f;
-        npc_out[FC_NPC_PENDING_TICKS] = 0.0f;
-        npc_out[FC_NPC_PENDING_PRAYER_WINDOW] = 0.0f;
-        npc_out[FC_NPC_PENDING_PRAYER_DEADLINE] = 0.0f;
         for (int hi = 0; hi < p->num_pending_hits; hi++) {
             const FcPendingHit* ph = &p->pending_hits[hi];
             if (ph->active && ph->source_npc_idx == active_indices[slot]) {
@@ -4995,10 +4841,10 @@ void fc_write_mask(const FcState* state, float* out) {
     }
 
     /* ATTACK: slot 0 (none) always valid. Slots 1-8 masked if no NPC in that slot */
-    for (int attack = FC_ATTACK_NONE + 1; attack < FC_ATTACK_DIM; attack++) {
-        if (!attack_action_valid(state, attack)) {
-            out[FC_MASK_ATTACK_START + attack] = 0.0f;
-        }
+    int visible_indices[FC_VISIBLE_NPCS];
+    int visible = fc_visible_npc_indices(state, visible_indices);
+    for (int attack = visible + 1; attack < FC_ATTACK_DIM; attack++) {
+        out[FC_MASK_ATTACK_START + attack] = 0.0f;
     }
 
     /* PRAYER: leave fully unmasked.
@@ -5039,9 +4885,6 @@ static void fc_fill_render_entities(const FcState* state, FcRenderEntity* entiti
     pe->size = 1;
     pe->current_hp = state->player.current_hp;
     pe->max_hp = state->player.max_hp;
-    pe->prayer = state->player.prayer;
-    pe->damage_taken_this_tick = state->player.damage_taken_this_tick;
-    pe->hit_landed_this_tick = state->player.hit_landed_this_tick;
 
     /* Active NPCs + NPCs that just died this tick (for death hitsplat visibility) */
     for (int i = 0; i < FC_MAX_NPCS; i++) {
@@ -5057,10 +4900,7 @@ static void fc_fill_render_entities(const FcState* state, FcRenderEntity* entiti
         ne->size = n->size;
         ne->current_hp = n->current_hp;
         ne->max_hp = n->max_hp;
-        ne->attack_style = n->attack_style;
         ne->is_dead = n->is_dead;
-        ne->damage_taken_this_tick = n->damage_taken_this_tick;
-        ne->healing_received_this_tick = n->healing_received_this_tick;
         ne->died_this_tick = n->died_this_tick;
         ne->npc_slot = i;
     }
@@ -5174,17 +5014,8 @@ static void apply_player_prayer_action(
     FcPlayer* player = &state->player;
 
     *transition = fc_prayer_apply_action(player, action);
-    state->render_events.prayer_prior = transition->prior_prayer;
-    state->render_events.prayer_final = transition->actual_final_prayer;
-    state->render_events.prayer_off_performed = transition->off_performed;
-    state->render_events.prayer_on_succeeded = transition->on_succeeded;
-    state->render_events.prayer_flick_performed =
-        transition->explicit_off_then_on &&
-        transition->off_performed &&
-        transition->on_succeeded;
-    if (transition->final_state_changed ||
-        (transition->explicit_off_then_on &&
-         transition->off_performed && transition->on_succeeded)) {
+    state->render_events.prayer_flick_performed = transition->flicked;
+    if (transition->changed || transition->flicked) {
         player->prayer_changed_this_tick = 1;
     }
 }
@@ -5236,13 +5067,8 @@ static void prepare_player_interaction(FcState* state, int explicit_move,
     if (explicit_move) {
         player->route_len = 0;
         player->route_idx = 0;
-        player->approach_target = 0;
-        player->approach_target_x = -1;
-        player->approach_target_y = -1;
-        player->approach_target_size = 0;
-        if (!explicit_attack) {
-            player->attack_target_idx = -1;
-        }
+        set_player_target(player,
+                          explicit_attack ? player->attack_target_idx : -1);
     }
 
     /* Target selection precedes movement so movement cannot rebind a slot or
@@ -5251,11 +5077,8 @@ static void prepare_player_interaction(FcState* state, int explicit_move,
         state->npcs[requested_attack_idx].active &&
         !state->npcs[requested_attack_idx].is_dead) {
         if (player->attack_target_idx != requested_attack_idx) {
-            player->approach_target_x = -1;
-            player->approach_target_y = -1;
-            player->approach_target_size = 0;
+            set_player_target(player, requested_attack_idx);
         }
-        player->attack_target_idx = requested_attack_idx;
         player->approach_target = explicit_move ? 0 : 1;
     }
 }
@@ -5263,20 +5086,23 @@ static void prepare_player_interaction(FcState* state, int explicit_move,
 static void launch_player_attack(FcState* state, FcNpc* target, int distance) {
     FcPlayer* player = &state->player;
     int melee = player->weapon_kind == FC_WEAPON_UNARMED;
-    /* Unarmed Punch is accurate/crush (+3 Attack). Fight Caves NPCs all
-     * have zero crush defence bonus, including the ranged-resistant healers. */
-    int att_roll = melee ? (player->attack_level + 11) *
-        (player->melee_attack_bonus + 64) : fc_player_ranged_attack_roll(player, target);
+    int att_roll, max_hit;
+    if (melee) {
+        /* Unarmed Punch is accurate/crush (+3 Attack). Fight Caves NPCs all
+         * have zero crush defence bonus, including the ranged-resistant
+         * healers. */
+        att_roll = (player->attack_level + 11) * (player->melee_attack_bonus + 64);
+        max_hit = (320 + (player->strength_level + 8) *
+                   (player->melee_strength_bonus + 64)) / 640;
+    } else {
+        fc_player_ranged_rolls(player, target, &att_roll, &max_hit);
+    }
     const FcNpcStats* target_stats = fc_npc_get_stats(target->npc_type);
     int def_roll = fc_npc_roll(target_stats->def_level,
                                melee ? 0 : target_stats->ranged_def_bonus);
     float chance = fc_hit_chance(att_roll, def_roll);
     int hit = fc_rng_float(state) < chance ? 1 : 0;
-    int final_max_hit_hp = melee ? (320 + (player->strength_level + 8) *
-        (player->melee_strength_bonus + 64)) / 640 :
-        fc_player_ranged_final_max_hit_hp(player, target);
-    int damage = hit
-        ? fc_roll_player_damage_tenths(state, final_max_hit_hp) : 0;
+    int damage = hit ? fc_roll_damage_tenths(state, max_hit, 1) : 0;
     int delay = melee ? 1 : fc_ranged_hit_delay(distance);
 
     fc_queue_pending_hit(target->pending_hits, &target->num_pending_hits,
@@ -5314,25 +5140,16 @@ static void process_player_target(FcState* state,
 
     FcNpc* target = &state->npcs[player->attack_target_idx];
     if (!target->active || target->is_dead) {
-        player->attack_target_idx = -1;
-        player->approach_target = 0;
-        player->approach_target_x = -1;
-        player->approach_target_y = -1;
-        player->approach_target_size = 0;
+        set_player_target(player, -1);
         return;
     }
 
     int dist = fc_distance_to_npc(player->x, player->y, target);
-    int weapon_range = player->weapon_range;
-    int has_los = fc_has_los_between_areas(
-        player->x, player->y, 1,
-        target->x, target->y, target->size, state->los_flags);
-    int target_can_fire = dist > 0 && dist <= weapon_range && has_los;
-    if (player->weapon_kind == FC_WEAPON_UNARMED) {
-        weapon_range = FC_ROUTE_MELEE_RANGE;
-        target_can_fire = fc_npc_can_melee_player(player->x, player->y,
-            target->x, target->y, target->size, state->walkable, state->movement_flags);
-    }
+    int weapon_range = player->weapon_kind == FC_WEAPON_UNARMED
+        ? FC_ROUTE_MELEE_RANGE : player->weapon_range;
+    int target_can_fire = fc_can_attack_from(
+        player->x, player->y, target->x, target->y, target->size,
+        weapon_range, state->movement_flags, state->los_flags);
     int target_ready = player->attack_timer <= 0;
 
     int route_endpoint_can_fire = 0;
@@ -5342,18 +5159,10 @@ static void process_player_target(FcState* state,
         player->approach_target_size != target->size;
     if (player->route_idx < player->route_len) {
         int endpoint = player->route_len - 1;
-        int rx = player->route_x[endpoint];
-        int ry = player->route_y[endpoint];
-        int route_dist = fc_distance_between_areas(
-            rx, ry, 1, target->x, target->y, target->size);
-        route_endpoint_can_fire = route_dist > 0 &&
-            route_dist <= weapon_range &&
-            fc_has_los_between_areas(
-                rx, ry, 1, target->x, target->y, target->size,
-                state->los_flags);
-        if (player->weapon_kind == FC_WEAPON_UNARMED)
-            route_endpoint_can_fire = fc_npc_can_melee_player(rx, ry,
-                target->x, target->y, target->size, state->walkable, state->movement_flags);
+        route_endpoint_can_fire = fc_can_attack_from(
+            player->route_x[endpoint], player->route_y[endpoint],
+            target->x, target->y, target->size, weapon_range,
+            state->movement_flags, state->los_flags);
     }
 
     if (!target_can_fire && player->approach_target &&
@@ -5408,11 +5217,7 @@ static int process_player_movement(FcState* state, int move_action,
                 state->walkable, state->movement_flags,
                 player->route_x, player->route_y, FC_MAX_ROUTE);
             player->route_idx = 0;
-            player->attack_target_idx = -1;
-            player->approach_target = 0;
-            player->approach_target_x = -1;
-            player->approach_target_y = -1;
-            player->approach_target_size = 0;
+            set_player_target(player, -1);
         }
     }
 
@@ -5551,72 +5356,68 @@ static void decrement_player_timers(FcPlayer* p) {
  */
 static void check_jad_healers(FcState* state) {
     if (state->current_wave != FC_NUM_WAVES) return;  /* only on wave 63 */
+    int jad_idx = find_active_jad(state);
+    if (jad_idx < 0) return;
+    FcNpc* jad = &state->npcs[jad_idx];
 
-    /* Find Jad */
-    for (int i = 0; i < FC_MAX_NPCS; i++) {
-        FcNpc* jad = &state->npcs[i];
-        if (jad->npc_type != NPC_TZTOK_JAD || !jad->active || jad->is_dead) continue;
-
-        /* Re-arm respawns only after Jad has been healed all the way to full. */
-        if (jad->current_hp >= jad->max_hp) {
-            state->jad_healers_spawned = 0;
-            return;
-        }
-
-        if (jad->current_hp >= FC_JAD_HEALER_THRESHOLD_HP_TENTHS) return;
-
-        /* Below threshold — spawn healers if not already spawned this cycle */
-        if (state->jad_healers_spawned) return;
-
-        /* Count currently alive healers */
-        int alive_healers = 0;
-        for (int h = 0; h < FC_MAX_NPCS; h++) {
-            if (state->npcs[h].active && !state->npcs[h].is_dead &&
-                state->npcs[h].npc_type == NPC_YT_HURKOT) {
-                alive_healers++;
-            }
-        }
-
-        /* Spawn up to 4 total (fill missing slots) */
-        int to_spawn = FC_JAD_NUM_HEALERS - alive_healers;
-        int spawn_dirs[5] = {
-            SPAWN_NORTH_WEST,
-            SPAWN_SOUTH_WEST,
-            SPAWN_SOUTH,
-            SPAWN_SOUTH_EAST,
-            SPAWN_CENTER,
-        };
-        for (int i = 4; i > 0; i--) {
-            int j = fc_rng_int(state, i + 1);
-            int tmp = spawn_dirs[i];
-            spawn_dirs[i] = spawn_dirs[j];
-            spawn_dirs[j] = tmp;
-        }
-        const FcNpcStats* healer_stats = fc_npc_get_stats(NPC_YT_HURKOT);
-        int is_respawn_generation = state->jad_healer_spawn_generations > 0;
-        int spawned = 0;
-        for (int h = 0; h < to_spawn; h++) {
-            int hx, hy;
-            fc_spawn_position(spawn_dirs[h], &hx, &hy);
-
-            if (!fc_spawn_find_available_footprint(
-                    state, hx, hy, healer_stats->size, FC_ARENA_WIDTH - 1,
-                    &hx, &hy)) {
-                continue;
-            }
-
-            int slot = fc_spawn_npc_first_free(state, NPC_YT_HURKOT, hx, hy);
-            if (slot < 0) break;
-            state->npcs[slot].is_respawned_jad_healer =
-                is_respawn_generation;
-            state->npcs_remaining++;
-            spawned++;
-        }
-        if (spawned > 0) {
-            state->jad_healers_spawned = 1;
-            state->jad_healer_spawn_generations++;
-        }
+    /* Re-arm respawns only after Jad has been healed all the way to full. */
+    if (jad->current_hp >= jad->max_hp) {
+        state->jad_healers_spawned = 0;
         return;
+    }
+
+    if (jad->current_hp >= FC_JAD_HEALER_THRESHOLD_HP_TENTHS) return;
+
+    /* Below threshold — spawn healers if not already spawned this cycle */
+    if (state->jad_healers_spawned) return;
+
+    /* Count currently alive healers */
+    int alive_healers = 0;
+    for (int h = 0; h < FC_MAX_NPCS; h++) {
+        if (state->npcs[h].active && !state->npcs[h].is_dead &&
+            state->npcs[h].npc_type == NPC_YT_HURKOT) {
+            alive_healers++;
+        }
+    }
+
+    /* Spawn up to 4 total (fill missing slots) */
+    int to_spawn = FC_JAD_NUM_HEALERS - alive_healers;
+    int spawn_dirs[5] = {
+        SPAWN_NORTH_WEST,
+        SPAWN_SOUTH_WEST,
+        SPAWN_SOUTH,
+        SPAWN_SOUTH_EAST,
+        SPAWN_CENTER,
+    };
+    for (int i = 4; i > 0; i--) {
+        int j = fc_rng_int(state, i + 1);
+        int tmp = spawn_dirs[i];
+        spawn_dirs[i] = spawn_dirs[j];
+        spawn_dirs[j] = tmp;
+    }
+    const FcNpcStats* healer_stats = fc_npc_get_stats(NPC_YT_HURKOT);
+    int is_respawn_generation = state->jad_healer_spawn_generations > 0;
+    int spawned = 0;
+    for (int h = 0; h < to_spawn; h++) {
+        int hx, hy;
+        fc_spawn_position(spawn_dirs[h], &hx, &hy);
+
+        if (!fc_spawn_find_available_footprint(
+                state, hx, hy, healer_stats->size, FC_ARENA_WIDTH - 1,
+                &hx, &hy)) {
+            continue;
+        }
+
+        int slot = fc_spawn_npc_first_free(state, NPC_YT_HURKOT, hx, hy);
+        if (slot < 0) break;
+        state->npcs[slot].is_respawned_jad_healer =
+            is_respawn_generation;
+        state->npcs_remaining++;
+        spawned++;
+    }
+    if (spawned > 0) {
+        state->jad_healers_spawned = 1;
+        state->jad_healer_spawn_generations++;
     }
 }
 
@@ -5670,7 +5471,7 @@ static void fc_tick(FcState* state, const int actions[FC_NUM_ACTION_HEADS]) {
     state->overhead_prayer_lost_this_tick =
         fc_prayer_drain_tick(&state->player,
                              state->player.prayer_at_tick_start,
-                             &prayer_transition);
+                             prayer_transition.flicked);
     state->prayer_lost_this_tick += state->overhead_prayer_lost_this_tick;
 
     /* 4b. HP regen (1 HP = 10 tenths every FC_HP_REGEN_INTERVAL ticks) */
@@ -6035,19 +5836,19 @@ static void fc_wave_spawn(FcState* state, int wave_num) {
 }
 
 /* Once the wave is cleared, flag it and spawn the next wave, or complete the
- * cave after the last. Returns 1 if a new wave was spawned. */
-static int fc_wave_check_advance(FcState* state) {
+ * cave after the last. */
+static void fc_wave_check_advance(FcState* state) {
     /* Don't advance if wave hasn't started or NPCs still alive */
-    if (state->current_wave <= 0) return 0;
-    if (state->npcs_remaining > 0) return 0;
-    if (state->terminal != TERMINAL_NONE) return 0;
+    if (state->current_wave <= 0) return;
+    if (state->npcs_remaining > 0) return;
+    if (state->terminal != TERMINAL_NONE) return;
 
     state->wave_just_cleared = 1;
 
     /* Check if all waves complete */
     if (state->current_wave >= FC_NUM_WAVES) {
         state->terminal = TERMINAL_CAVE_COMPLETE;
-        return 0;
+        return;
     }
 
     /* Advance to next wave */
@@ -6055,8 +5856,6 @@ static int fc_wave_check_advance(FcState* state) {
     state->jad_healers_spawned = 0;
     state->jad_healer_spawn_generations = 0;
     fc_wave_spawn(state, state->current_wave);
-
-    return 1;
 }
 
 
