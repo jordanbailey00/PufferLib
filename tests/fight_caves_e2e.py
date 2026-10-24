@@ -200,11 +200,11 @@ class Acceptance:
         # No core dumps for deliberate native assertion failures in this test process.
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         tool = [sys.executable, "-S", "ocean/fight_caves/tools.py"]
-        self.run("missing-assets", *tool, "setup", "--all", "--verify-only",
-                 expected="missing runtime/")
+        self.run("missing-assets", *tool, "setup", "--verify-only",
+                 expected="runtime/ is missing")
         self.run("build-native", "./build.sh", "fight_caves", timeout=1800)
         self.run("build-cpu", "./build.sh", "fight_caves", "--cpu", timeout=600)
-        self.run("assets-verified", *tool, "setup", "--all", "--verify-only")
+        self.run("assets-verified", *tool, "setup", "--verify-only")
         # Test the real window; do not require the optional xdpyinfo diagnostic.
         # Raylib TakeScreenshot writes a basename in the current directory.
         self.run("manual-play", "./fight_caves", "--screenshot", "playable.png")
@@ -278,7 +278,7 @@ class Acceptance:
             self.run(f"cpu-{label}", "./fight_caves", "eval", bad, expected="checkpoint rejected:")
             self.run(f"gpu-{label}", *native[:2], bad, *native[3:],
                      expected="failed to open weights" if label == "missing" else "failed to read weights")
-        self.run("final-asset-verification", *tool, "setup", "--all", "--verify-only")
+        self.run("final-asset-verification", *tool, "setup", "--verify-only")
         self.report.update(steps=steps, history_points=len(metrics["agent_steps"]),
                            checkpoints={p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in expected})
 

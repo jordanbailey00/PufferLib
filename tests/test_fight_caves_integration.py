@@ -73,10 +73,6 @@ def load_setup_data():
     return module
 
 
-def sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
 def load_e2e():
     spec = importlib.util.spec_from_file_location("fight_caves_e2e", REPO_ROOT / "tests/fight_caves_e2e.py")
     module = importlib.util.module_from_spec(spec)
@@ -136,131 +132,85 @@ def test_e2e_checks_saved_metric_histories(tmp_path, fault):
         assert e2e.read_run(path, 2048)[1]["agent_steps"][-1] == 2048
 
 
-def make_archive(path: Path, members: dict[str, bytes]) -> bytes:
-    with tarfile.open(path, "w:gz") as archive:
+def make_bundle(directory: Path, members: dict[str, bytes]) -> dict:
+    """Write a .tar.gz holding these members and return its manifest entry."""
+    archive = directory / "bundle.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
         for name, contents in members.items():
             info = tarfile.TarInfo(name)
             info.size = len(contents)
-            info.mode = 0o644
-            archive.addfile(info, BytesIO(contents))
-    return path.read_bytes()
+            tar.addfile(info, BytesIO(contents))
+    return {"archive": archive.name, "url": archive.as_uri(),
+            "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+            "install_prefix": "runtime"}
 
 
-def bundle_for(archive: Path, archive_data: bytes, payload: bytes) -> dict:
-    return {
-        "archive": archive.name,
-        "url": archive.as_uri(),
-        "size_bytes": len(archive_data),
-        "sha256": sha256(archive_data),
-        "install_prefix": "runtime",
-        "files": [
-            {
-                "path": "runtime/test.map",
-                "size_bytes": len(payload),
-                "sha256": sha256(payload),
-            }
-        ],
-    }
+@pytest.fixture
+def tools(tmp_path, monkeypatch):
+    module = load_setup_data()
+    monkeypatch.setattr(module, "RESOURCE_ROOT", tmp_path / "resources")
+    module.RESOURCE_ROOT.mkdir()
+    return module
 
 
-def test_install_bundle_is_verified_and_transactional(tmp_path, monkeypatch):
-    setup_data = load_setup_data()
-    install_root = tmp_path / "resources"
-    monkeypatch.setattr(setup_data, "RESOURCE_ROOT", install_root)
-
-    payload = b"authoritative arena data"
-    archive = tmp_path / "bundle.tar.gz"
-    archive_data = make_archive(archive, {"runtime/test.map": payload})
-    bundle = bundle_for(archive, archive_data, payload)
-
-    setup_data.install_bundle("core", bundle, force=False)
-    installed = install_root / "runtime" / "test.map"
-    assert installed.read_bytes() == payload
-    assert setup_data.verify_tree(install_root, bundle, exact=True) == []
-
-    installed.write_bytes(b"x" * len(payload))
-    assert "checksum mismatch" in setup_data.verify_tree(install_root, bundle, exact=True)[0]
-    setup_data.install_bundle("core", bundle, force=False)
-    assert installed.read_bytes() == payload
-    monkeypatch.setattr(setup_data, "download", lambda *args: pytest.fail("valid assets must work offline"))
-    setup_data.install_bundle("core", bundle, force=False)
+def test_install_replaces_the_directory_with_the_verified_archive(tools, tmp_path):
+    old = tools.RESOURCE_ROOT / "runtime" / "old.map"
+    old.parent.mkdir()
+    old.write_bytes(b"previous install")
+    bundle = make_bundle(tmp_path, {"runtime/test.map": b"arena data"})
+    tools.install_bundle(bundle)
+    runtime = tools.RESOURCE_ROOT / "runtime"
+    assert (runtime / "test.map").read_bytes() == b"arena data"
+    assert not old.exists()
+    assert (runtime / tools.STAMP).read_text() == bundle["sha256"] + "\n"
+    assert [path.name for path in tools.RESOURCE_ROOT.iterdir()] == ["runtime"]
 
 
-def test_bad_archive_checksum_does_not_replace_existing_assets(tmp_path, monkeypatch):
-    setup_data = load_setup_data()
-    install_root = tmp_path / "resources"
-    existing = install_root / "runtime" / "test.map"
-    existing.parent.mkdir(parents=True)
-    existing.write_bytes(b"existing valid installation")
-    monkeypatch.setattr(setup_data, "RESOURCE_ROOT", install_root)
-
-    payload = b"replacement"
-    archive = tmp_path / "bundle.tar.gz"
-    archive_data = make_archive(archive, {"runtime/test.map": payload})
-    bundle = bundle_for(archive, archive_data, payload)
-    bundle["sha256"] = "0" * 64
-
-    with pytest.raises(setup_data.AssetError, match="checksum mismatch"):
-        setup_data.install_bundle("core", bundle, force=True)
-    assert existing.read_bytes() == b"existing valid installation"
+@pytest.mark.parametrize("fault,message", [
+    ("hash", "checksum mismatch"), ("download", "download failed"),
+])
+def test_failed_update_leaves_the_existing_install(tools, tmp_path, fault, message):
+    bundle = make_bundle(tmp_path, {"runtime/test.map": b"installed"})
+    tools.install_bundle(bundle)
+    if fault == "hash":
+        bundle["sha256"] = "0" * 64
+    else:
+        bundle["url"] = (tmp_path / "missing.tar.gz").as_uri()
+    with pytest.raises(tools.AssetError, match=message):
+        tools.install_bundle(bundle)
+    assert (tools.RESOURCE_ROOT / "runtime/test.map").read_bytes() == b"installed"
+    assert [path.name for path in tools.RESOURCE_ROOT.iterdir()] == ["runtime"]
 
 
-def test_unsafe_archive_path_is_rejected_without_partial_install(tmp_path, monkeypatch):
-    setup_data = load_setup_data()
-    install_root = tmp_path / "resources"
-    monkeypatch.setattr(setup_data, "RESOURCE_ROOT", install_root)
-
-    payload = b"map"
-    archive = tmp_path / "bundle.tar.gz"
-    archive_data = make_archive(
-        archive,
-        {"runtime/test.map": payload, "../outside": b"must not escape"},
-    )
-    bundle = bundle_for(archive, archive_data, payload)
-
-    with pytest.raises(setup_data.AssetError, match="unsafe path"):
-        setup_data.install_bundle("core", bundle, force=True)
-    assert not (install_root / "runtime").exists()
-    assert not (tmp_path / "outside").exists()
+def test_unsafe_archive_path_is_rejected(tools, tmp_path):
+    bundle = make_bundle(tmp_path, {"runtime/test.map": b"map", "../../escaped": b"x"})
+    with pytest.raises(tools.AssetError, match="outside the destination"):
+        tools.install_bundle(bundle)
+    assert list(tools.RESOURCE_ROOT.iterdir()) == []
 
 
-def test_manifest_rejects_unsafe_and_duplicate_file_paths(tmp_path):
-    setup_data = load_setup_data()
-    base = {
-        "size_bytes": 1,
-        "sha256": "a" * 64,
-    }
-    with pytest.raises(setup_data.AssetError, match="unsafe path"):
-        setup_data.expected_files({"files": [{"path": "../bad", **base}]})
-    with pytest.raises(setup_data.AssetError, match="duplicate file"):
-        setup_data.expected_files(
-            {"files": [{"path": "runtime/a", **base}, {"path": "runtime/a", **base}]}
-        )
+def test_setup_reuses_a_matching_stamp(tools, tmp_path, monkeypatch, capsys):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"bundles": [make_bundle(tmp_path, {"runtime/a": b"a"})]}))
+    monkeypatch.setattr(tools, "MANIFEST", manifest)
+    downloads = []
+    real_download = tools.download
+    def counting_download(url, destination):
+        downloads.append(url)
+        real_download(url, destination)
+    monkeypatch.setattr(tools, "download", counting_download)
 
-
-def test_download_failure_is_actionable(tmp_path):
-    setup_data = load_setup_data()
-    missing = (tmp_path / "does-not-exist.tar.gz").as_uri()
-    with pytest.raises(setup_data.AssetError, match="download failed"):
-        setup_data.download(missing, tmp_path / "download")
-
-
-@pytest.mark.parametrize("broken", [False, True])
-def test_asset_setup_verification_is_independent_of_display(monkeypatch, broken, capsys):
-    tools = load_setup_data()
-    monkeypatch.delenv("DISPLAY", raising=False)
-    monkeypatch.setattr(sys, "argv", [str(SETUP_DATA), "--all", "--verify-only"])
-    monkeypatch.setattr(tools, "load_manifest",
-                        lambda _: {"bundles": {"core": {}, "viewer": {}}})
-    checked = []
-    def verify(root, bundle, *, exact):
-        checked.append(bundle)
-        return ["missing viewer asset"] if broken else []
-    monkeypatch.setattr(tools, "verify_tree", verify)
-    assert tools.setup_main() == int(broken)
-    assert len(checked) == (1 if broken else 2)
-    if broken:
-        assert "Fight Caves asset setup failed" in capsys.readouterr().err
+    assert tools.main(["setup", "--verify-only"]) == 1
+    assert "runtime/ is missing" in capsys.readouterr().err
+    assert tools.main(["setup"]) == 0
+    assert tools.main(["setup"]) == 0
+    assert tools.main(["setup", "--verify-only"]) == 0
+    assert len(downloads) == 1
+    (tools.RESOURCE_ROOT / "runtime" / tools.STAMP).write_text("0" * 64)
+    assert tools.main(["setup", "--verify-only"]) == 1
+    assert tools.main(["setup"]) == 0
+    assert tools.main(["setup", "--force"]) == 0
+    assert len(downloads) == 3
 
 
 ENV_ROOT = REPO_ROOT / "ocean" / "fight_caves"
@@ -285,31 +235,21 @@ def test_config_contains_only_supported_native_settings():
                 "expansion_factor"} & {key for section in config for key in config[section]}
 
 
-def test_asset_manifest_is_complete_and_pinned():
-    manifest = json.loads(
-        (RESOURCE_ROOT / "asset_manifest.json").read_text(encoding="utf-8")
-    )
-    assert manifest["schema_version"] == 1
-    assert set(manifest["bundles"]) == {"core", "viewer"}
-    for name, bundle in manifest["bundles"].items():
+def test_asset_manifest_pins_both_bundles():
+    manifest = json.loads((RESOURCE_ROOT / "asset_manifest.json").read_text(encoding="utf-8"))
+    assert [bundle["install_prefix"] for bundle in manifest["bundles"]] == ["runtime", "viewer"]
+    for bundle in manifest["bundles"]:
         assert bundle["url"].startswith("https://github.com/")
-        assert len(bundle["sha256"]) == 64
-        assert bundle["size_bytes"] > 0
-        assert bundle["install_prefix"] == ("runtime" if name == "core" else "viewer")
-        paths = [entry["path"] for entry in bundle["files"]]
-        assert paths
-        assert len(paths) == len(set(paths))
-        assert all(not Path(path).is_absolute() and ".." not in Path(path).parts for path in paths)
-        assert all(len(entry["sha256"]) == 64 and entry["size_bytes"] > 0 for entry in bundle["files"])
+        assert bundle["url"].endswith("/" + bundle["archive"])
+        assert re.fullmatch("[0-9a-f]{64}", bundle["sha256"])
 
 
-def test_asset_manifest_includes_equipment_parts_and_menu_font():
-    manifest = json.loads((RESOURCE_ROOT / "asset_manifest.json").read_text())
-    files = {entry["path"] for entry in manifest["bundles"]["viewer"]["files"]}
-    assert {"viewer/fc_player.parts", "viewer/fc_player.models",
-            "viewer/data/fonts/runescape_bold.ttf",
-            "viewer/data/sprites/items/item_28310.png"} <= files
-    assert "viewer/data/sprites/items/item_25487.png" not in files
+def test_installed_viewer_bundle_has_equipment_parts_and_menu_font(executable):
+    viewer = RESOURCE_ROOT / "viewer"  # installed by the executable fixture's build
+    for name in ("fc_player.parts", "fc_player.models", "data/fonts/runescape_bold.ttf",
+                 "data/sprites/items/item_28310.png"):
+        assert (viewer / name).is_file(), name
+    assert not (viewer / "data/sprites/items/item_25487.png").exists()
 
 
 def test_fight_caves_sources_do_not_reference_local_paths():

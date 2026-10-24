@@ -3372,9 +3372,9 @@ static void fail_required_arena_asset(const char* filename,
     fprintf(stderr,
             "fatal: required Fight Caves arena asset '%s' is missing, "
             "unreadable, or not exactly %d bytes.\n"
-            "Set %s to the asset's absolute path or install the pinned "
-            "runtime bundle with 'python3 ocean/fight_caves/tools.py "
-            "setup --core'.\n",
+            "Set %s to the asset's absolute path or reinstall the pinned "
+            "bundles with 'python3 ocean/fight_caves/tools.py "
+            "setup --force'.\n",
             filename, FC_ARENA_WIDTH * FC_ARENA_HEIGHT,
             override_name);
     fflush(stderr);

@@ -186,7 +186,7 @@ elif [ "$ENV" = "fight_caves" ]; then
         echo "Error: fight_caves supports native train/eval and --cpu play/eval, not --cu or --web" >&2
         exit 1
     fi
-    python3 "$SRC_DIR/tools.py" setup --all
+    python3 "$SRC_DIR/tools.py" setup
     EXTRA_SRC="$SRC_DIR/binding.c"
 elif [ "$ENV" = "nethack" ]; then
     SRC_DIR="ocean/$ENV"

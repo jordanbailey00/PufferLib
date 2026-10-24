@@ -167,21 +167,23 @@ The first build installs the pinned
 - `resources/fight_caves/viewer/`: models, equipment parts, animations, terrain,
   textures, UI sprites/fonts, and the minimap raster.
 
-Archive and individual-file sizes/SHA-256 hashes are checked before installation.
-Valid assets are reused offline. Rerunning the build repairs missing or corrupt
-bundles; download or verification failure stops the build. Runtime loads local
-files only, without another repository or raw OSRS cache. Missing required data
-produces an error rather than an open-map or reduced-graphics fallback.
+Each archive's SHA-256 is checked before it is extracted, and the installed
+directory records it in an `.archive-sha256` stamp. Later builds reuse a matching
+install offline without re-reading its files, so reinstall with `--force` after
+editing or deleting an installed file. A download or checksum failure stops the
+build and leaves the existing install alone. Runtime loads local files only,
+without another repository or raw OSRS cache. Missing required data produces an
+error rather than an open-map or reduced-graphics fallback.
 
-Optional installation or read-only verification:
+Optional installation, stamp check or reinstall:
 
 ```bash
-python3 ocean/fight_caves/tools.py setup --all
-python3 ocean/fight_caves/tools.py setup --all --verify-only
+python3 ocean/fight_caves/tools.py setup
+python3 ocean/fight_caves/tools.py setup --verify-only
+python3 ocean/fight_caves/tools.py setup --force
 ```
 
-The installed asset directories are ignored by Git. For an explicit reinstall,
-use `python3 ocean/fight_caves/tools.py setup --all --force`.
+The installed asset directories are ignored by Git.
 Development overrides are `FC_COLLISION_PATH`, `FC_MOVEMENT_PATH`, `FC_LOS_PATH`,
 and `FC_ASSET_ROOT` (the viewer asset directory). Run commands from the repository
 root: assets and `config/fight_caves.ini` are found relative to it.

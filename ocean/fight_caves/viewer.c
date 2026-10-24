@@ -8018,7 +8018,8 @@ static ViewerState* fc_viewer_create(int replay) {
     if (!required_resources_ready) {
         fprintf(stderr,
                 "error: viewer startup aborted instead of using reduced "
-                "graphics; restore assets with: ./build.sh fight_caves --cpu\n");
+                "graphics; reinstall assets with: "
+                "python3 ocean/fight_caves/tools.py setup --force\n");
         fc_viewer_destroy(v);
         return NULL;
     }
