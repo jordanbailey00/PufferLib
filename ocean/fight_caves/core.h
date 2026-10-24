@@ -3050,7 +3050,9 @@ static int fc_prayer_potion_restore(int prayer_level) {
 /* Reward */
 
 /* Every FcRewardParams field: its [env] key in config/fight_caves.ini, whether
- * it is an int, and its default. The adapter and the viewer read the keys. */
+ * it is an int, and its default. The adapter and the viewer read the keys. The
+ * defaults equal the shipped values, so running without the config (the
+ * viewer's fallback, --benchmark) computes the training reward. */
 typedef struct {
     const char* key;
     size_t offset;          /* offsetof(FcRewardParams, field) */
@@ -3075,7 +3077,7 @@ static const FcRewardSetting FC_REWARD_SETTINGS[] = {
      offsetof(FcRewardParams, w_tick_penalty), 0, -0.0001f},
 
     {"shape_npc_heal_penalty",
-     offsetof(FcRewardParams, shape_npc_heal_penalty), 0, 0.0f},
+     offsetof(FcRewardParams, shape_npc_heal_penalty), 0, -0.005f},
     {"shape_no_progress_penalty_1",
      offsetof(FcRewardParams, shape_no_progress_penalty_1), 0, -0.001f},
     {"shape_no_progress_penalty_2",

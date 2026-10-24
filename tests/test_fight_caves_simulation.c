@@ -816,6 +816,14 @@ static void native_config_test(void) {
     int minibatch = (int)puf_ini_get(&ini, "train", "minibatch_size");
     assert(minibatch % horizon == 0 && agents % (minibatch / horizon) == 0);
     assert(horizon % 8 == 0 && minibatch <= agents * horizon);
+    /* The compiled reward defaults are the shipped [env] values. */
+    FcRewardParams defaults = fc_reward_default_params();
+    for (int i = 0; i < FC_REWARD_SETTING_COUNT; i++) {
+        FcRewardParams shipped = defaults;
+        fc_reward_setting_store(&shipped, &FC_REWARD_SETTINGS[i],
+                                puf_ini_get(&ini, "env", FC_REWARD_SETTINGS[i].key));
+        assert(memcmp(&shipped, &defaults, sizeof(defaults)) == 0);
+    }
     puf_ini_free(&ini);
 
     /* Native CLI overrides must apply after the environment file. */
@@ -830,7 +838,7 @@ static void native_config_test(void) {
     assert(puf_ini_get(&ini, "env", "shape_npc_heal_penalty") == -0.005);
     assert(puf_ini_get(&ini, "env", "shape_no_attack_start") == 50);
     puf_ini_free(&ini);
-    puts("native config: merged settings, batch geometry and CLI precedence passed");
+    puts("native config: merged settings, reward defaults, batch geometry and CLI precedence passed");
 }
 
 static void init_and_config_test(void) {
