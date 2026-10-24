@@ -7213,8 +7213,6 @@ int dbg_draw_panel_tabs(const FcState* state,
 #define COL_HP_RED      CLITERAL(Color){ 120,   0,   0, 255 }
 #define COL_PRAY_BLUE   CLITERAL(Color){  50, 120, 210, 255 }
 #define COL_GRID        CLITERAL(Color){  30,  30,  30, 80  }
-#define COL_BLOCKED     CLITERAL(Color){ 180,  30,  30, 60  }
-#define COL_WALKABLE    CLITERAL(Color){  30, 120,  30, 30  }
 
 #define FC_REWARD_CONFIG_PATH_MAX 256
 typedef struct {
@@ -8173,16 +8171,6 @@ static void draw_scene(ViewerState* v) {
             DrawLine3D((Vector3){0,0.01f,-(float)z}, (Vector3){(float)FC_ARENA_WIDTH,0.01f,-(float)z}, COL_GRID);
     }
 
-    /* Collision overlay */
-    if (v->show_collision) {
-        for (int tx = 0; tx < FC_ARENA_WIDTH; tx++) {
-            for (int ty = 0; ty < FC_ARENA_HEIGHT; ty++) {
-                Color c = v->state.walkable[tx][ty] ? COL_WALKABLE : COL_BLOCKED;
-                DrawCube((Vector3){tx+0.5f, 0.02f, -(ty+0.5f)}, 0.9f, 0.02f, 0.9f, c);
-            }
-        }
-    }
-
     /* Movement feedback is immediate, even though the selected action remains
      * buffered until the next authoritative simulation tick. */
     draw_click_destination_3d(v);
@@ -8224,8 +8212,11 @@ static void draw_scene(ViewerState* v) {
     FcCombatPresentationContext combat_context = combat_presentation_context(v);
     fc_combat_presentation_draw_world(v->combat_presentation,
                                       &combat_context, GetFrameTime());
-    /* Debug overlays — 3D collision tiles (before EndMode3D) */
-    if (v->dbg_flags) debug_overlay_3d(&v->state, v->dbg_flags);
+    /* Debug overlays — 3D collision tiles (before EndMode3D). C shows the
+     * collision tiles on their own. */
+    int overlay_3d_flags =
+        v->dbg_flags | (v->show_collision ? DBG_COLLISION : 0);
+    if (overlay_3d_flags) debug_overlay_3d(&v->state, overlay_3d_flags);
 
     EndMode3D();
 
