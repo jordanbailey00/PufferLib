@@ -1865,8 +1865,6 @@ void fc_player_appearance_free(FcPlayerAppearance *appearance) {
 #define RUNEC_OSRS_PRAYER_Y 71.0f
 #define RUNEC_OSRS_RUN_X 10.0f
 #define RUNEC_OSRS_RUN_Y 103.0f
-#define RUNEC_OSRS_SPEC_X 32.0f
-#define RUNEC_OSRS_SPEC_Y 128.0f
 #define RUNEC_OSRS_WORLDMAP_X 177.0f
 #define RUNEC_OSRS_WORLDMAP_Y 137.0f
 
@@ -1913,7 +1911,7 @@ static const RuneCUiStoneRef RUNEC_OSRS_SIDE_STONES[] = {
     {-1, "side_stone_highlights_3", "side_icon_music",    {203, 0, 38, 36}, {204, 0, 33, 36}},
 };
 
-/* Button, icon and label rectangles of the visible combat styles, in order. */
+/* Button, icon and label rectangles of a weapon's three combat styles. */
 typedef struct RuneCUiCombatStyleRef {
     Rectangle rect;
     Rectangle icon_rect;
@@ -1924,16 +1922,11 @@ static const RuneCUiCombatStyleRef RUNEC_OSRS_COMBAT_STYLES[] = {
     {{20,  46, 68, 47}, {37,  51, 34, 24}, {20,  67, 68, 13}},
     {{102, 46, 68, 47}, {119, 51, 34, 24}, {102, 76, 68, 13}},
     {{20,  99, 68, 47}, {37, 104, 34, 24}, {20, 129, 68, 13}},
-    {{102, 99, 68, 47}, {119,104, 34, 24}, {102,129, 68, 13}},
 };
 
 static const Rectangle RUNEC_OSRS_COMBAT_HEADER = {10, 0, 170, 44};
 static const Rectangle RUNEC_OSRS_COMBAT_TITLE = {10, 6, 170, 14};
 static const Rectangle RUNEC_OSRS_COMBAT_LEVEL = {10, 26, 170, 12};
-static const Rectangle RUNEC_OSRS_COMBAT_RETALIATE = {20, 153, 150, 47};
-static const Rectangle RUNEC_OSRS_COMBAT_RETALIATE_ICON = {27, 156, 26, 39};
-static const Rectangle RUNEC_OSRS_COMBAT_RETALIATE_TEXT = {58, 156, 108, 39};
-static const Rectangle RUNEC_OSRS_COMBAT_SPECIAL_BAR = {20, 200, 150, 26};
 static const Rectangle RUNEC_OSRS_COMBAT_CATEGORY = {0, 233, 190, 28};
 
 typedef struct RuneCUiWornButtonRef {
@@ -1993,12 +1986,10 @@ static const char *const g_ui_asset_names[] = {
     "orb_filler_4",
     "orb_filler_5",
     "orb_filler_6",
-    "orb_filler_9",
     "orb_icon_0",
     "orb_icon_1",
     "orb_icon_2",
     "orb_icon_3",
-    "orb_icon_6",
     "ring_30",
     "worldmap_icon_0",
     "chat_tab_button_0",
@@ -2018,8 +2009,6 @@ static const char *const g_ui_asset_names[] = {
     "miscgraphics_3",
     "combatboxes_0",
     "combatboxes_1",
-    "combatboxes_special_attack",
-    "combat_shield",
     "combaticons_14",
     "combaticons_15",
     "combaticons_16",
@@ -2618,7 +2607,7 @@ int fc_menu_action_at(FcMenuLayout menu, int rows, int x, int y) {
 #define RUNEC_UI_CONTEXT_ACTIONS 5
 #define RUNEC_UI_MINIMAP_DOTS 256
 #define RUNEC_UI_ITEM_ICON_CACHE 512
-#define RUNEC_UI_COMBAT_STYLE_COUNT 4
+#define RUNEC_UI_COMBAT_STYLE_COUNT 3
 
 typedef enum RuneCUiTab {
     RUNEC_UI_TAB_NONE = -1,
@@ -2642,10 +2631,6 @@ typedef enum RuneCUiIntentKind {
     RUNEC_UI_INTENT_QUICK_PRAYER_TOGGLE,
     RUNEC_UI_INTENT_MINIMAP_CLICK,
     RUNEC_UI_INTENT_RUN_TOGGLE,
-    RUNEC_UI_INTENT_COMBAT_STYLE,
-    RUNEC_UI_INTENT_AUTO_RETALIATE,
-    RUNEC_UI_INTENT_SPECIAL_ATTACK,
-    RUNEC_UI_INTENT_CONTEXT_ACTION,
     RUNEC_UI_INTENT_WORLD_ACTION,
     RUNEC_UI_INTENT_INVENTORY_ACTION,
     RUNEC_UI_INTENT_EQUIPMENT_ACTION,
@@ -2685,13 +2670,19 @@ typedef struct RuneCUiItemIcon {
     Texture2D texture;
 } RuneCUiItemIcon;
 
-typedef struct RuneCUiCombatStyleOption {
-    int visible;
-    int style_index;
-    char label[24];
-    char mode[32];
-    char icon_asset[32];
-} RuneCUiCombatStyleOption;
+typedef struct RuneCUiCombatStyleDef {
+    const char *label;
+    const char *mode;
+    const char *icon_asset;
+} RuneCUiCombatStyleDef;
+
+/* A weapon category's combat styles. The tab only shows them: the active
+ * style is the one the simulation attacks with. */
+typedef struct RuneCUiCombatProfile {
+    int weapon_category;
+    int active_style;
+    RuneCUiCombatStyleDef styles[RUNEC_UI_COMBAT_STYLE_COUNT];
+} RuneCUiCombatProfile;
 
 typedef enum RuneCUiContextSourceKind {
     RUNEC_UI_CONTEXT_NONE = 0,
@@ -2715,12 +2706,8 @@ typedef struct RuneCUiState {
 
     RuneCUiSlot inventory[FC_INVENTORY_SLOTS];
     RuneCUiSlot equipment[FC_EQUIPMENT_SLOTS];
-    int selected_combat_style;
-    int auto_retaliate;
-    int special_attack_enabled;
-    int special_attack_energy;
     char combat_weapon_name[64];
-    RuneCUiCombatStyleOption combat_styles[RUNEC_UI_COMBAT_STYLE_COUNT];
+    const RuneCUiCombatProfile *combat_profile;
 
     int hitpoints;
     int hitpoints_max;
@@ -2770,7 +2757,6 @@ typedef struct RuneCUiLayout {
     Rectangle hp_orb;
     Rectangle prayer_orb;
     Rectangle run_orb;
-    Rectangle spec_orb;
     Rectangle side;
     Rectangle side_content;
     Rectangle tab[RUNEC_UI_TAB_COUNT];
@@ -2799,43 +2785,23 @@ static const char *g_worn_icon_names[FC_EQUIPMENT_SLOTS] = {
     NULL, "wornicons_7", "wornicons_8", NULL, "wornicons_9", "wornicons_11",
 };
 
-typedef struct RuneCUiCombatStyleDef {
-    int visible;
-    int style_index;
-    const char *label;
-    const char *mode;
-    const char *icon_asset;
-} RuneCUiCombatStyleDef;
-
-typedef struct RuneCUiCombatProfile {
-    int weapon_category;
-    const RuneCUiCombatStyleDef styles[RUNEC_UI_COMBAT_STYLE_COUNT];
-} RuneCUiCombatProfile;
-
-#define COMBAT_STYLE(style_index, label, mode, icon_asset) \
-    {1, style_index, label, mode, icon_asset}
-#define COMBAT_STYLE_HIDDEN \
-    {0, 0, "", "", ""}
-
 /*
  * Exact b237 combat_interface_weapon_category DB rows from the local
  * Joshua-F dump for the weapon categories the player can have
- * (FcLoadout.combat_style_profile, or 0 when unarmed). Core owns the selected
- * style; the viewer owns this presentation mapping so weapon tabs use the
- * same labels/icons as OSRS.
+ * (FcLoadout.combat_style_profile, or 0 when unarmed), so weapon tabs use the
+ * same labels/icons as OSRS. Core has no style choice: it punches unarmed and
+ * always fires the bow on Rapid.
  */
 static const RuneCUiCombatProfile g_combat_profiles[] = {
-    {0, {   /* unarmed: OSRS category 0 */
-        COMBAT_STYLE(0, "Punch", "Accurate", "combaticons_14"),
-        COMBAT_STYLE(1, "Kick", "Aggressive", "combaticons_15"),
-        COMBAT_STYLE(3, "Block", "Defensive", "combaticons_16"),
-        COMBAT_STYLE_HIDDEN,
+    {0, 0, {    /* unarmed: OSRS category 0 */
+        {"Punch", "Accurate", "combaticons_14"},
+        {"Kick", "Aggressive", "combaticons_15"},
+        {"Block", "Defensive", "combaticons_16"},
     }},
-    {25, {  /* bow: OSRS category 3 */
-        COMBAT_STYLE(0, "Accurate", "Accurate", "combaticons2_15"),
-        COMBAT_STYLE(1, "Rapid", "Rapid", "combaticons2_16"),
-        COMBAT_STYLE(3, "Longrange", "Longrange", "combaticons2_17"),
-        COMBAT_STYLE_HIDDEN,
+    {25, 1, {   /* bow: OSRS category 3 */
+        {"Accurate", "Accurate", "combaticons2_15"},
+        {"Rapid", "Rapid", "combaticons2_16"},
+        {"Longrange", "Longrange", "combaticons2_17"},
     }},
 };
 
@@ -2856,78 +2822,11 @@ static const RuneCUiCombatProfile *combat_profile_for_weapon_category(int catego
     return &g_combat_profiles[0];
 }
 
-static const RuneCUiCombatStyleOption *combat_style_option_by_index(
-    const RuneCUiState *ui,
-    int style_index) {
-    if (!ui)
-        return NULL;
-    for (int i = 0; i < RUNEC_UI_COMBAT_STYLE_COUNT; i++) {
-        const RuneCUiCombatStyleOption *option = &ui->combat_styles[i];
-        if (option->visible && option->style_index == style_index)
-            return option;
-    }
-    return NULL;
-}
-
-static const RuneCUiCombatStyleOption *selected_combat_style_option(
-    const RuneCUiState *ui) {
-    const RuneCUiCombatStyleOption *option =
-        combat_style_option_by_index(ui, ui ? ui->selected_combat_style : 0);
-    if (option)
-        return option;
-    if (ui && ui->selected_combat_style == 2)
-        option = combat_style_option_by_index(ui, 3);
-    if (option)
-        return option;
-    if (!ui)
-        return NULL;
-    for (int i = 0; i < RUNEC_UI_COMBAT_STYLE_COUNT; i++) {
-        if (ui->combat_styles[i].visible)
-            return &ui->combat_styles[i];
-    }
-    return NULL;
-}
-
-static int combat_style_option_selected(const RuneCUiState *ui,
-                                        const RuneCUiCombatStyleOption *option) {
-    if (!ui || !option || !option->visible)
-        return 0;
-    if (ui->selected_combat_style == option->style_index)
-        return 1;
-    return ui->selected_combat_style == 2
-        && option->style_index == 3
-        && combat_style_option_by_index(ui, 2) == NULL;
-}
-
 void runec_ui_set_combat_weapon_name(RuneCUiState *ui, const char *name) {
     if (!ui)
         return;
     copy_text(ui->combat_weapon_name, sizeof(ui->combat_weapon_name),
               name && name[0] ? name : "Unarmed");
-}
-
-void runec_ui_set_combat_style_profile(RuneCUiState *ui, int weapon_category) {
-    if (!ui)
-        return;
-    const RuneCUiCombatProfile *profile =
-        combat_profile_for_weapon_category(weapon_category);
-    for (int i = 0; i < RUNEC_UI_COMBAT_STYLE_COUNT; i++) {
-        const RuneCUiCombatStyleDef *src = &profile->styles[i];
-        RuneCUiCombatStyleOption *dst = &ui->combat_styles[i];
-        dst->visible = src->visible;
-        dst->style_index = src->style_index;
-        copy_text(dst->label, sizeof(dst->label), src->label);
-        copy_text(dst->mode, sizeof(dst->mode), src->mode);
-        copy_text(dst->icon_asset, sizeof(dst->icon_asset), src->icon_asset);
-    }
-    if (!selected_combat_style_option(ui)) {
-        for (int i = 0; i < RUNEC_UI_COMBAT_STYLE_COUNT; i++) {
-            if (ui->combat_styles[i].visible) {
-                ui->selected_combat_style = ui->combat_styles[i].style_index;
-                break;
-            }
-        }
-    }
 }
 
 static float fmin2(float a, float b) {
@@ -2970,8 +2869,6 @@ static void ui_layout(int screen_w, int screen_h, RuneCUiLayout *out) {
                                   out->map.y + RUNEC_OSRS_ORBS_Y + RUNEC_OSRS_PRAYER_Y, 57, 34};
     out->run_orb = (Rectangle){out->map.x + RUNEC_OSRS_ORBS_X + RUNEC_OSRS_RUN_X,
                                out->map.y + RUNEC_OSRS_ORBS_Y + RUNEC_OSRS_RUN_Y, 57, 34};
-    out->spec_orb = (Rectangle){out->map.x + RUNEC_OSRS_ORBS_X + RUNEC_OSRS_SPEC_X,
-                                out->map.y + RUNEC_OSRS_ORBS_Y + RUNEC_OSRS_SPEC_Y, 57, 34};
     out->worldmap_button = (Rectangle){out->map.x + RUNEC_OSRS_ORBS_X + RUNEC_OSRS_WORLDMAP_X,
                                        out->map.y + RUNEC_OSRS_ORBS_Y + RUNEC_OSRS_WORLDMAP_Y,
                                        30, 30};
@@ -3105,6 +3002,7 @@ static FcMenuLayout context_layout(const RuneCUiState *ui) {
 void runec_ui_init(RuneCUiState *ui) {
     memset(ui, 0, sizeof(*ui));
     ui->active_tab = RUNEC_UI_TAB_INVENTORY;
+    ui->combat_profile = &g_combat_profiles[0];
     ui->context_source_slot = -1;
     ui->drag.source_slot = -1;
     const char *start_tab = getenv("RUNEC_UI_START_TAB");
@@ -3203,8 +3101,6 @@ static int handle_context_click(RuneCUiState *ui, Vector2 mouse) {
                            strcmp(action, "Deactivate") == 0 ? -1 : 1, mouse);
                 copy_text(ui->last_intent.text, sizeof(ui->last_intent.text),
                           ui->context_title);
-            } else {
-                set_intent(ui, RUNEC_UI_INTENT_CONTEXT_ACTION, i, slot, mouse);
             }
             if (!ui->last_intent.text[0])
                 copy_text(ui->last_intent.text, sizeof(ui->last_intent.text),
@@ -3278,27 +3174,6 @@ static int equipment_slot_at(const RuneCUiLayout *layout, Vector2 mouse) {
     return -1;
 }
 
-static const RuneCUiCombatStyleOption *combat_style_at(
-    const RuneCUiState *ui,
-    const RuneCUiLayout *layout,
-    Vector2 mouse) {
-    if (!ui)
-        return NULL;
-    int visible_slot = 0;
-    int layout_count = (int)(sizeof(RUNEC_OSRS_COMBAT_STYLES)
-        / sizeof(RUNEC_OSRS_COMBAT_STYLES[0]));
-    for (int i = 0; i < RUNEC_UI_COMBAT_STYLE_COUNT && visible_slot < layout_count; i++) {
-        const RuneCUiCombatStyleOption *option = &ui->combat_styles[i];
-        if (!option->visible)
-            continue;
-        const RuneCUiCombatStyleRef *slot =
-            &RUNEC_OSRS_COMBAT_STYLES[visible_slot++];
-        if (CheckCollisionPointRec(mouse, side_ref_rect(layout, slot->rect)))
-            return option;
-    }
-    return NULL;
-}
-
 static void update_tab_press_timers(RuneCUiState *ui, float dt) {
     for (int i = 0; i < RUNEC_UI_TAB_COUNT; i++) {
         if (ui->tab_press_timer[i] <= 0.0f)
@@ -3353,12 +3228,6 @@ static int handle_tab_click(RuneCUiState *ui,
     return 0;
 }
 
-static void toggle_special_attack(RuneCUiState *ui, Vector2 mouse) {
-    ui->special_attack_enabled = !ui->special_attack_enabled;
-    set_intent(ui, RUNEC_UI_INTENT_SPECIAL_ATTACK, ui->special_attack_enabled,
-               ui->special_attack_energy, mouse);
-}
-
 static int handle_orb_or_minimap_click(RuneCUiState *ui,
                                        const RuneCUiLayout *layout,
                                        Vector2 mouse) {
@@ -3378,10 +3247,6 @@ static int handle_orb_or_minimap_click(RuneCUiState *ui,
                   "Quick-prayer");
         return 1;
     }
-    if (CheckCollisionPointRec(mouse, layout->spec_orb)) {
-        toggle_special_attack(ui, mouse);
-        return 1;
-    }
 
     Vector2 center = {
         layout->minimap.x + layout->minimap.width * 0.5f,
@@ -3396,32 +3261,6 @@ static int handle_orb_or_minimap_click(RuneCUiState *ui,
                (int)(mouse.x - layout->minimap.x),
                (int)(mouse.y - layout->minimap.y), mouse);
     return 1;
-}
-
-static int handle_combat_click(RuneCUiState *ui,
-                               const RuneCUiLayout *layout,
-                               Vector2 mouse) {
-    const RuneCUiCombatStyleOption *style =
-        combat_style_at(ui, layout, mouse);
-    if (style) {
-        ui->selected_combat_style = style->style_index;
-        set_intent(ui, RUNEC_UI_INTENT_COMBAT_STYLE, style->style_index, 0, mouse);
-        copy_text(ui->last_intent.text, sizeof(ui->last_intent.text),
-                  style->label);
-        return 1;
-    }
-    if (CheckCollisionPointRec(mouse,
-            side_ref_rect(layout, RUNEC_OSRS_COMBAT_RETALIATE))) {
-        ui->auto_retaliate = !ui->auto_retaliate;
-        set_intent(ui, RUNEC_UI_INTENT_AUTO_RETALIATE, ui->auto_retaliate, 0, mouse);
-        return 1;
-    }
-    if (CheckCollisionPointRec(mouse,
-            side_ref_rect(layout, RUNEC_OSRS_COMBAT_SPECIAL_BAR))) {
-        toggle_special_attack(ui, mouse);
-        return 1;
-    }
-    return 0;
 }
 
 static int handle_inventory_click(RuneCUiState *ui,
@@ -3454,8 +3293,6 @@ static int handle_active_tab_click(RuneCUiState *ui,
                                    const RuneCUiLayout *layout,
                                    Vector2 mouse) {
     switch (ui->active_tab) {
-    case RUNEC_UI_TAB_COMBAT:
-        return handle_combat_click(ui, layout, mouse);
     case RUNEC_UI_TAB_INVENTORY:
         return handle_inventory_click(ui, layout, mouse);
     case RUNEC_UI_TAB_EQUIPMENT:
@@ -3484,27 +3321,6 @@ static int handle_context_menu_open(RuneCUiState *ui,
         !mouse_over_ui(layout, mouse))
         return 0;
 
-    if (ui->active_tab == RUNEC_UI_TAB_COMBAT) {
-        const RuneCUiCombatStyleOption *style =
-            combat_style_at(ui, layout, mouse);
-        if (style) {
-            static const char *actions[] = {"Select", "Examine"};
-            set_context(ui, mouse, style->label, actions, 2);
-            return 1;
-        }
-        if (CheckCollisionPointRec(mouse,
-                side_ref_rect(layout, RUNEC_OSRS_COMBAT_RETALIATE))) {
-            static const char *actions[] = {"Toggle", "Examine"};
-            set_context(ui, mouse, "Auto Retaliate", actions, 2);
-            return 1;
-        }
-        if (CheckCollisionPointRec(mouse,
-                side_ref_rect(layout, RUNEC_OSRS_COMBAT_SPECIAL_BAR))) {
-            static const char *actions[] = {"Use", "Examine"};
-            set_context(ui, mouse, "Special Attack", actions, 2);
-            return 1;
-        }
-    }
     if (ui->active_tab == RUNEC_UI_TAB_INVENTORY) {
         int slot = grid_index_at(layout, &g_inventory_grid, mouse);
         if (slot >= 0) {
@@ -3783,8 +3599,6 @@ static void draw_minimap(const RuneCUiState *ui, const RuneCUiLayout *layout) {
     draw_orb(ui, layout->prayer_orb, "orb_filler_4", "orb_icon_1",
              ui->prayer_points, ui->prayer_points_max);
     draw_run_orb(ui, layout->run_orb);
-    draw_orb(ui, layout->spec_orb, "orb_filler_9", "orb_icon_6",
-             ui->special_attack_energy, 100);
 
     runec_ui_draw_asset(&ui->assets, "ring_30", layout->worldmap_button, WHITE);
     draw_asset_centered(ui, "worldmap_icon_0", layout->worldmap_button, 22, 22, WHITE);
@@ -3912,49 +3726,22 @@ static void draw_combat(const RuneCUiState *ui, const RuneCUiLayout *layout) {
                (Vector2){header.x + header.width - 10, header.y + 42}, 1,
                (Color){75, 64, 45, 180});
 
-    int visible_slot = 0;
-    int layout_count = (int)(sizeof(RUNEC_OSRS_COMBAT_STYLES)
-        / sizeof(RUNEC_OSRS_COMBAT_STYLES[0]));
-    for (int i = 0; i < RUNEC_UI_COMBAT_STYLE_COUNT && visible_slot < layout_count; i++) {
-        const RuneCUiCombatStyleOption *option = &ui->combat_styles[i];
-        if (!option->visible)
-            continue;
-        const RuneCUiCombatStyleRef *style =
-            &RUNEC_OSRS_COMBAT_STYLES[visible_slot++];
-        int selected = combat_style_option_selected(ui, option);
+    const RuneCUiCombatProfile *profile = ui->combat_profile;
+    for (int i = 0; i < RUNEC_UI_COMBAT_STYLE_COUNT; i++) {
+        const RuneCUiCombatStyleDef *option = &profile->styles[i];
+        const RuneCUiCombatStyleRef *style = &RUNEC_OSRS_COMBAT_STYLES[i];
+        int active = i == profile->active_style;
         Rectangle button = side_ref_rect(layout, style->rect);
-        draw_combat_box(ui, button, selected);
+        draw_combat_box(ui, button, active);
         draw_asset_centered(ui, option->icon_asset, side_ref_rect(layout, style->icon_rect),
                             34, 24, WHITE);
         draw_centered_text(ui, option->label, side_ref_rect(layout, style->text_rect),
-                           10, selected ? OSRS_YELLOW : OSRS_ORANGE);
+                           10, active ? OSRS_YELLOW : OSRS_ORANGE);
     }
 
-    Rectangle retaliate = side_ref_rect(layout, RUNEC_OSRS_COMBAT_RETALIATE);
-    draw_combat_box(ui, retaliate, ui->auto_retaliate);
-    draw_asset_centered(ui, "combat_shield", side_ref_rect(layout, RUNEC_OSRS_COMBAT_RETALIATE_ICON),
-                        26, 39, WHITE);
-    draw_centered_text(ui, ui->auto_retaliate ? "Auto Retaliate" : "Retaliate Off",
-                       side_ref_rect(layout, RUNEC_OSRS_COMBAT_RETALIATE_TEXT), 11, OSRS_ORANGE);
-
-    Rectangle spec = side_ref_rect(layout, RUNEC_OSRS_COMBAT_SPECIAL_BAR);
-    runec_ui_draw_asset(&ui->assets, "combatboxes_special_attack", spec, WHITE);
-    Rectangle empty = {spec.x + 2, spec.y + 7, spec.width - 4, 12};
-    DrawRectangleRec(empty, (Color){115, 6, 6, 255});
-    Rectangle fill = empty;
-    fill.width *= (float)ui->special_attack_energy / 100.0f;
-    DrawRectangleRec(fill, ui->special_attack_enabled ? OSRS_GREEN : (Color){57, 125, 59, 255});
-    DrawRectangleLinesEx((Rectangle){spec.x + 2, spec.y + 6, spec.width - 4, 14}, 1,
-                         (Color){44, 42, 35, 255});
-    char spec_text[32];
-    snprintf(spec_text, sizeof(spec_text), "Special Attack: %d%%", ui->special_attack_energy);
-    draw_centered_text(ui, spec_text, spec, 10, OSRS_YELLOW);
-
-    const RuneCUiCombatStyleOption *selected_style =
-        selected_combat_style_option(ui);
-    const char *mode = selected_style ? selected_style->mode : "Accurate";
     char category[64];
-    snprintf(category, sizeof(category), "Attack style: %s", mode);
+    snprintf(category, sizeof(category), "Attack style: %s",
+             profile->styles[profile->active_style].mode);
     draw_centered_text(ui, category, side_ref_rect(layout, RUNEC_OSRS_COMBAT_CATEGORY),
                        12, OSRS_ORANGE);
 }
@@ -6818,7 +6605,6 @@ typedef struct ViewerState {
     Texture2D prayer_on[FC_PROTECTION_PRAYER_COUNT];
     Texture2D prayer_off[FC_PROTECTION_PRAYER_COUNT];
     Texture2D click_cross_tex[FC_CLICK_CROSS_FRAME_COUNT * 2];
-    int combat_style;   /* 0=accurate, 1=rapid, 2=long range */
     /* Debug overlay — toggled with O key */
     int dbg_flags;       /* bitmask of DBG_* flags */
     /* Debug toggles */
@@ -6909,6 +6695,16 @@ static void sync_fc_ui_items(ViewerState* v) {
     sync_item_slots(v->ui.equipment, v->state.player.equipment, FC_EQUIPMENT_SLOTS);
 }
 
+/* The OSRS combat level: a quarter of Defence + Hitpoints + Prayer / 2, plus
+ * 13/40 of the largest of Attack + Strength, 3/2 Ranged and 3/2 Magic. */
+static int player_combat_level(const FcPlayer* p) {
+    int best = p->attack_level + p->strength_level;
+    if (p->ranged_level * 3 / 2 > best) best = p->ranged_level * 3 / 2;
+    if (p->magic_level * 3 / 2 > best) best = p->magic_level * 3 / 2;
+    int base = p->defence_level + p->max_hp / 10 + p->prayer_level / 2;
+    return (10 * base + 13 * best) / 40;
+}
+
 static void sync_fc_ui_status(ViewerState* v) {
     if (!v) return;
     FcPlayer* p = &v->state.player;
@@ -6920,13 +6716,10 @@ static void sync_fc_ui_status(ViewerState* v) {
     if (v->ui.run_energy < 0) v->ui.run_energy = 0;
     if (v->ui.run_energy > 100) v->ui.run_energy = 100;
     v->ui.run_enabled = p->is_running != 0;
-    v->ui.auto_retaliate = 1;
-    v->ui.special_attack_energy = 100;
-    v->ui.combat_level = 126;
+    v->ui.combat_level = player_combat_level(p);
     const FcItemDef *weapon = fc_item_definition(p->equipment[FC_EQUIP_SLOT_WEAPON].item_id);
-    v->ui.selected_combat_style = weapon ? (v->combat_style == 2 ? 3 : v->combat_style) : 0;
     runec_ui_set_combat_weapon_name(&v->ui, weapon ? weapon->name : "Unarmed");
-    runec_ui_set_combat_style_profile(&v->ui,
+    v->ui.combat_profile = combat_profile_for_weapon_category(
         weapon ? FC_LOADOUT.combat_style_profile : 0);
 }
 
@@ -7101,12 +6894,6 @@ static void handle_runec_ui_intent(ViewerState* v) {
             if (action && !v->policy_replay) v->pending_prayer = action;
             break;
         }
-        case RUNEC_UI_INTENT_COMBAT_STYLE:
-            if (v->policy_replay) break;
-            v->combat_style = intent->primary == 3 ? 2 : intent->primary;
-            if (v->combat_style < 0) v->combat_style = 0;
-            if (v->combat_style > 2) v->combat_style = 2;
-            break;
         case RUNEC_UI_INTENT_RUN_TOGGLE:
             if (!v->policy_replay) {
                 fc_request_set_running(&v->state, !p->is_running);
@@ -8518,7 +8305,6 @@ static ViewerState* fc_viewer_create(int replay) {
         return NULL;
     }
 
-    v->combat_style = 1;
     v->policy_replay = replay;
     v->paused = !replay;
     return v;
