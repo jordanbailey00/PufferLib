@@ -855,8 +855,6 @@ static void test_free(FightCaves* env) {
 static void check_obs(FightCaves* env) {
     float obs[FC_OBS_SIZE], mask[FC_ACTION_MASK_SIZE];
     fc_write_obs(&env->state, obs);
-    fc_apply_obs_ablation(obs, env->obs_ablate_npc_distance,
-        env->obs_ablate_incoming_aggregates, env->obs_ablate_npc_valid);
     fc_write_mask(&env->state, mask);
     Agent* a = &env->agents[0];
     assert(memcmp(obs, a->observations, FC_POLICY_OBS_SIZE * sizeof(float)) == 0);
@@ -941,7 +939,7 @@ static void native_config_test(void) {
     assert(puf_ini_get(&ini, "base", "reset_every_horizon") == 0);
     assert(puf_ini_get(&ini, "base", "async") == 1);
     assert(puf_ini_get(&ini, "env", "shape_npc_heal_penalty") == -0.005);
-    assert(puf_ini_get(&ini, "env", "obs_ablate_incoming_aggregates") == 1);
+    assert(puf_ini_get(&ini, "env", "shape_no_attack_start") == 50);
     puf_ini_free(&ini);
     puts("native config: merged settings, batch geometry and CLI precedence passed");
 }
@@ -960,8 +958,6 @@ static void init_and_config_test(void) {
     FcRewardParams defaults = fc_reward_default_params();
     assert(env->reward_params.w_progress == defaults.w_progress);
     assert(env->initial_sharks == 0 && env->initial_prayer_doses == 0);
-    assert(!env->obs_ablate_npc_distance && !env->obs_ablate_incoming_aggregates);
-    assert(!env->obs_ablate_npc_valid);
     check_obs(env);
     test_free(env);
 
@@ -970,9 +966,6 @@ static void init_and_config_test(void) {
     dict_set(&overrides, "shape_no_attack_start", 17);
     dict_set(&overrides, "initial_sharks", FC_MAX_SHARKS + 1);
     dict_set(&overrides, "initial_prayer_doses", -1);
-    dict_set(&overrides, "obs_ablate_npc_distance", 1);
-    dict_set(&overrides, "obs_ablate_incoming_aggregates", 1);
-    dict_set(&overrides, "obs_ablate_npc_valid", 1);
     env = test_env(&overrides);
     assert(env->reward_params.w_progress == 0.25f);
     assert(env->reward_params.shape_no_attack_start == 17);
@@ -983,7 +976,7 @@ static void init_and_config_test(void) {
     checked_step(env);
     test_free(env);
     dict_clear(&overrides);
-    puts("adapter init/config: bufferless probe, defaults, overrides, supplies, ablations passed");
+    puts("adapter init/config: bufferless probe, defaults, overrides and supplies passed");
 }
 
 static void terminal_and_log_test(void) {
@@ -1067,7 +1060,6 @@ static int adapter_test(int graphical) {
     FightCaves* env = test_env(kwargs);
     FightCaves* rendered = test_env(kwargs);
     assert(env->reward_params.w_progress == (float)dict_get(kwargs, "w_progress"));
-    assert(env->obs_ablate_incoming_aggregates == 1);
     puf_ini_free(&ini);
     uint32_t trace = 2166136261u;
     int episodes = 0;

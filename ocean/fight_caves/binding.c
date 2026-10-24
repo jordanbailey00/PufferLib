@@ -50,12 +50,6 @@ static void fc_puffer_write_obs(FightCaves* env) {
     /* Policy observations */
     fc_write_obs(&env->state, obs);
 
-    /* Optional obs ablation (zero specific feature slots in-place) */
-    fc_apply_obs_ablation(obs,
-                          env->obs_ablate_npc_distance,
-                          env->obs_ablate_incoming_aggregates,
-                          env->obs_ablate_npc_valid);
-
     /* Keep the float mask in observations for checkpoint compatibility, and
      * publish the same legality flags through PufferLib's native mask channel. */
     float full_mask[FC_ACTION_MASK_SIZE];
@@ -259,15 +253,6 @@ void puf_init(Env* env, Dict* kwargs) {
     env->num_agents = 1;  /* Fight Caves is single-agent */
     fc_apply_env_config(kwargs, &env->reward_params, &env->initial_sharks,
                         &env->initial_prayer_doses);
-
-    /* Obs ablation flags (default 0 — i.e. no ablation, full obs).
-     * See fc_apply_obs_ablation in core.h for what each zeroes. */
-    DictItem* item = dict_find(kwargs, "obs_ablate_npc_distance");
-    env->obs_ablate_npc_distance = item ? (int)item->value : 0;
-    item = dict_find(kwargs, "obs_ablate_incoming_aggregates");
-    env->obs_ablate_incoming_aggregates = item ? (int)item->value : 0;
-    item = dict_find(kwargs, "obs_ablate_npc_valid");
-    env->obs_ablate_npc_valid = item ? (int)item->value : 0;
 
     /* Callers pass a zeroed Env (Puffer callocs its envs and zeroes its
      * bufferless probe), so the other fields need no initialization. */

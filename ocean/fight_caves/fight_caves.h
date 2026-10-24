@@ -50,12 +50,6 @@ struct Env {
     int initial_prayer_doses;
     FcRewardRuntime reward_runtime;
 
-    /* Observation ablation flags from [env]: when non-zero, fc_apply_obs_ablation
-     * zeroes those observation slots after fc_write_obs. */
-    int obs_ablate_npc_distance;
-    int obs_ablate_incoming_aggregates;
-    int obs_ablate_npc_valid;
-
     /* RNG seed counter (increments each episode for variety) */
     uint32_t seed_counter;
 };

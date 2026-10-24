@@ -155,11 +155,6 @@ static int benchmark(void) {
         env.reward_params = fc_reward_default_params();
         env.initial_sharks = 0;
         env.initial_prayer_doses = 0;
-
-        /* Obs ablation flags default to 0 (no ablation) for the standalone harness. */
-        env.obs_ablate_npc_distance = 0;
-        env.obs_ablate_incoming_aggregates = 0;
-        env.obs_ablate_npc_valid = 0;
     }
 
     fc_init(&env.state);

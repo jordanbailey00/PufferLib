@@ -639,12 +639,8 @@ typedef struct {
 #define FC_OBS_PLAYER_PRAY_MAG  7   /* prayer == PROTECT_MAGIC (0 or 1) */
 #define FC_OBS_PLAYER_SHARKS    8   /* sharks_remaining / MAX_SHARKS */
 #define FC_OBS_PLAYER_DOSES     9   /* prayer_doses / MAX_DOSES */
-#define FC_OBS_PLAYER_IN_MEL_1T 10  /* normalized count of melee hits landing in 1 tick */
-#define FC_OBS_PLAYER_IN_RNG_1T 11  /* normalized count of ranged hits landing in 1 tick */
-#define FC_OBS_PLAYER_IN_MAG_1T 12  /* normalized count of magic hits landing in 1 tick */
-#define FC_OBS_PLAYER_IN_MEL_2T 13  /* normalized count of melee hits landing in 2 ticks */
-#define FC_OBS_PLAYER_IN_RNG_2T 14  /* normalized count of ranged hits landing in 2 ticks */
-#define FC_OBS_PLAYER_IN_MAG_2T 15  /* normalized count of magic hits landing in 2 ticks */
+/* 10-15 are always 0. They held incoming-hit counts, which training zeroed;
+ * the slots stay so the policy's 286-float layout does not change. */
 #define FC_OBS_PLAYER_TARGET    16  /* attack_target NPC slot index / 8 (0=no target, 0.125-1.0=slot 0-7) */
 #define FC_OBS_PLAYER_PRAY_DDL_MEL 17  /* style-specific prayer deadline urgency for actionable melee hits */
 #define FC_OBS_PLAYER_PRAY_DDL_RNG 18  /* style-specific prayer deadline urgency for actionable ranged hits */
@@ -727,9 +723,7 @@ typedef struct {
 #define FC_OBS_META_ROTATION    1   /* rotation_id / NUM_ROTATIONS */
 #define FC_OBS_META_REMAINING   2   /* npcs_remaining / MAX_NPCS */
 #define FC_OBS_META_PRAY_DRAIN  3   /* prayer_drain_counter / drain_resistance */
-#define FC_OBS_META_IN_MEL_3T   4   /* normalized count of melee hits landing in 3 ticks */
-#define FC_OBS_META_IN_RNG_3T   5   /* normalized count of ranged hits landing in 3 ticks */
-#define FC_OBS_META_IN_MAG_3T   6   /* normalized count of magic hits landing in 3 ticks */
+/* 4-6 are always 0, like the player block's 10-15. */
 #define FC_OBS_META_DMG_T_TICK  7   /* damage_taken_this_tick / max_hp */
 #define FC_OBS_META_WAVE_CLR    8   /* wave_just_cleared (0 or 1) */
 #define FC_OBS_META_CAVE_PROG   9   /* derived cave progress, [0,1] */
@@ -4128,12 +4122,6 @@ static int attack_style_summary_idx(int style) {
     }
 }
 
-static float normalize_incoming_count(int count) {
-    if (count <= 0) return 0.0f;
-    if (count >= 4) return 1.0f;
-    return (float)count / 4.0f;
-}
-
 static float normalize_prayer_drain_counter(const FcPlayer* p) {
     int resistance = 60 + 2 * p->prayer_bonus;
     if (resistance <= 0) return 0.0f;
@@ -4260,14 +4248,10 @@ void fc_write_obs(const FcState* state, float* out) {
     memset(out, 0, sizeof(float) * FC_TOTAL_OBS);
 
     const FcPlayer* p = &state->player;
-    int incoming_counts[3][3] = {{0}};
     float prayer_deadline_urgency[3] = {0.0f, 0.0f, 0.0f};
 
-    /* Compact incoming-hit timeline summary.
-     * Counts by style for hits landing in 1, 2, and 3 ticks. This gives the
-     * policy a relative timing signal without leaking absolute episode clocks.
-     * Prayer deadline urgency is separate: it marks pending hits whose prayer
-     * snapshot has not locked yet, which is the actual decision window. */
+    /* Prayer deadline urgency per style: the most urgent pending hit whose
+     * prayer snapshot has not locked yet, which is the decision window. */
     for (int hi = 0; hi < p->num_pending_hits; hi++) {
         const FcPendingHit* ph = &p->pending_hits[hi];
         if (!ph->active) continue;
@@ -4277,12 +4261,6 @@ void fc_write_obs(const FcState* state, float* out) {
             if (urgency > prayer_deadline_urgency[style_idx]) {
                 prayer_deadline_urgency[style_idx] = urgency;
             }
-        }
-        if (ph->ticks_remaining < 1 || ph->ticks_remaining > 3) continue;
-        if (style_idx < 0) continue;
-        int bucket = ph->ticks_remaining - 1;
-        if (incoming_counts[bucket][style_idx] < 4) {
-            incoming_counts[bucket][style_idx]++;
         }
     }
 
@@ -4299,12 +4277,6 @@ void fc_write_obs(const FcState* state, float* out) {
     player[FC_OBS_PLAYER_PRAY_MAG]  = (p->prayer == PRAYER_PROTECT_MAGIC) ? 1.0f : 0.0f;
     player[FC_OBS_PLAYER_SHARKS]    = (float)p->sharks_remaining / (float)FC_MAX_SHARKS;
     player[FC_OBS_PLAYER_DOSES]     = (float)p->prayer_doses_remaining / (float)FC_MAX_PRAYER_DOSES;
-    player[FC_OBS_PLAYER_IN_MEL_1T] = normalize_incoming_count(incoming_counts[0][0]);
-    player[FC_OBS_PLAYER_IN_RNG_1T] = normalize_incoming_count(incoming_counts[0][1]);
-    player[FC_OBS_PLAYER_IN_MAG_1T] = normalize_incoming_count(incoming_counts[0][2]);
-    player[FC_OBS_PLAYER_IN_MEL_2T] = normalize_incoming_count(incoming_counts[1][0]);
-    player[FC_OBS_PLAYER_IN_RNG_2T] = normalize_incoming_count(incoming_counts[1][1]);
-    player[FC_OBS_PLAYER_IN_MAG_2T] = normalize_incoming_count(incoming_counts[1][2]);
     player[FC_OBS_PLAYER_PRAY_DDL_MEL] = prayer_deadline_urgency[0];
     player[FC_OBS_PLAYER_PRAY_DDL_RNG] = prayer_deadline_urgency[1];
     player[FC_OBS_PLAYER_PRAY_DDL_MAG] = prayer_deadline_urgency[2];
@@ -4392,9 +4364,6 @@ void fc_write_obs(const FcState* state, float* out) {
     meta[FC_OBS_META_ROTATION]   = (float)state->rotation_id / (float)FC_NUM_ROTATIONS;
     meta[FC_OBS_META_REMAINING]  = (float)state->npcs_remaining / (float)FC_MAX_NPCS;
     meta[FC_OBS_META_PRAY_DRAIN] = normalize_prayer_drain_counter(p);
-    meta[FC_OBS_META_IN_MEL_3T]  = normalize_incoming_count(incoming_counts[2][0]);
-    meta[FC_OBS_META_IN_RNG_3T]  = normalize_incoming_count(incoming_counts[2][1]);
-    meta[FC_OBS_META_IN_MAG_3T]  = normalize_incoming_count(incoming_counts[2][2]);
     meta[FC_OBS_META_DMG_T_TICK] = (p->max_hp > 0) ? (float)state->damage_taken_this_tick / (float)p->max_hp : 0.0f;
     meta[FC_OBS_META_WAVE_CLR]   = (float)state->wave_just_cleared;
     meta[FC_OBS_META_CAVE_PROG]  = clamp01(state->progress_cave_progress);
@@ -4413,44 +4382,6 @@ void fc_write_obs(const FcState* state, float* out) {
 
     /* Reward features (at offset FC_REWARD_START) — written by fc_write_reward_features */
     fc_write_reward_features(state, out + FC_REWARD_START);
-}
-
-/* Zero specific observation slots in-place (for obs-ablation experiments).
- * Apply AFTER fc_write_obs. Each flag, when non-zero, zeroes the
- * corresponding region of the policy obs (does not touch reward features
- * or the action mask):
- *   ablate_npc_distance         — zeroes FC_NPC_DISTANCE for all 8 NPC slots
- *   ablate_incoming_aggregates  — zeroes the 6 player-block IN_*_1T/2T fields
- *                                  + the 3 meta-block IN_*_3T fields
- *   ablate_npc_valid            — zeroes FC_NPC_VALID for all 8 NPC slots
- *
- * out must point to the same buffer fc_write_obs filled (length FC_TOTAL_OBS).
- * No-op when all three flags are 0. */
-static void fc_apply_obs_ablation(float* out,
-                                  int ablate_npc_distance,
-                                  int ablate_incoming_aggregates,
-                                  int ablate_npc_valid) {
-    if (ablate_npc_distance) {
-        for (int s = 0; s < FC_OBS_NPC_SLOTS; s++) {
-            out[FC_OBS_NPC_START + s * FC_OBS_NPC_STRIDE + FC_NPC_DISTANCE] = 0.0f;
-        }
-    }
-    if (ablate_incoming_aggregates) {
-        out[FC_OBS_PLAYER_START + FC_OBS_PLAYER_IN_MEL_1T] = 0.0f;
-        out[FC_OBS_PLAYER_START + FC_OBS_PLAYER_IN_RNG_1T] = 0.0f;
-        out[FC_OBS_PLAYER_START + FC_OBS_PLAYER_IN_MAG_1T] = 0.0f;
-        out[FC_OBS_PLAYER_START + FC_OBS_PLAYER_IN_MEL_2T] = 0.0f;
-        out[FC_OBS_PLAYER_START + FC_OBS_PLAYER_IN_RNG_2T] = 0.0f;
-        out[FC_OBS_PLAYER_START + FC_OBS_PLAYER_IN_MAG_2T] = 0.0f;
-        out[FC_OBS_META_START + FC_OBS_META_IN_MEL_3T] = 0.0f;
-        out[FC_OBS_META_START + FC_OBS_META_IN_RNG_3T] = 0.0f;
-        out[FC_OBS_META_START + FC_OBS_META_IN_MAG_3T] = 0.0f;
-    }
-    if (ablate_npc_valid) {
-        for (int s = 0; s < FC_OBS_NPC_SLOTS; s++) {
-            out[FC_OBS_NPC_START + s * FC_OBS_NPC_STRIDE + FC_NPC_VALID] = 0.0f;
-        }
-    }
 }
 
 /* Raw reward features for the current tick (FC_REWARD_FEATURES floats);

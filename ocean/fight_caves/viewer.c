@@ -7513,14 +7513,6 @@ int dbg_draw_panel_tabs(const FcState* state,
                        obs[FC_OBS_PLAYER_PRAY_DDL_MEL],
                        obs[FC_OBS_PLAYER_PRAY_DDL_RNG],
                        obs[FC_OBS_PLAYER_PRAY_DDL_MAG]);
-        dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL, "In1 M%.2f R%.2f G%.2f",
-                       obs[FC_OBS_PLAYER_IN_MEL_1T],
-                       obs[FC_OBS_PLAYER_IN_RNG_1T],
-                       obs[FC_OBS_PLAYER_IN_MAG_1T]);
-        dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL, "In2 M%.2f R%.2f G%.2f",
-                       obs[FC_OBS_PLAYER_IN_MEL_2T],
-                       obs[FC_OBS_PLAYER_IN_RNG_2T],
-                       obs[FC_OBS_PLAYER_IN_MAG_2T]);
         dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL, "Meta W%.2f Rot%.2f Rem%.2f",
                        obs[mbase + FC_OBS_META_WAVE],
                        obs[mbase + FC_OBS_META_ROTATION],
@@ -7529,10 +7521,6 @@ int dbg_draw_panel_tabs(const FcState* state,
                        obs[mbase + FC_OBS_META_PRAY_DRAIN],
                        obs[mbase + FC_OBS_META_DMG_T_TICK],
                        obs[mbase + FC_OBS_META_WAVE_CLR]);
-        dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL, "In3 M%.2f R%.2f G%.2f",
-                       obs[mbase + FC_OBS_META_IN_MEL_3T],
-                       obs[mbase + FC_OBS_META_IN_RNG_3T],
-                       obs[mbase + FC_OBS_META_IN_MAG_3T]);
         dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL,
                        "Prog C%.2f W%.2f Rem%.2f NoP%.2f",
                        obs[mbase + FC_OBS_META_CAVE_PROG],
