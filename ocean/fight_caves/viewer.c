@@ -7308,7 +7308,6 @@ typedef struct ViewerState {
     /* Debug toggles */
     int godmode;        /* 1 = player can't die */
     int policy_replay;    /* 1 = read-only presentation of native policy transitions */
-    int replay_episode_count; /* number of completed native replay episodes */
     int start_wave;     /* 0 = wave 1 (default), >0 = skip to this wave on reset */
     int initial_sharks;
     int initial_prayer_doses;
@@ -7637,15 +7636,6 @@ static void text_s(const char* t, int x, int y, int sz, Color c) {
     fc_osrs_draw_text(t, x, y, sz, c);
 }
 
-static const char* fc_terminal_name(int terminal) {
-    switch (terminal) {
-        case TERMINAL_PLAYER_DEATH: return "player_death";
-        case TERMINAL_CAVE_COMPLETE: return "cave_complete";
-        case TERMINAL_TICK_CAP: return "tick_cap";
-        default: return "none";
-    }
-}
-
 static int float_near(float a, float b) {
     return fabsf(a - b) < 0.0001f;
 }
@@ -7738,39 +7728,6 @@ static void toggle_godmode(ViewerState* v) {
     if (!v || v->policy_replay) return;
     v->godmode = !v->godmode;
     fprintf(stderr, "GODMODE: %s\n", v->godmode ? "ON" : "OFF");
-}
-
-static void print_replay_episode_summary(const ViewerState* v) {
-    FcEpisodeSummary summary;
-    fc_episode_summary_build(&v->state, &v->reward_runtime, v->state.tick, &summary);
-    fprintf(stderr,
-        "[eval] episode_summary "
-        "{\"episode\":%d,\"seed\":%u,\"terminal\":\"%s\","
-        "\"env/zero_progress_ticks\":%d,"
-        "\"env/wave_reached\":%d,"
-        "\"env/wrong_prayer_hits\":%d,"
-        "\"env/reached_wave_63\":%d,"
-        "\"env/jad_kill_rate\":%d,"
-        "\"env/prayer_uptime_range\":%.6f,"
-        "\"env/prayer_uptime_melee\":%.6f,"
-        "\"env/prayer_uptime_magic\":%.6f,"
-        "\"env/npc_healing_total\":%.6f,"
-        "\"env/jad_healing_total\":%.6f,"
-        "\"env/episode_length\":%d,"
-        "\"env/n\":1.0}\n",
-        v->replay_episode_count + 1, v->state.rng_seed,
-        fc_terminal_name(v->state.terminal),
-        summary.zero_progress_ticks,
-        summary.wave_reached,
-        summary.wrong_prayer_hits,
-        summary.reached_wave_63,
-        summary.jad_kill_rate,
-        summary.prayer_uptime_range,
-        summary.prayer_uptime_melee,
-        summary.prayer_uptime_magic,
-        summary.npc_healing_total,
-        summary.jad_healing_total,
-        summary.episode_length);
 }
 
 static void sync_player_appearance(ViewerState *v) {
@@ -9350,10 +9307,6 @@ static void fc_viewer_present_pending(ViewerState* v) {
     v->reward_breakdown_tick = v->state.tick;
     memcpy(v->actions, v->pending_actions, sizeof(v->actions));
     fc_viewer_ingest_tick(v);
-    if (fc_is_terminal(&v->state)) {
-        print_replay_episode_summary(v);
-        v->replay_episode_count++;
-    }
     v->pending_frame = 0;
 }
 
