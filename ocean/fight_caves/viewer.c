@@ -19,6 +19,7 @@
  */
 
 #include "raylib.h"
+#include "raymath.h"
 #include "rlgl.h"
 #ifndef FC_VIEWER_EMBEDDED
 #define FC_CORE_IMPLEMENTATION
@@ -26,12 +27,22 @@
 #include "core.h"
 #undef FC_CORE_IMPLEMENTATION
 
+#include <ctype.h>
+#include <errno.h>
+#include <float.h>
+#include <math.h>
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+
 /* ===================== Asset loading ===================== */
 
 /* Io */
-
-#include <stdbool.h>
-#include <stdio.h>
 
 static inline bool fc_read_exact(FILE* f, void* dst, size_t elem_size,
                                  size_t elem_count, const char* path,
@@ -52,356 +63,9 @@ static inline bool fc_seek(FILE* f, long offset, int origin,
     return true;
 }
 
-
 /* Assets */
-
-#include <stddef.h>
-#include <stdio.h>
 
 #define FC_ASSET_PATH_MAX 1024
-
-const char* fc_asset_root(void);
-const char* fc_repo_root(void);
-
-int fc_asset_resolve_path(const char* logical_path, char* out, size_t cap);
-int fc_repo_resolve_path(const char* logical_path, char* out, size_t cap);
-int fc_asset_exists(const char* logical_path);
-
-FILE* fc_asset_fopen(const char* logical_path, const char* mode);
-int fc_asset_close(FILE* f);
-unsigned char* fc_asset_read_all(const char* logical_path, size_t* out_size);
-
-
-/* Asset Raylib */
-
-#include "raylib.h"
-
-Texture2D fc_load_texture_asset(const char* path);
-Image fc_load_image_asset(const char* path);
-Font fc_load_font_asset(const char* path, int font_size);
-
-
-/* Animated Atlas */
-
-#include "raylib.h"
-
-#include <stdint.h>
-
-typedef struct {
-    uint32_t texture_id;
-    uint16_t x;
-    uint16_t y;
-    uint16_t w;
-    uint16_t h;
-    uint8_t direction;
-    uint8_t speed;
-    uint16_t pad;
-} FcTextureAnimRow;
-
-typedef struct {
-    Texture2D texture;
-    unsigned char* base_pixels;
-    unsigned char* pixels;
-    FcTextureAnimRow* anims;
-    int width;
-    int height;
-    int anim_count;
-    float anim_ticks;
-} FcAnimatedAtlas;
-
-int fc_animated_atlas_load(FcAnimatedAtlas* atlas, const char* atlas_path,
-                           int enable_animation);
-void fc_animated_atlas_update(FcAnimatedAtlas* atlas, float dt);
-void fc_animated_atlas_unload(FcAnimatedAtlas* atlas);
-
-
-/* Anim Loader */
-
-#include <stdint.h>
-
-#define ANIM_MAX_LABELS 256
-
-typedef struct {
-    uint16_t base_id;
-    uint8_t slot_count;
-    uint8_t *types;
-    uint8_t *map_lengths;
-    uint8_t **frame_maps;
-} AnimFrameBase;
-
-typedef struct {
-    uint8_t slot_index;
-    int16_t dx;
-    int16_t dy;
-    int16_t dz;
-} AnimTransform;
-
-typedef struct {
-    uint16_t framebase_id;
-    uint8_t transform_count;
-    AnimTransform *transforms;
-} AnimFrameData;
-
-typedef struct {
-    uint16_t delay;
-    AnimFrameData frame;
-} AnimSequenceFrame;
-
-typedef struct {
-    uint16_t seq_id;
-    uint16_t frame_count;
-    uint8_t interleave_count;
-    uint8_t *interleave_order;
-    int16_t frame_step;
-    int8_t preanim_move;
-    int8_t postanim_move;
-    uint8_t forced_priority;
-    uint8_t max_loops;
-    int8_t reply_mode;
-    uint8_t stretches;
-    int8_t walk_flag;
-    AnimSequenceFrame *frames;
-} AnimSequence;
-
-typedef struct {
-    AnimFrameBase *bases;
-    int base_count;
-    uint16_t *base_ids;
-    AnimSequence *sequences;
-    int seq_count;
-} AnimCache;
-
-typedef struct {
-    int16_t *verts;
-    int vert_count;
-    int **groups;
-    int *group_counts;
-} AnimModelState;
-
-AnimCache *anim_cache_load(const char *path);
-AnimSequence *anim_get_sequence(AnimCache *cache, uint16_t seq_id);
-AnimFrameBase *anim_get_framebase(AnimCache *cache, uint16_t base_id);
-AnimModelState *anim_model_state_create(const uint8_t *vertex_skins,
-                                        int base_vert_count);
-void anim_model_state_free(AnimModelState *state);
-void anim_apply_frame(AnimModelState *state, const int16_t *base_verts_src,
-                      const AnimFrameData *frame, const AnimFrameBase *fb);
-int anim_mix_pose_action(AnimCache *cache, AnimModelState *state,
-                         const int16_t *base_verts, AnimSequence *pose,
-                         int pose_frame_index, AnimSequence *action,
-                         int action_frame_index);
-void anim_update_mesh(float *mesh_vertices, const AnimModelState *state,
-                      const uint16_t *face_indices, int face_count);
-void anim_cache_free(AnimCache *cache);
-
-
-/* Models */
-
-#include "raylib.h"
-#include <stdint.h>
-
-typedef struct {
-    uint8_t textured;
-    uint16_t tex_a;
-    uint16_t tex_b;
-    uint16_t tex_c;
-    float u_base;
-    float v_base;
-    float u_scale;
-    float v_scale;
-    float repeat_v_margin;
-} ModelFaceUvInfo;
-
-typedef struct {
-    uint32_t model_id;
-    Model model;
-    int loaded;
-    float *rest_verts;
-    float *rest_texcoords;
-    int16_t *base_verts;
-    uint8_t *vertex_skins;
-    uint16_t *face_indices;
-    uint8_t *face_priorities;
-    ModelFaceUvInfo *face_uvs;
-    int base_vert_count;
-    int face_count;
-} ModelEntry;
-
-typedef struct {
-    ModelEntry *entries;
-    int *index_by_id;
-    int count;
-    int index_limit;
-    int has_textures;
-    int loaded;
-} ModelSet;
-
-ModelSet *models_load(const char *path, Texture2D atlas_texture);
-ModelEntry *model_find(ModelSet *set, uint32_t id);
-/* Screen-space face picking at the drawn pose, with the client's 5px tolerance.
- * Returns camera depth for overlap ordering, or -1 for a miss. posed_vertices
- * uses animation/cache coordinates; NULL selects the asset's rest mesh. */
-float models_pick_depth(const ModelEntry *entry, const int16_t *posed_vertices,
-                         Vector3 position, float yaw_degrees, Camera3D camera,
-                         Vector2 mouse, int screen_width, int screen_height);
-void models_recompute_texture_uvs_from_vertices(ModelEntry *entry,
-                                                const int16_t *verts);
-void models_free(ModelSet *set);
-
-
-/* Npc Models */
-
-#define FC_B237_TZ_KIH 3116u
-#define FC_B237_TZ_KEK 3118u
-#define FC_B237_TZ_KEK_SM 3120u
-#define FC_B237_TOK_XIL 3121u
-#define FC_B237_YT_MEJKOT 3123u
-#define FC_B237_KET_ZEK 3125u
-#define FC_B237_TZTOK_JAD 3127u
-#define FC_B237_YT_HURKOT 3128u
-
-typedef ModelEntry NpcModelEntry;
-typedef ModelSet NpcModelSet;
-
-uint32_t fc_npc_type_to_model_id(int npc_type);
-NpcModelEntry *fc_npc_model_find(NpcModelSet *set, uint32_t model_id);
-NpcModelSet *fc_npc_models_load(const char *path, Texture2D atlas_texture);
-void fc_npc_models_unload(NpcModelSet *set);
-
-
-/* Model Animation */
-
-void fc_model_animation_upload(NpcModelEntry *entry, AnimModelState *state);
-void fc_model_animation_update(NpcModelEntry *entry,
-                               AnimCache *cache,
-                               AnimModelState **state,
-                               uint16_t *current_sequence,
-                               int *frame_index,
-                               float *frame_timer,
-                               int animation_id,
-                               float dt,
-                               float phase_ticks);
-
-
-/* Objects Loader */
-
-#include "raylib.h"
-#include <stdint.h>
-
-#define OANM_FLAG_DYNAMIC_BASE 1u
-#define OANM_FLAG_DYNAMIC_REPLACEMENT 2u
-
-typedef struct {
-    Model model;
-    FcAnimatedAtlas atlas;
-    int placement_count;
-    int total_vertex_count;
-    int min_world_x;
-    int min_world_y;
-    int has_textures;
-    int loaded;
-} ObjectMesh;
-
-typedef struct {
-    uint32_t model_id;
-    uint32_t obj_id;
-    int32_t animation_id;
-    int32_t world_x;
-    int32_t world_y;
-    uint8_t plane;
-    uint8_t obj_type;
-    uint8_t rotation;
-    uint8_t flags;
-    float pos_x;
-    float pos_y;
-    float pos_z;
-    float phase_ticks;
-} ObjectAnimPlacement;
-
-typedef struct {
-    ObjectAnimPlacement *rows;
-    int count;
-    int loaded;
-} ObjectAnimSet;
-
-ObjectMesh *objects_load(const char *path);
-ObjectAnimSet *object_anims_load(const char *path);
-void object_anims_offset(ObjectAnimSet *set, int wx, int wy);
-void objects_offset(ObjectMesh *om, int wx, int wy);
-void objects_free(ObjectMesh *om);
-void object_anims_free(ObjectAnimSet *set);
-
-
-/* Terrain Loader */
-
-#include "raylib.h"
-
-typedef struct {
-    Model model;
-    int vertex_count;
-    int region_count;
-    int min_world_x;
-    int min_world_y;
-    int loaded;
-    float *heightmap;
-    int hm_min_x;
-    int hm_min_y;
-    int hm_width;
-    int hm_height;
-} TerrainMesh;
-
-TerrainMesh *terrain_load(const char *path);
-void terrain_offset(TerrainMesh *tm, int wx, int wy);
-float terrain_height_at(TerrainMesh *tm, int world_x, int world_y);
-void terrain_free(TerrainMesh *tm);
-
-
-/* Spotanims */
-
-#include <stdint.h>
-
-typedef struct {
-    uint32_t id;
-    int32_t model_id;
-    int32_t animation_id;
-    uint32_t resize_xy;
-    uint32_t resize_z;
-    uint32_t rotation;
-    int32_t brightness;
-    int32_t shadow;
-} SpotAnimDef;
-
-typedef struct {
-    SpotAnimDef *defs;
-    int count;
-    int loaded;
-} SpotAnimSet;
-
-SpotAnimSet *spotanims_load(const char *path);
-const SpotAnimDef *spotanim_find(const SpotAnimSet *set, int id);
-void spotanims_free(SpotAnimSet *set);
-
-
-/* Player Appearance */
-typedef struct {
-    ModelSet *parts;
-    ModelSet *model;
-    struct { uint32_t item_id, hide_mask; } records[64];
-    int record_count;
-    int worn_ids[FC_EQUIPMENT_SLOTS];
-} FcPlayerAppearance;
-
-int fc_player_appearance_load(FcPlayerAppearance *appearance);
-/* 1 = rebuilt, 0 = unchanged, -1 = missing/invalid asset or allocation failure. */
-int fc_player_appearance_sync(FcPlayerAppearance *appearance,
-                               const FcPlayer *player, uint32_t model_id);
-void fc_player_appearance_free(FcPlayerAppearance *appearance);
-
-/* Assets */
-#include <errno.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/stat.h>
 
 static int fc_has_prefix(const char* s, const char* prefix) {
     size_t n;
@@ -685,10 +349,7 @@ unsigned char* fc_asset_read_all(const char* logical_path, size_t* out_size) {
     return data;
 }
 
-
 /* Asset Raylib */
-#include <stdlib.h>
-#include <string.h>
 
 static const char* fc_asset_extension(const char* path, const char* fallback) {
     const char* dot = path ? strrchr(path, '.') : NULL;
@@ -732,12 +393,29 @@ Font fc_load_font_asset(const char* path, int font_size) {
     return font.texture.id != 0 ? font : empty;
 }
 
-
 /* Animated Atlas */
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+
+typedef struct {
+    uint32_t texture_id;
+    uint16_t x;
+    uint16_t y;
+    uint16_t w;
+    uint16_t h;
+    uint8_t direction;
+    uint8_t speed;
+    uint16_t pad;
+} FcTextureAnimRow;
+
+typedef struct {
+    Texture2D texture;
+    unsigned char* base_pixels;
+    unsigned char* pixels;
+    FcTextureAnimRow* anims;
+    int width;
+    int height;
+    int anim_count;
+    float anim_ticks;
+} FcAnimatedAtlas;
 
 #define FC_ATLAS_MAGIC 0x41544C53u
 #define FC_TEXTURE_ANIM_MAGIC 0x4D4E4154u
@@ -957,10 +635,6 @@ void fc_animated_atlas_unload(FcAnimatedAtlas* atlas) {
     *atlas = (FcAnimatedAtlas) {0};
 }
 
-#undef FC_ATLAS_MAGIC
-#undef FC_TEXTURE_ANIM_MAGIC
-#undef FC_TEXTURE_ANIM_VERSION
-
 /* Anim Loader */
 /**
  * @fileoverview OSRS animation runtime — loads .anims binary, applies vertex-group
@@ -975,7 +649,7 @@ void fc_animated_atlas_unload(FcAnimatedAtlas* atlas) {
  *   3 = scale (relative to pivot, 128 = 1.0x identity)
  *   5 = alpha (face transparency, not used in our viewer)
  *
- * Binary format (.anims) produced by tools/cache_pipeline/export_animations.py:
+ * Binary format (.anims):
  *   legacy header: uint32 magic ("MINA"), uint16 framebase_count,
  *                  uint16 sequence_count
  *   current header: char[4] magic ("ANM2"), uint16 version,
@@ -985,11 +659,64 @@ void fc_animated_atlas_unload(FcAnimatedAtlas* atlas) {
  *   framebases section, sequences section with inlined frame data.
  */
 
-#include <math.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#define ANIM_MAX_LABELS 256
+
+typedef struct {
+    uint16_t base_id;
+    uint8_t slot_count;
+    uint8_t *types;
+    uint8_t *map_lengths;
+    uint8_t **frame_maps;
+} AnimFrameBase;
+
+typedef struct {
+    uint8_t slot_index;
+    int16_t dx;
+    int16_t dy;
+    int16_t dz;
+} AnimTransform;
+
+typedef struct {
+    uint16_t framebase_id;
+    uint8_t transform_count;
+    AnimTransform *transforms;
+} AnimFrameData;
+
+typedef struct {
+    uint16_t delay;
+    AnimFrameData frame;
+} AnimSequenceFrame;
+
+typedef struct {
+    uint16_t seq_id;
+    uint16_t frame_count;
+    uint8_t interleave_count;
+    uint8_t *interleave_order;
+    int16_t frame_step;
+    int8_t preanim_move;
+    int8_t postanim_move;
+    uint8_t forced_priority;
+    uint8_t max_loops;
+    int8_t reply_mode;
+    uint8_t stretches;
+    int8_t walk_flag;
+    AnimSequenceFrame *frames;
+} AnimSequence;
+
+typedef struct {
+    AnimFrameBase *bases;
+    int base_count;
+    uint16_t *base_ids;
+    AnimSequence *sequences;
+    int seq_count;
+} AnimCache;
+
+typedef struct {
+    int16_t *verts;
+    int vert_count;
+    int **groups;
+    int *group_counts;
+} AnimModelState;
 
 #define ANIM_MAGIC 0x414E494D  /* legacy bytes "MINA" when read little-endian */
 #define ANIM2_MAGIC 0x324D4E41 /* bytes "ANM2" when read little-endian */
@@ -1072,6 +799,33 @@ static int anim_read_u32(AnimCursor* c, uint32_t* out, const char* what) {
          | ((uint32_t)b[2] << 16)
          | ((uint32_t)b[3] << 24);
     return 1;
+}
+
+void anim_cache_free(AnimCache* cache) {
+    if (!cache) return;
+
+    for (int i = 0; i < cache->base_count; i++) {
+        AnimFrameBase* fb = &cache->bases[i];
+        free(fb->types);
+        free(fb->map_lengths);
+        for (int s = 0; s < fb->slot_count; s++) {
+            free(fb->frame_maps[s]);
+        }
+        free(fb->frame_maps);
+    }
+    free(cache->bases);
+    free(cache->base_ids);
+
+    for (int i = 0; i < cache->seq_count; i++) {
+        AnimSequence* seq = &cache->sequences[i];
+        free(seq->interleave_order);
+        for (int fi = 0; fi < seq->frame_count; fi++) {
+            free(seq->frames[fi].frame.transforms);
+        }
+        free(seq->frames);
+    }
+    free(cache->sequences);
+    free(cache);
 }
 
 AnimCache* anim_cache_load(const char* path) {
@@ -1822,57 +1576,45 @@ void anim_update_mesh(
     }
 }
 
-/* ======================================================================== */
-/* cleanup                                                                    */
-/* ======================================================================== */
-
-void anim_cache_free(AnimCache* cache) {
-    if (!cache) return;
-
-    for (int i = 0; i < cache->base_count; i++) {
-        AnimFrameBase* fb = &cache->bases[i];
-        free(fb->types);
-        free(fb->map_lengths);
-        for (int s = 0; s < fb->slot_count; s++) {
-            free(fb->frame_maps[s]);
-        }
-        free(fb->frame_maps);
-    }
-    free(cache->bases);
-    free(cache->base_ids);
-
-    for (int i = 0; i < cache->seq_count; i++) {
-        AnimSequence* seq = &cache->sequences[i];
-        free(seq->interleave_order);
-        for (int fi = 0; fi < seq->frame_count; fi++) {
-            free(seq->frames[fi].frame.transforms);
-        }
-        free(seq->frames);
-    }
-    free(cache->sequences);
-    free(cache);
-}
-
-#undef ANIM_MAGIC
-#undef ANIM2_MAGIC
-#undef ANIM2_MIN_VERSION
-#undef ANIM2_VERSION
-#undef ANIM2_HEADER_SIZE
-#undef ANIM_MAX_SLOTS
-#undef ANIM_SINE_COUNT
-
 /* Models */
 // Loads models from .models MDL2/MDL3 binary for Raylib rendering.
 // Fight Caves raylib model loader.
 
-#include "raylib.h"
-#include "raymath.h"
-#include <float.h>
-#include <math.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+typedef struct {
+    uint8_t textured;
+    uint16_t tex_a;
+    uint16_t tex_b;
+    uint16_t tex_c;
+    float u_base;
+    float v_base;
+    float u_scale;
+    float v_scale;
+    float repeat_v_margin;
+} ModelFaceUvInfo;
+
+typedef struct {
+    uint32_t model_id;
+    Model model;
+    int loaded;
+    float *rest_verts;
+    float *rest_texcoords;
+    int16_t *base_verts;
+    uint8_t *vertex_skins;
+    uint16_t *face_indices;
+    uint8_t *face_priorities;
+    ModelFaceUvInfo *face_uvs;
+    int base_vert_count;
+    int face_count;
+} ModelEntry;
+
+typedef struct {
+    ModelEntry *entries;
+    int *index_by_id;
+    int count;
+    int index_limit;
+    int has_textures;
+    int loaded;
+} ModelSet;
 
 #define MDL2_MAGIC 0x4D444C32
 #define MDL3_MAGIC 0x4D444C33
@@ -1898,6 +1640,9 @@ ModelEntry *model_find(ModelSet *set, uint32_t id) {
     return NULL;
 }
 
+/* Screen-space face picking at the drawn pose, with the client's 5px tolerance.
+ * Returns camera depth for overlap ordering, or -1 for a miss. posed_vertices
+ * uses animation/cache coordinates; NULL selects the asset's rest mesh. */
 float models_pick_depth(const ModelEntry *entry, const int16_t *posed_vertices,
                          Vector3 position, float yaw_degrees, Camera3D camera,
                          Vector2 mouse, int screen_width, int screen_height) {
@@ -2046,6 +1791,25 @@ void models_recompute_texture_uvs_from_vertices(ModelEntry *entry,
     }
     UpdateMeshBuffer(*mesh, 1, mesh->texcoords,
                      mesh->vertexCount * 2 * sizeof(float), 0);
+}
+
+void models_free(ModelSet *set) {
+    if (!set) return;
+    for (int i = 0; i < set->count; i++) {
+        if (set->entries[i].loaded) {
+            UnloadModel(set->entries[i].model);
+        }
+        free(set->entries[i].base_verts);
+        free(set->entries[i].rest_verts);
+        free(set->entries[i].rest_texcoords);
+        free(set->entries[i].vertex_skins);
+        free(set->entries[i].face_indices);
+        free(set->entries[i].face_priorities);
+        free(set->entries[i].face_uvs);
+    }
+    free(set->entries);
+    free(set->index_by_id);
+    free(set);
 }
 
 static ModelSet *models_load_filtered(const char *path, const uint32_t *ids,
@@ -2326,30 +2090,6 @@ ModelSet *models_load(const char *path, Texture2D atlas_texture) {
     return models_load_filtered(path, NULL, 0, atlas_texture);
 }
 
-void models_free(ModelSet *set) {
-    if (!set) return;
-    for (int i = 0; i < set->count; i++) {
-        if (set->entries[i].loaded) {
-            UnloadModel(set->entries[i].model);
-        }
-        free(set->entries[i].base_verts);
-        free(set->entries[i].rest_verts);
-        free(set->entries[i].rest_texcoords);
-        free(set->entries[i].vertex_skins);
-        free(set->entries[i].face_indices);
-        free(set->entries[i].face_priorities);
-        free(set->entries[i].face_uvs);
-    }
-    free(set->entries);
-    free(set->index_by_id);
-    free(set);
-}
-
-#undef MDL2_MAGIC
-#undef MDL3_MAGIC
-#undef MUV1_MAGIC
-#undef MODEL_ID_INDEX_MAX
-
 /* Npc Models */
 /*
  * Fight Caves model compatibility wrapper.
@@ -2358,6 +2098,18 @@ void models_free(ModelSet *set) {
  * runtime model file. Keep those names while routing all NPC/player/projectile
  * files through the generalized MDL2/MDL3 model loader.
  */
+
+#define FC_B237_TZ_KIH 3116u
+#define FC_B237_TZ_KEK 3118u
+#define FC_B237_TZ_KEK_SM 3120u
+#define FC_B237_TOK_XIL 3121u
+#define FC_B237_YT_MEJKOT 3123u
+#define FC_B237_KET_ZEK 3125u
+#define FC_B237_TZTOK_JAD 3127u
+#define FC_B237_YT_HURKOT 3128u
+
+typedef ModelEntry NpcModelEntry;
+typedef ModelSet NpcModelSet;
 
 uint32_t fc_npc_type_to_model_id(int npc_type) {
     switch (npc_type) {
@@ -2385,18 +2137,7 @@ void fc_npc_models_unload(NpcModelSet* set) {
     models_free(set);
 }
 
-
 /* Model Animation */
-#include "raylib.h"
-
-static void apply_frame(NpcModelEntry *entry,
-                        AnimModelState *state,
-                        const AnimFrameData *frame,
-                        const AnimFrameBase *framebase) {
-    if (!entry || !entry->loaded || !state || !frame || !framebase) return;
-    anim_apply_frame(state, entry->base_verts, frame, framebase);
-    fc_model_animation_upload(entry, state);
-}
 
 void fc_model_animation_upload(NpcModelEntry *entry, AnimModelState *state) {
     if (!entry || !entry->loaded || !state) return;
@@ -2412,6 +2153,15 @@ void fc_model_animation_upload(NpcModelEntry *entry, AnimModelState *state) {
     }
     UpdateMeshBuffer(entry->model.meshes[0], 0, mesh_vertices,
                      expanded_vertices * 3 * sizeof(float), 0);
+}
+
+static void apply_frame(NpcModelEntry *entry,
+                        AnimModelState *state,
+                        const AnimFrameData *frame,
+                        const AnimFrameBase *framebase) {
+    if (!entry || !entry->loaded || !state || !frame || !framebase) return;
+    anim_apply_frame(state, entry->base_verts, frame, framebase);
+    fc_model_animation_upload(entry, state);
 }
 
 void fc_model_animation_update(NpcModelEntry *entry,
@@ -2456,7 +2206,6 @@ void fc_model_animation_update(NpcModelEntry *entry,
     if (framebase) apply_frame(entry, *state, frame, framebase);
 }
 
-
 /* Objects Loader */
 /**
  * @fileoverview Loads placed map objects from .objects binary into a single raylib Model.
@@ -2471,13 +2220,41 @@ void fc_model_animation_update(NpcModelEntry *entry,
  * non-textured faces use HSL vertex color + white atlas pixel.
  */
 
-#include "raylib.h"
-#include "rlgl.h"
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <math.h>
+#define OANM_FLAG_DYNAMIC_BASE 1u
+#define OANM_FLAG_DYNAMIC_REPLACEMENT 2u
+
+typedef struct {
+    Model model;
+    FcAnimatedAtlas atlas;
+    int placement_count;
+    int total_vertex_count;
+    int min_world_x;
+    int min_world_y;
+    int has_textures;
+    int loaded;
+} ObjectMesh;
+
+typedef struct {
+    uint32_t model_id;
+    uint32_t obj_id;
+    int32_t animation_id;
+    int32_t world_x;
+    int32_t world_y;
+    uint8_t plane;
+    uint8_t obj_type;
+    uint8_t rotation;
+    uint8_t flags;
+    float pos_x;
+    float pos_y;
+    float pos_z;
+    float phase_ticks;
+} ObjectAnimPlacement;
+
+typedef struct {
+    ObjectAnimPlacement *rows;
+    int count;
+    int loaded;
+} ObjectAnimSet;
 
 #define OBJS_MAGIC 0x4F424A53  /* "OBJS" v1 */
 #define OBJ2_MAGIC 0x4F424A32  /* "OBJ2" v2 with texcoords */
@@ -2720,11 +2497,6 @@ void object_anims_free(ObjectAnimSet* set) {
     free(set);
 }
 
-#undef OBJS_MAGIC
-#undef OBJ2_MAGIC
-#undef OANM_MAGIC
-#undef OANM_VERSION
-
 /* Terrain Loader */
 /**
  * @fileoverview Loads terrain mesh from .terrain binary into raylib Model.
@@ -2739,14 +2511,30 @@ void object_anims_free(ObjectAnimSet* set) {
  *   colors: uint8[vertex_count * 4]
  */
 
-#include "raylib.h"
-#include <math.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+typedef struct {
+    Model model;
+    int vertex_count;
+    int region_count;
+    int min_world_x;
+    int min_world_y;
+    int loaded;
+    float *heightmap;
+    int hm_min_x;
+    int hm_min_y;
+    int hm_width;
+    int hm_height;
+} TerrainMesh;
 
 #define TERR_MAGIC 0x54455252
+
+void terrain_free(TerrainMesh* tm) {
+    if (!tm) return;
+    if (tm->loaded) {
+        UnloadModel(tm->model);
+    }
+    free(tm->heightmap);
+    free(tm);
+}
 
 TerrainMesh* terrain_load(const char* path) {
     FILE* f = fc_asset_fopen(path, "rb");
@@ -2915,24 +2703,33 @@ float terrain_height_at(TerrainMesh* tm, int world_x, int world_y) {
     return tm->heightmap[lx + ly * tm->hm_width];
 }
 
-void terrain_free(TerrainMesh* tm) {
-    if (!tm) return;
-    if (tm->loaded) {
-        UnloadModel(tm->model);
-    }
-    free(tm->heightmap);
-    free(tm);
-}
-
-#undef TERR_MAGIC
-
 /* Spotanims */
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
+
+typedef struct {
+    uint32_t id;
+    int32_t model_id;
+    int32_t animation_id;
+    uint32_t resize_xy;
+    uint32_t resize_z;
+    uint32_t rotation;
+    int32_t brightness;
+    int32_t shadow;
+} SpotAnimDef;
+
+typedef struct {
+    SpotAnimDef *defs;
+    int count;
+    int loaded;
+} SpotAnimSet;
 
 #define SPOTANIM_MAGIC 0x544F5053u
 #define SPOTANIM_VERSION 1u
+
+void spotanims_free(SpotAnimSet *set) {
+    if (!set) return;
+    free(set->defs);
+    free(set);
+}
 
 SpotAnimSet *spotanims_load(const char *path) {
     FILE *f = fc_asset_fopen(path, "rb");
@@ -2986,18 +2783,15 @@ const SpotAnimDef *spotanim_find(const SpotAnimSet *set, int id) {
     return NULL;
 }
 
-void spotanims_free(SpotAnimSet *set) {
-    if (!set) return;
-    free(set->defs);
-    free(set);
-}
-
-#undef SPOTANIM_MAGIC
-#undef SPOTANIM_VERSION
-
 /* Player Appearance */
-#include <stdlib.h>
-#include <string.h>
+
+typedef struct {
+    ModelSet *parts;
+    ModelSet *model;
+    struct { uint32_t item_id, hide_mask; } records[64];
+    int record_count;
+    int worn_ids[FC_EQUIPMENT_SLOTS];
+} FcPlayerAppearance;
 
 int fc_player_appearance_load(FcPlayerAppearance *appearance) {
     memset(appearance, 0, sizeof(*appearance));
@@ -3090,6 +2884,7 @@ static ModelSet *compose(ModelEntry *parts[], int count, uint32_t id) {
     return set;
 }
 
+/* 1 = rebuilt, 0 = unchanged, -1 = missing/invalid asset or allocation failure. */
 int fc_player_appearance_sync(FcPlayerAppearance *appearance,
                                const FcPlayer *player, uint32_t model_id) {
     int ids[FC_EQUIPMENT_SLOTS];
@@ -3132,55 +2927,14 @@ void fc_player_appearance_free(FcPlayerAppearance *appearance) {
 
 /* ===================== Game interface ===================== */
 
-/* Ui Assets */
-
-#include "raylib.h"
-
-#define RUNEC_UI_ASSET_MAX 512
-
-typedef struct RuneCUiAssets {
-    Texture2D textures[RUNEC_UI_ASSET_MAX];
-    unsigned char loaded[RUNEC_UI_ASSET_MAX];
-    Font font;
-    Font small_font;
-    int font_loaded;
-    int small_font_loaded;
-    int loaded_count;
-    int missing_count;
-    int required_count;
-    int missing_required_count;
-    int missing_optional_count;
-} RuneCUiAssets;
-
-void runec_ui_assets_load(RuneCUiAssets *assets);
-void runec_ui_assets_unload(RuneCUiAssets *assets);
-
-const Texture2D *runec_ui_asset(const RuneCUiAssets *assets, const char *name);
-int runec_ui_asset_ready(const RuneCUiAssets *assets, const char *name);
-void runec_ui_draw_asset(const RuneCUiAssets *assets, const char *name,
-                         Rectangle dst, Color tint);
-Font runec_ui_font(const RuneCUiAssets *assets);
-Font runec_ui_font_for_size(const RuneCUiAssets *assets, float size);
-void runec_ui_draw_text_shadow(const RuneCUiAssets *assets, const char *text,
-                               float x, float y, float size, Color color);
-
-
 /* Ui Reference */
 
-#include "raylib.h"
-
 /*
- * OSRS UI reference constants copied from the local rsmod/model_dump interface
- * dumps. These mirror what Void/RSMod open server-side; the viewer should use
- * these as layout authority instead of hand-tuned gameframe coordinates.
- *
- * Source files:
- * - data/source/model_dump/osrs-dumps/interface/toplevel_osrs_stretch.if3
- * - data/source/model_dump/osrs-dumps/interface/orbs.if3
- * - data/source/model_dump/osrs-dumps/interface/stats.if3
- * - data/source/model_dump/osrs-dumps/interface/inventory.if3
- * - data/source/model_dump/osrs-dumps/interface/combat_interface.if3
- * - data/source/model_dump/osrs-dumps/interface/wornitems.if3
+ * OSRS UI reference constants copied from the osrs-dumps interface
+ * definitions (toplevel_osrs_stretch, orbs, stats, inventory,
+ * combat_interface and wornitems). These mirror what Void/RSMod open
+ * server-side; the viewer should use these as layout authority instead of
+ * hand-tuned gameframe coordinates.
  */
 
 #define RUNEC_IFACE_TOPLEVEL_OSRS_STRETCH 161
@@ -3341,279 +3095,23 @@ static const RuneCUiWornButtonRef RUNEC_OSRS_WORN_BUTTONS[] = {
     {"whistle",          {142, 208, 40, 40}, {145, 211, 32, 32}},
 };
 
-
-/* Osrs Text */
-
-#include "raylib.h"
-
-#define FC_OSRS_MENU_FONT_SIZE 16.0f
-
-int fc_osrs_text_init(void);
-void fc_osrs_text_shutdown(void);
-Font fc_osrs_menu_font(void);
-void fc_osrs_draw_text(const char* text, int x, int y, int font_size,
-                       Color color);
-int fc_osrs_measure_text(const char* text, int font_size);
-
-
-/* Minimap */
-
-#include "raylib.h"
-
-#define FC_MINIMAP_DISPLAY_SIZE 152
-#define FC_MINIMAP_DISPLAY_CENTER 76.0f
-#define FC_MINIMAP_DISPLAY_RADIUS 75.0f
-#define FC_MINIMAP_DISPLAY_PIXELS_PER_TILE 3.5f
-#define FC_MINIMAP_SCENE_SIZE 512
-#define FC_MINIMAP_SCENE_PIXELS_PER_TILE 4.0f
-#define FC_MINIMAP_SCENE_BORDER_TILES 32.0f
-
-typedef struct FcMinimapScene {
-    Color* pixels;
-    int ready;
-} FcMinimapScene;
-
-int fc_minimap_scene_load_pixels(FcMinimapScene* scene,
-                                 const Color* pixels, int width, int height);
-void fc_minimap_scene_free(FcMinimapScene* scene);
-
-void fc_minimap_render(const FcMinimapScene* scene, float player_x,
-                       float player_y, float camera_yaw, Color* output);
-
-Vector2 fc_minimap_rotate_offset(float dx, float dy, float camera_yaw);
-int fc_minimap_click_to_tile(float map_x, float map_y, float player_x,
-                             float player_y, float camera_yaw,
-                             int* tile_x, int* tile_y);
-
-
-/* Context Menu */
-
-#include <stdint.h>
-
-/* RuneC's client-style geometry, shared by menu drawing and hit testing. */
-#define FC_MENU_HEADER_HEIGHT 24
-#define FC_MENU_ROW_HEIGHT 19
-#define FC_MENU_DISMISS_MARGIN 10
-
-typedef struct { int x, y, width, height; } FcMenuLayout;
-typedef struct { const char *name; int level; } FcNpcMenuInfo;
-
-FcNpcMenuInfo fc_menu_npc_info(int npc_type);
-uint32_t fc_menu_level_color(int player_level, int npc_level);
-
-FcMenuLayout fc_menu_layout(int x, int y, int screen_width, int screen_height,
-                             int text_width, int rows);
-int fc_menu_contains(FcMenuLayout menu, int x, int y, int margin);
-int fc_menu_action_at(FcMenuLayout menu, int rows, int x, int y);
-
-
-/* Ui */
-
-#include "raylib.h"
-#include <stddef.h>
-#include <stdint.h>
-
-#define RUNEC_UI_INV_SLOT_COUNT 28
-#define RUNEC_UI_EQUIP_SLOT_COUNT 14
-#define RUNEC_UI_CHAT_INPUT_MAX 128
-#define RUNEC_UI_CONTEXT_ACTIONS 5
-#define RUNEC_UI_MINIMAP_DOTS 256
-#define RUNEC_UI_ITEM_ICON_CACHE 512
-#define RUNEC_UI_SKILL_COUNT 24
-#define RUNEC_UI_COMBAT_STYLE_COUNT 4
-
-typedef enum RuneCUiTab {
-    RUNEC_UI_TAB_NONE = -1,
-    RUNEC_UI_TAB_COMBAT = 0,
-    RUNEC_UI_TAB_SKILLS,
-    RUNEC_UI_TAB_QUESTS,
-    RUNEC_UI_TAB_INVENTORY,
-    RUNEC_UI_TAB_EQUIPMENT,
-    RUNEC_UI_TAB_PRAYER,
-    RUNEC_UI_TAB_SPELLBOOK,
-    RUNEC_UI_TAB_SETTINGS,
-    RUNEC_UI_TAB_CLAN_CHAT,
-    RUNEC_UI_TAB_FRIENDS,
-    RUNEC_UI_TAB_COUNT
-} RuneCUiTab;
-
-typedef enum RuneCUiIntentKind {
-    RUNEC_UI_INTENT_NONE = 0,
-    RUNEC_UI_INTENT_TAB,
-    RUNEC_UI_INTENT_INVENTORY_SLOT,
-    RUNEC_UI_INTENT_EQUIPMENT_SLOT,
-    RUNEC_UI_INTENT_PRAYER_SLOT,
-    RUNEC_UI_INTENT_QUICK_PRAYER_SLOT,
-    RUNEC_UI_INTENT_QUICK_PRAYER_TOGGLE,
-    RUNEC_UI_INTENT_AUTOCAST_SPELL,
-    RUNEC_UI_INTENT_SKILL_SLOT,
-    RUNEC_UI_INTENT_MINIMAP_CLICK,
-    RUNEC_UI_INTENT_RUN_TOGGLE,
-    RUNEC_UI_INTENT_COMBAT_STYLE,
-    RUNEC_UI_INTENT_AUTO_RETALIATE,
-    RUNEC_UI_INTENT_SPECIAL_ATTACK,
-    RUNEC_UI_INTENT_CONTEXT_ACTION,
-    RUNEC_UI_INTENT_WORLD_ACTION,
-    RUNEC_UI_INTENT_INVENTORY_ACTION,
-    RUNEC_UI_INTENT_EQUIPMENT_ACTION,
-    RUNEC_UI_INTENT_INVENTORY_DRAG,
-    RUNEC_UI_INTENT_SELECTED_ITEM,
-    RUNEC_UI_INTENT_SELECTED_SPELL,
-    RUNEC_UI_INTENT_SELECTED_ITEM_ON_ITEM,
-    RUNEC_UI_INTENT_SELECTED_SPELL_ON_ITEM,
-    RUNEC_UI_INTENT_SELECTED_TARGET_CANCEL
-} RuneCUiIntentKind;
-
-typedef struct RuneCUiIntent {
-    RuneCUiIntentKind kind;
-    int primary;
-    int secondary;
-    Vector2 position;
-    char text[RUNEC_UI_CHAT_INPUT_MAX];
-} RuneCUiIntent;
-
-typedef struct RuneCUiSlot {
-    uint32_t item_id;
-    uint32_t icon_item_id;
-    int quantity;
-    char label[24];
-    int enabled;
-    const char *action;           /* supplied by the inventory owner */
-} RuneCUiSlot;
-
-typedef enum RuneCUiMinimapDotKind {
-    RUNEC_UI_MINIMAP_DOT_NPC = 0,
-    RUNEC_UI_MINIMAP_DOT_PLAYER,
-    RUNEC_UI_MINIMAP_DOT_DESTINATION
-} RuneCUiMinimapDotKind;
-
-typedef struct RuneCUiMinimapDot {
-    float dx;
-    float dy;
-    RuneCUiMinimapDotKind kind;
-} RuneCUiMinimapDot;
-
-typedef struct RuneCUiItemIcon {
-    uint32_t item_id;
-    Texture2D texture;
-    int ready;
-} RuneCUiItemIcon;
-
-typedef struct RuneCUiCombatStyleOption {
-    int visible;
-    int style_index;
-    char label[24];
-    char mode[32];
-    char icon_asset[32];
-} RuneCUiCombatStyleOption;
-
-typedef enum RuneCUiContextSourceKind {
-    RUNEC_UI_CONTEXT_NONE = 0,
-    RUNEC_UI_CONTEXT_INVENTORY,
-    RUNEC_UI_CONTEXT_EQUIPMENT,
-    RUNEC_UI_CONTEXT_PRAYER,
-    RUNEC_UI_CONTEXT_SPELL,
-    RUNEC_UI_CONTEXT_WORLD
-} RuneCUiContextSourceKind;
-
-typedef enum RuneCUiSelectedTargetKind {
-    RUNEC_UI_SELECTED_NONE = 0,
-    RUNEC_UI_SELECTED_ITEM,
-    RUNEC_UI_SELECTED_SPELL
-} RuneCUiSelectedTargetKind;
-
-typedef struct RuneCUiSelectedTarget {
-    RuneCUiSelectedTargetKind kind;
-    int source_slot;
-    uint32_t source_item_id;
-    char label[48];
-    char verb[24];
-} RuneCUiSelectedTarget;
-
-typedef struct RuneCUiDragState {
-    int active;
-    RuneCUiContextSourceKind source_kind;
-    int source_slot;
-    Vector2 start;
-} RuneCUiDragState;
-
-typedef struct RuneCUiState {
-    RuneCUiTab active_tab;
-    RuneCUiIntent last_intent;
-    float tab_press_timer[RUNEC_UI_TAB_COUNT];
-
-    RuneCUiSlot inventory[RUNEC_UI_INV_SLOT_COUNT];
-    RuneCUiSlot equipment[RUNEC_UI_EQUIP_SLOT_COUNT];
-    int selected_combat_style;
-    int auto_retaliate;
-    int special_attack_enabled;
-    int special_attack_energy;
-    int combat_weapon_category;
-    char combat_weapon_name[64];
-    RuneCUiCombatStyleOption combat_styles[RUNEC_UI_COMBAT_STYLE_COUNT];
-
-    int hitpoints;
-    int hitpoints_max;
-    int prayer_points;
-    int prayer_points_max;
-    uint32_t active_prayers;
-    int run_energy;
-    int run_enabled;
-    int combat_level;
-    int skill_current[RUNEC_UI_SKILL_COUNT];
-    int skill_base[RUNEC_UI_SKILL_COUNT];
-    int skill_total;
-
-    int context_open;
-    Vector2 context_pos;
-    Color context_target_color;
-    int context_combat_level;
-    char context_title[48];
-    char context_actions[RUNEC_UI_CONTEXT_ACTIONS][32];
-    int context_action_count;
-    RuneCUiContextSourceKind context_source_kind;
-    int context_source_slot;
-    uint32_t context_source_item_id;
-
-    RuneCUiSelectedTarget selected_target;
-    RuneCUiDragState drag;
-
-    RuneCUiMinimapDot minimap_dots[RUNEC_UI_MINIMAP_DOTS];
-    int minimap_dot_count;
-    float minimap_rotation;
-    Texture2D minimap_texture;
-    int minimap_texture_ready;
-    RuneCUiItemIcon item_icons[RUNEC_UI_ITEM_ICON_CACHE];
-    int item_icon_count;
-
-    RuneCUiAssets assets;
-} RuneCUiState;
-
-void runec_ui_init(RuneCUiState *ui);
-void runec_ui_shutdown(RuneCUiState *ui);
-void runec_ui_clear_minimap(RuneCUiState *ui);
-void runec_ui_add_minimap_dot(RuneCUiState *ui, float dx, float dy,
-                              RuneCUiMinimapDotKind kind);
-void runec_ui_update_minimap(RuneCUiState *ui, const Color *pixels,
-                             int width, int height);
-void runec_ui_set_minimap_rotation(RuneCUiState *ui, float radians);
-void runec_ui_set_item_icon(RuneCUiState *ui, uint32_t icon_item_id, Texture2D texture);
-void runec_ui_set_combat_weapon_name(RuneCUiState *ui, const char *name);
-void runec_ui_set_combat_style_profile(RuneCUiState *ui, int core_weapon_category);
-void runec_ui_clear_selected_target(RuneCUiState *ui);
-int runec_ui_handle_input(RuneCUiState *ui, int screen_w, int screen_h);
-void runec_ui_open_world_context(RuneCUiState *ui, Vector2 pos, int npc_type, int can_walk);
-void runec_ui_open_prayer_context(RuneCUiState *ui, Vector2 pos, int slot);
-void runec_ui_close_context(RuneCUiState *ui);
-void runec_ui_draw_context(const RuneCUiState *ui);
-void runec_ui_draw(RuneCUiState *ui, int screen_w, int screen_h);
-Rectangle runec_ui_chat_panel_rect(int screen_w, int screen_h);
-const char *runec_ui_tab_name(RuneCUiTab tab);
-
-
 /* Ui Assets */
-#include <stdio.h>
-#include <string.h>
+
+#define RUNEC_UI_ASSET_MAX 512
+
+typedef struct RuneCUiAssets {
+    Texture2D textures[RUNEC_UI_ASSET_MAX];
+    unsigned char loaded[RUNEC_UI_ASSET_MAX];
+    Font font;
+    Font small_font;
+    int font_loaded;
+    int small_font_loaded;
+    int loaded_count;
+    int missing_count;
+    int required_count;
+    int missing_required_count;
+    int missing_optional_count;
+} RuneCUiAssets;
 
 typedef struct RuneCUiAssetSpec {
     const char *name;
@@ -4189,14 +3687,9 @@ void runec_ui_draw_text_shadow(const RuneCUiAssets *assets, const char *text,
     DrawTextEx(font, text, (Vector2){x, y}, size, 0.0f, color);
 }
 
-#undef UI_ASSET
-#undef UI_OPTIONAL_ASSET
-
 /* Osrs Text */
-#include <stddef.h>
-#include <stdio.h>
-#include <string.h>
 
+#define FC_OSRS_MENU_FONT_SIZE 16.0f
 #define FC_OSRS_FONT_ASSET "data/fonts/p11_full.png"
 #define FC_OSRS_MENU_FONT_ASSET "data/fonts/runescape_bold.ttf"
 #define FC_OSRS_FONT_CELL_SIZE 20
@@ -4454,16 +3947,26 @@ int fc_osrs_measure_text(const char* text, int font_size) {
     return width;
 }
 
-#undef FC_OSRS_FONT_ASSET
-#undef FC_OSRS_MENU_FONT_ASSET
-#undef FC_OSRS_FONT_CELL_SIZE
-#undef FC_OSRS_FONT_COLUMNS
-#undef FC_OSRS_FONT_GLYPHS
-
 /* Minimap */
-#include <math.h>
-#include <stdlib.h>
-#include <string.h>
+
+#define FC_MINIMAP_DISPLAY_SIZE 152
+#define FC_MINIMAP_DISPLAY_CENTER 76.0f
+#define FC_MINIMAP_DISPLAY_RADIUS 75.0f
+#define FC_MINIMAP_DISPLAY_PIXELS_PER_TILE 3.5f
+#define FC_MINIMAP_SCENE_SIZE 512
+#define FC_MINIMAP_SCENE_PIXELS_PER_TILE 4.0f
+#define FC_MINIMAP_SCENE_BORDER_TILES 32.0f
+
+typedef struct FcMinimapScene {
+    Color* pixels;
+    int ready;
+} FcMinimapScene;
+
+void fc_minimap_scene_free(FcMinimapScene* scene) {
+    if (!scene) return;
+    free(scene->pixels);
+    memset(scene, 0, sizeof(*scene));
+}
 
 int fc_minimap_scene_load_pixels(FcMinimapScene* scene,
                                  const Color* pixels, int width, int height) {
@@ -4481,12 +3984,6 @@ int fc_minimap_scene_load_pixels(FcMinimapScene* scene,
     scene->pixels = copy;
     scene->ready = 1;
     return 1;
-}
-
-void fc_minimap_scene_free(FcMinimapScene* scene) {
-    if (!scene) return;
-    free(scene->pixels);
-    memset(scene, 0, sizeof(*scene));
 }
 
 Vector2 fc_minimap_rotate_offset(float dx, float dy, float camera_yaw) {
@@ -4578,8 +4075,16 @@ int fc_minimap_click_to_tile(float map_x, float map_y, float player_x,
     return 1;
 }
 
-
 /* Context Menu */
+
+/* RuneC's client-style geometry, shared by menu drawing and hit testing. */
+#define FC_MENU_HEADER_HEIGHT 24
+#define FC_MENU_ROW_HEIGHT 19
+#define FC_MENU_DISMISS_MARGIN 10
+
+typedef struct { int x, y, width, height; } FcMenuLayout;
+typedef struct { const char *name; int level; } FcNpcMenuInfo;
+
 FcNpcMenuInfo fc_menu_npc_info(int npc_type) {
     /* Fight Cave NPC display levels, not attack-skill levels or Inferno healers. */
     static const FcNpcMenuInfo npcs[] = {
@@ -4634,13 +4139,183 @@ int fc_menu_action_at(FcMenuLayout menu, int rows, int x, int y) {
     return row < rows ? row : -1;
 }
 
-
 /* Ui */
-#include <ctype.h>
-#include <math.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+
+#define RUNEC_UI_INV_SLOT_COUNT 28
+#define RUNEC_UI_EQUIP_SLOT_COUNT 14
+#define RUNEC_UI_CHAT_INPUT_MAX 128
+#define RUNEC_UI_CONTEXT_ACTIONS 5
+#define RUNEC_UI_MINIMAP_DOTS 256
+#define RUNEC_UI_ITEM_ICON_CACHE 512
+#define RUNEC_UI_SKILL_COUNT 24
+#define RUNEC_UI_COMBAT_STYLE_COUNT 4
+
+typedef enum RuneCUiTab {
+    RUNEC_UI_TAB_NONE = -1,
+    RUNEC_UI_TAB_COMBAT = 0,
+    RUNEC_UI_TAB_SKILLS,
+    RUNEC_UI_TAB_QUESTS,
+    RUNEC_UI_TAB_INVENTORY,
+    RUNEC_UI_TAB_EQUIPMENT,
+    RUNEC_UI_TAB_PRAYER,
+    RUNEC_UI_TAB_SPELLBOOK,
+    RUNEC_UI_TAB_SETTINGS,
+    RUNEC_UI_TAB_CLAN_CHAT,
+    RUNEC_UI_TAB_FRIENDS,
+    RUNEC_UI_TAB_COUNT
+} RuneCUiTab;
+
+typedef enum RuneCUiIntentKind {
+    RUNEC_UI_INTENT_NONE = 0,
+    RUNEC_UI_INTENT_TAB,
+    RUNEC_UI_INTENT_INVENTORY_SLOT,
+    RUNEC_UI_INTENT_EQUIPMENT_SLOT,
+    RUNEC_UI_INTENT_PRAYER_SLOT,
+    RUNEC_UI_INTENT_QUICK_PRAYER_SLOT,
+    RUNEC_UI_INTENT_QUICK_PRAYER_TOGGLE,
+    RUNEC_UI_INTENT_AUTOCAST_SPELL,
+    RUNEC_UI_INTENT_SKILL_SLOT,
+    RUNEC_UI_INTENT_MINIMAP_CLICK,
+    RUNEC_UI_INTENT_RUN_TOGGLE,
+    RUNEC_UI_INTENT_COMBAT_STYLE,
+    RUNEC_UI_INTENT_AUTO_RETALIATE,
+    RUNEC_UI_INTENT_SPECIAL_ATTACK,
+    RUNEC_UI_INTENT_CONTEXT_ACTION,
+    RUNEC_UI_INTENT_WORLD_ACTION,
+    RUNEC_UI_INTENT_INVENTORY_ACTION,
+    RUNEC_UI_INTENT_EQUIPMENT_ACTION,
+    RUNEC_UI_INTENT_INVENTORY_DRAG,
+    RUNEC_UI_INTENT_SELECTED_ITEM,
+    RUNEC_UI_INTENT_SELECTED_SPELL,
+    RUNEC_UI_INTENT_SELECTED_ITEM_ON_ITEM,
+    RUNEC_UI_INTENT_SELECTED_SPELL_ON_ITEM,
+    RUNEC_UI_INTENT_SELECTED_TARGET_CANCEL
+} RuneCUiIntentKind;
+
+typedef struct RuneCUiIntent {
+    RuneCUiIntentKind kind;
+    int primary;
+    int secondary;
+    Vector2 position;
+    char text[RUNEC_UI_CHAT_INPUT_MAX];
+} RuneCUiIntent;
+
+typedef struct RuneCUiSlot {
+    uint32_t item_id;
+    uint32_t icon_item_id;
+    int quantity;
+    char label[24];
+    int enabled;
+    const char *action;           /* supplied by the inventory owner */
+} RuneCUiSlot;
+
+typedef enum RuneCUiMinimapDotKind {
+    RUNEC_UI_MINIMAP_DOT_NPC = 0,
+    RUNEC_UI_MINIMAP_DOT_PLAYER,
+    RUNEC_UI_MINIMAP_DOT_DESTINATION
+} RuneCUiMinimapDotKind;
+
+typedef struct RuneCUiMinimapDot {
+    float dx;
+    float dy;
+    RuneCUiMinimapDotKind kind;
+} RuneCUiMinimapDot;
+
+typedef struct RuneCUiItemIcon {
+    uint32_t item_id;
+    Texture2D texture;
+    int ready;
+} RuneCUiItemIcon;
+
+typedef struct RuneCUiCombatStyleOption {
+    int visible;
+    int style_index;
+    char label[24];
+    char mode[32];
+    char icon_asset[32];
+} RuneCUiCombatStyleOption;
+
+typedef enum RuneCUiContextSourceKind {
+    RUNEC_UI_CONTEXT_NONE = 0,
+    RUNEC_UI_CONTEXT_INVENTORY,
+    RUNEC_UI_CONTEXT_EQUIPMENT,
+    RUNEC_UI_CONTEXT_PRAYER,
+    RUNEC_UI_CONTEXT_SPELL,
+    RUNEC_UI_CONTEXT_WORLD
+} RuneCUiContextSourceKind;
+
+typedef enum RuneCUiSelectedTargetKind {
+    RUNEC_UI_SELECTED_NONE = 0,
+    RUNEC_UI_SELECTED_ITEM,
+    RUNEC_UI_SELECTED_SPELL
+} RuneCUiSelectedTargetKind;
+
+typedef struct RuneCUiSelectedTarget {
+    RuneCUiSelectedTargetKind kind;
+    int source_slot;
+    uint32_t source_item_id;
+    char label[48];
+    char verb[24];
+} RuneCUiSelectedTarget;
+
+typedef struct RuneCUiDragState {
+    int active;
+    RuneCUiContextSourceKind source_kind;
+    int source_slot;
+    Vector2 start;
+} RuneCUiDragState;
+
+typedef struct RuneCUiState {
+    RuneCUiTab active_tab;
+    RuneCUiIntent last_intent;
+    float tab_press_timer[RUNEC_UI_TAB_COUNT];
+
+    RuneCUiSlot inventory[RUNEC_UI_INV_SLOT_COUNT];
+    RuneCUiSlot equipment[RUNEC_UI_EQUIP_SLOT_COUNT];
+    int selected_combat_style;
+    int auto_retaliate;
+    int special_attack_enabled;
+    int special_attack_energy;
+    int combat_weapon_category;
+    char combat_weapon_name[64];
+    RuneCUiCombatStyleOption combat_styles[RUNEC_UI_COMBAT_STYLE_COUNT];
+
+    int hitpoints;
+    int hitpoints_max;
+    int prayer_points;
+    int prayer_points_max;
+    uint32_t active_prayers;
+    int run_energy;
+    int run_enabled;
+    int combat_level;
+    int skill_current[RUNEC_UI_SKILL_COUNT];
+    int skill_base[RUNEC_UI_SKILL_COUNT];
+    int skill_total;
+
+    int context_open;
+    Vector2 context_pos;
+    Color context_target_color;
+    int context_combat_level;
+    char context_title[48];
+    char context_actions[RUNEC_UI_CONTEXT_ACTIONS][32];
+    int context_action_count;
+    RuneCUiContextSourceKind context_source_kind;
+    int context_source_slot;
+    uint32_t context_source_item_id;
+
+    RuneCUiSelectedTarget selected_target;
+    RuneCUiDragState drag;
+
+    RuneCUiMinimapDot minimap_dots[RUNEC_UI_MINIMAP_DOTS];
+    int minimap_dot_count;
+    float minimap_rotation;
+    Texture2D minimap_texture;
+    int minimap_texture_ready;
+    RuneCUiItemIcon item_icons[RUNEC_UI_ITEM_ICON_CACHE];
+    int item_icon_count;
+
+    RuneCUiAssets assets;
+} RuneCUiState;
 
 #define OSRS_ORANGE ((Color){255, 152, 31, 255})
 #define OSRS_YELLOW ((Color){255, 255, 0, 255})
@@ -5017,9 +4692,6 @@ static const RuneCUiCombatProfile g_combat_profiles[] = {
     }},
 };
 
-#undef COMBAT_STYLE
-#undef COMBAT_STYLE_HIDDEN
-
 static void copy_text(char *dst, size_t cap, const char *src) {
     if (cap == 0)
         return;
@@ -5269,6 +4941,13 @@ void runec_ui_close_context(RuneCUiState *ui) {
     ui->context_source_item_id = 0;
 }
 
+void runec_ui_clear_selected_target(RuneCUiState *ui) {
+    if (!ui)
+        return;
+    memset(&ui->selected_target, 0, sizeof(ui->selected_target));
+    ui->selected_target.source_slot = -1;
+}
+
 void runec_ui_open_world_context(RuneCUiState *ui, Vector2 pos, int npc_type, int can_walk) {
     FcNpcMenuInfo npc = fc_menu_npc_info(npc_type);
     const char *actions[4];
@@ -5318,13 +4997,6 @@ static FcMenuLayout context_layout(const RuneCUiState *ui) {
     }
     return fc_menu_layout((int)ui->context_pos.x, (int)ui->context_pos.y,
         GetScreenWidth(), GetScreenHeight(), (int)ceilf(width), ui->context_action_count);
-}
-
-void runec_ui_clear_selected_target(RuneCUiState *ui) {
-    if (!ui)
-        return;
-    memset(&ui->selected_target, 0, sizeof(ui->selected_target));
-    ui->selected_target.source_slot = -1;
 }
 
 static void set_selected_item_target(RuneCUiState *ui, int slot) {
@@ -5416,28 +5088,12 @@ void runec_ui_shutdown(RuneCUiState *ui) {
     runec_ui_assets_unload(&ui->assets);
 }
 
-void runec_ui_clear_minimap(RuneCUiState *ui) {
-    ui->minimap_dot_count = 0;
-}
-
 void runec_ui_add_minimap_dot(RuneCUiState *ui, float dx, float dy,
                               RuneCUiMinimapDotKind kind) {
     if (ui->minimap_dot_count >= RUNEC_UI_MINIMAP_DOTS)
         return;
     ui->minimap_dots[ui->minimap_dot_count++] =
         (RuneCUiMinimapDot){dx, dy, kind};
-}
-
-void runec_ui_update_minimap(RuneCUiState *ui, const Color *pixels,
-                             int width, int height) {
-    if (!ui->minimap_texture_ready || !pixels || width != 152 || height != 152)
-        return;
-    UpdateTexture(ui->minimap_texture, pixels);
-}
-
-void runec_ui_set_minimap_rotation(RuneCUiState *ui, float radians) {
-    if (!ui) return;
-    ui->minimap_rotation = radians;
 }
 
 void runec_ui_set_item_icon(RuneCUiState *ui, uint32_t icon_item_id, Texture2D texture) {
@@ -6853,23 +6509,6 @@ Rectangle runec_ui_chat_panel_rect(int screen_w, int screen_h) {
     return layout.chat;
 }
 
-#undef OSRS_ORANGE
-#undef OSRS_YELLOW
-#undef OSRS_GREEN
-#undef OSRS_RED
-#undef OSRS_BLUE
-#undef OSRS_PANEL
-#undef OSRS_TAB_PRESS_SECONDS
-#undef RUNEC_UI_SPELL_COUNT
-#undef RUNEC_UI_SPELL_COLS
-#undef RUNEC_UI_SPELL_X0
-#undef RUNEC_UI_SPELL_Y0
-#undef RUNEC_UI_SPELL_STEP_X
-#undef RUNEC_UI_SPELL_STEP_Y
-#undef RUNEC_UI_SPELL_ICON_SIZE
-#undef COMBAT_STYLE
-#undef COMBAT_STYLE_HIDDEN
-
 /* ===================== 3D rendering and debug overlays ===================== */
 
 /* Actor Visual */
@@ -6935,349 +6574,6 @@ typedef struct {
     int moving;
     FcVisualLocomotion locomotion;
 } FcVisualPose;
-
-void fc_visual_scene_init(FcVisualScene* scene);
-void fc_visual_scene_reset_player(FcVisualScene* scene, int tile_x, int tile_y,
-                                  int size, float yaw_degrees);
-void fc_visual_scene_reset_npc(FcVisualScene* scene, int slot, int tile_x,
-                               int tile_y, int size, float yaw_degrees);
-void fc_visual_scene_deactivate_npc(FcVisualScene* scene, int slot);
-
-void fc_visual_actor_enqueue_tile(FcVisualActor* actor, int tile_x, int tile_y,
-                                  int running);
-void fc_visual_actor_enqueue_transition(FcVisualActor* actor, int from_x,
-                                        int from_y, int to_x, int to_y,
-                                        int running);
-void fc_visual_actor_set_target(FcVisualActor* actor,
-                                FcVisualTargetKind target_kind,
-                                int target_slot);
-void fc_visual_actor_set_movement_blocked(FcVisualActor* actor, int blocked);
-
-void fc_visual_scene_update(FcVisualScene* scene, float elapsed_seconds);
-FcVisualPose fc_visual_actor_pose(const FcVisualScene* scene,
-                                  const FcVisualActor* actor);
-FcVisualPose fc_visual_scene_player_pose(const FcVisualScene* scene);
-FcVisualPose fc_visual_scene_npc_pose(const FcVisualScene* scene, int slot);
-
-
-/* Actor Animation */
-
-#include "raylib.h"
-
-#include <stdint.h>
-
-typedef struct {
-    uint16_t idle_anim;
-    uint16_t walk_anim;
-    uint16_t walk_back_anim;
-    uint16_t walk_left_anim;
-    uint16_t walk_right_anim;
-    uint16_t turn_anim;
-    uint16_t run_anim;
-    uint16_t attack_anim;
-    uint32_t projectile_travel_spot;
-    uint32_t projectile_launch_spot;
-    uint32_t projectile_impact_spot;
-    Color projectile_color;
-    float projectile_radius;
-    float projectile_start_height;
-    float projectile_end_height;
-    float projectile_launch_delay_client_ticks;
-    float projectile_angle;
-    float projectile_length_adjustment;
-    float projectile_progress;
-    float projectile_step_multiplier;
-} FcPlayerVisualProfile;
-
-typedef struct {
-    FcVisualScene scene;
-    AnimModelState *player_state;
-    uint16_t player_sequence;
-    int player_frame;
-    float player_timer;
-    uint16_t player_pose_sequence;
-    int player_pose_frame;
-    float player_pose_timer;
-    uint16_t player_action_sequence;
-    int player_action_frame;
-    float player_action_timer;
-    uint16_t player_lock_sequence;
-    float player_lock_timer;
-    int player_attack_target;
-    float prayer_flick_timer;
-    AnimModelState *npc_states[FC_MAX_NPCS];
-    uint16_t npc_sequences[FC_MAX_NPCS];
-    int npc_frames[FC_MAX_NPCS];
-    float npc_timers[FC_MAX_NPCS];
-    uint16_t npc_action_sequences[FC_MAX_NPCS];
-    int npc_action_frames[FC_MAX_NPCS];
-    float npc_action_timers[FC_MAX_NPCS];
-    int npc_attack_styles[FC_MAX_NPCS];
-    float npc_attack_timers[FC_MAX_NPCS];
-    float npc_prayer_indicator_timers[FC_MAX_NPCS];
-    int npc_prayer_lock_ticks[FC_MAX_NPCS];
-    int previous_npc_x[FC_MAX_NPCS];
-    int previous_npc_y[FC_MAX_NPCS];
-    int previous_npc_active[FC_MAX_NPCS];
-} FcActorAnimation;
-
-void fc_actor_animation_init(FcActorAnimation *animation);
-void fc_actor_animation_reset(FcActorAnimation *animation,
-                              const FcState *state,
-                              NpcModelSet *player_models,
-                              int active_loadout);
-void fc_actor_animation_shutdown(FcActorAnimation *animation);
-
-void fc_actor_animation_capture_tick_start(FcActorAnimation *animation,
-                                           const FcState *state);
-void fc_actor_animation_ingest_tick(FcActorAnimation *animation,
-                                    const FcState *state,
-                                    const FcRenderEvents *events);
-void fc_actor_animation_ingest_events(FcActorAnimation *animation,
-                                      const FcRenderEvents *events,
-                                      AnimCache *cache,
-                                      int active_loadout,
-                                      float tps);
-void fc_actor_animation_update_scene(FcActorAnimation *animation,
-                                     const FcState *state,
-                                     AnimCache *cache,
-                                     float tps,
-                                     float dt,
-                                     int advance_scene,
-                                     const unsigned char deferred_deaths[FC_MAX_NPCS]);
-void fc_actor_animation_update_models(FcActorAnimation *animation,
-                                      const FcState *state,
-                                      NpcModelSet *player_models,
-                                      NpcModelSet *npc_models,
-                                      AnimCache *cache,
-                                      int active_loadout,
-                                      float tps,
-                                      float dt,
-                                      const unsigned char deferred_deaths[FC_MAX_NPCS]);
-
-const FcPlayerVisualProfile *fc_player_visual_profile(int active_loadout);
-int fc_player_equipment_visual_profile(const FcPlayer *player);
-NpcModelEntry *fc_actor_player_model_entry(NpcModelSet *player_models,
-                                           int active_loadout);
-void fc_actor_animation_upload_npc(FcActorAnimation *animation,
-                                   int npc_slot,
-                                   NpcModelEntry *entry);
-float fc_actor_animation_scaled_dt(float tps, float dt);
-float fc_actor_animation_scaled_duration(float tps, float seconds);
-int fc_actor_animation_render_prayer(const FcActorAnimation *animation,
-                                     const FcState *state);
-int fc_actor_animation_prayer_window_active(const FcActorAnimation *animation,
-                                            int npc_slot,
-                                            int current_tick);
-int fc_actor_animation_previous_npc_active(const FcActorAnimation *animation,
-                                           int npc_slot);
-
-
-/* Projectile Visual */
-
-typedef struct {
-    float source_x;
-    float source_y;
-    float source_z;
-    float target_x;
-    float target_y;
-    float target_z;
-    float duration;
-    float angle;
-    float progress;
-} FcProjectilePath;
-
-typedef struct {
-    float x;
-    float y;
-    float z;
-    float velocity_x;
-    float velocity_y;
-    float velocity_z;
-} FcProjectileSample;
-
-typedef struct {
-    float launch_delay;
-    float flight_duration;
-    float total_duration;
-} FcProjectileTiming;
-
-float fc_projectile_profile_end_cycle(float launch_cycle,
-                                      float length_adjustment,
-                                      float step_multiplier,
-                                      int tile_distance);
-
-/* Convert the client's 30-cycle-per-game-tick projectile profile to viewer
- * seconds. The extra client cycle in flight_duration matches the client
- * endpoint convention used by RuneC's projectile sampler. */
-int fc_projectile_timing_from_client_cycles(float launch_cycle,
-                                            float end_cycle,
-                                            float ticks_per_second,
-                                            FcProjectileTiming* timing);
-
-/* Effects are retained only until either their animation ends or the client
- * retention window closes. This prevents short spot animations from looping. */
-float fc_projectile_effect_duration_seconds(float animation_client_cycles,
-                                            float retain_client_cycles,
-                                            float ticks_per_second);
-
-/* Sample the client projectile curve at an absolute point in its flight.
- * The target may be replaced on every render frame to reproduce the client's
- * actor-targeted homing behavior without frame-rate-dependent integration. */
-int fc_projectile_path_sample(const FcProjectilePath* path,
-                              float elapsed,
-                              FcProjectileSample* sample);
-
-
-/* Click Feedback */
-
-#define FC_CLICK_CROSS_FRAME_COUNT 4
-#define FC_CLICK_CROSS_FRAME_SECONDS 0.10f
-
-typedef enum {
-    FC_CLICK_CROSS_NONE = 0,
-    FC_CLICK_CROSS_MOVE,
-    FC_CLICK_CROSS_INTERACTION,
-} FcClickCrossKind;
-
-typedef struct {
-    int destination_active;
-    int destination_x;
-    int destination_y;
-
-    int preview_pending;
-    int preview_route_x[FC_MAX_ROUTE];
-    int preview_route_y[FC_MAX_ROUTE];
-    int preview_route_len;
-
-    FcClickCrossKind cross_kind;
-    float cross_screen_x;
-    float cross_screen_y;
-    float cross_elapsed;
-} FcClickFeedback;
-
-void fc_click_feedback_reset(FcClickFeedback* feedback);
-
-/* Build a read-only preview with the same move-near pathfinder used by
- * fc_step(). The simulation state itself is never modified. */
-void fc_click_feedback_select_move(FcClickFeedback* feedback,
-                                   const FcState* state,
-                                   int tile_x, int tile_y,
-                                   float screen_x, float screen_y);
-
-void fc_click_feedback_select_interaction(FcClickFeedback* feedback,
-                                          float screen_x, float screen_y);
-
-/* Hand the preview over to the route produced by the authoritative tick. */
-void fc_click_feedback_accept_move_tick(FcClickFeedback* feedback,
-                                        const FcState* state);
-
-/* Clear a completed or cancelled authoritative destination. */
-void fc_click_feedback_sync(FcClickFeedback* feedback,
-                            const FcState* state);
-
-void fc_click_feedback_update(FcClickFeedback* feedback,
-                              float elapsed_seconds);
-
-int fc_click_feedback_cross_frame(const FcClickFeedback* feedback);
-
-/* Return the immediate preview while the click is buffered, then the live
- * core route after the next simulation tick accepts it. */
-int fc_click_feedback_route(const FcClickFeedback* feedback,
-                            const FcState* state,
-                            const int** out_x, const int** out_y,
-                            int* out_start, int* out_len);
-
-
-/* Combat Presentation */
-
-typedef struct FcCombatPresentation FcCombatPresentation;
-
-typedef struct {
-    const FcState *state;
-    const FcRenderEvents *events;
-    const FcVisualScene *scene;
-    TerrainMesh *terrain;
-    AnimCache *anim_cache;
-    const FcPlayerVisualProfile *player_profile;
-    float tps;
-} FcCombatPresentationContext;
-
-typedef struct {
-    FcCombatPresentationContext presentation;
-    const FcRenderEntity *entities;
-    int entity_count;
-    NpcModelSet *player_models;
-    NpcModelSet *npc_models;
-    int active_loadout;
-    const RuneCUiAssets *ui_assets;
-    Camera3D camera;
-} FcCombatPresentationDrawContext;
-
-FcCombatPresentation *fc_combat_presentation_create(Texture2D shared_atlas);
-int fc_combat_presentation_ready(
-    const FcCombatPresentation *presentation);
-void fc_combat_presentation_destroy(FcCombatPresentation *presentation);
-void fc_combat_presentation_reset(FcCombatPresentation *presentation);
-void fc_combat_presentation_clear_npc_healthbar(
-    FcCombatPresentation *presentation, int npc_slot);
-
-void fc_combat_presentation_ingest_tick(
-    FcCombatPresentation *presentation,
-    const FcCombatPresentationContext *context);
-void fc_combat_presentation_update(
-    FcCombatPresentation *presentation,
-    const FcCombatPresentationContext *context,
-    float dt);
-void fc_combat_presentation_draw_world(
-    FcCombatPresentation *presentation,
-    const FcCombatPresentationContext *context,
-    float dt);
-void fc_combat_presentation_draw_healthbars(
-    const FcCombatPresentation *presentation,
-    const FcCombatPresentationDrawContext *context);
-void fc_combat_presentation_draw_hitsplats(
-    const FcCombatPresentation *presentation,
-    const FcCombatPresentationDrawContext *context);
-
-int fc_combat_presentation_npc_death_deferred(
-    const FcCombatPresentation *presentation,
-    const FcState *state,
-    int npc_slot);
-void fc_combat_presentation_deferred_deaths(
-    const FcCombatPresentation *presentation,
-    const FcState *state,
-    unsigned char deferred_deaths[FC_MAX_NPCS]);
-
-
-/* Debug Overlay */
-
-#include "raylib.h"
-
-#define DBG_COLLISION (1 << 0)
-#define DBG_LOS (1 << 1)
-#define DBG_PATH (1 << 2)
-#define DBG_RANGE (1 << 3)
-#define DBG_ALL (DBG_COLLISION | DBG_LOS | DBG_PATH | DBG_RANGE)
-
-void dbg_log_clear(void);
-void dbg_log_tick(const FcState *state);
-void debug_overlay_3d(const FcState *state, int dbg_flags);
-void debug_overlay_screen(const FcState *state, Camera3D cam, int dbg_flags);
-void dbg_draw_prayer_window_indicator(Vector3 world_anchor, Camera3D cam);
-int dbg_draw_panel_tabs(const FcState *state,
-                        const FcRewardBreakdown *reward_breakdown,
-                        const FcRewardRuntime *reward_runtime,
-                        int reward_config_loaded,
-                        const char *reward_config_path,
-                        int px, int x, int by, int pw, int dbg_tab,
-                        int draw_tabs, int content_height);
-
-
-/* Actor Visual */
-#include <math.h>
-#include <stdlib.h>
-#include <string.h>
 
 #define FC_VISUAL_WALK_UNITS_PER_TICK 4.0f
 #define FC_VISUAL_TURN_DEGREES_PER_TICK 5.625f
@@ -7596,13 +6892,62 @@ FcVisualPose fc_visual_scene_npc_pose(const FcVisualScene* scene, int slot) {
     return fc_visual_actor_pose(scene, &scene->npcs[slot]);
 }
 
-#undef FC_VISUAL_WALK_UNITS_PER_TICK
-#undef FC_VISUAL_TURN_DEGREES_PER_TICK
-
 /* Actor Animation */
-#include <math.h>
-#include <stdio.h>
-#include <string.h>
+
+typedef struct {
+    uint16_t idle_anim;
+    uint16_t walk_anim;
+    uint16_t walk_back_anim;
+    uint16_t walk_left_anim;
+    uint16_t walk_right_anim;
+    uint16_t turn_anim;
+    uint16_t run_anim;
+    uint16_t attack_anim;
+    uint32_t projectile_travel_spot;
+    uint32_t projectile_launch_spot;
+    uint32_t projectile_impact_spot;
+    Color projectile_color;
+    float projectile_radius;
+    float projectile_start_height;
+    float projectile_end_height;
+    float projectile_launch_delay_client_ticks;
+    float projectile_angle;
+    float projectile_length_adjustment;
+    float projectile_progress;
+    float projectile_step_multiplier;
+} FcPlayerVisualProfile;
+
+typedef struct {
+    FcVisualScene scene;
+    AnimModelState *player_state;
+    uint16_t player_sequence;
+    int player_frame;
+    float player_timer;
+    uint16_t player_pose_sequence;
+    int player_pose_frame;
+    float player_pose_timer;
+    uint16_t player_action_sequence;
+    int player_action_frame;
+    float player_action_timer;
+    uint16_t player_lock_sequence;
+    float player_lock_timer;
+    int player_attack_target;
+    float prayer_flick_timer;
+    AnimModelState *npc_states[FC_MAX_NPCS];
+    uint16_t npc_sequences[FC_MAX_NPCS];
+    int npc_frames[FC_MAX_NPCS];
+    float npc_timers[FC_MAX_NPCS];
+    uint16_t npc_action_sequences[FC_MAX_NPCS];
+    int npc_action_frames[FC_MAX_NPCS];
+    float npc_action_timers[FC_MAX_NPCS];
+    int npc_attack_styles[FC_MAX_NPCS];
+    float npc_attack_timers[FC_MAX_NPCS];
+    float npc_prayer_indicator_timers[FC_MAX_NPCS];
+    int npc_prayer_lock_ticks[FC_MAX_NPCS];
+    int previous_npc_x[FC_MAX_NPCS];
+    int previous_npc_y[FC_MAX_NPCS];
+    int previous_npc_active[FC_MAX_NPCS];
+} FcActorAnimation;
 
 #define POLICY_REPLAY_BASE_TPS (5.0f / 3.0f)
 
@@ -8309,28 +7654,34 @@ int fc_actor_animation_previous_npc_active(const FcActorAnimation *animation,
         ? animation->previous_npc_active[npc_slot] : 0;
 }
 
-#undef POLICY_REPLAY_BASE_TPS
-#undef PLAYER_ANIM_HUMAN_IDLE
-#undef PLAYER_ANIM_HUMAN_WALK
-#undef PLAYER_ANIM_HUMAN_WALK_BACK
-#undef PLAYER_ANIM_HUMAN_WALK_RIGHT
-#undef PLAYER_ANIM_HUMAN_WALK_LEFT
-#undef PLAYER_ANIM_HUMAN_TURN
-#undef PLAYER_ANIM_HUMAN_RUN
-#undef PLAYER_ANIM_BOW_ATTACK
-#undef PLAYER_ANIM_XBOW_IDLE
-#undef PLAYER_ANIM_XBOW_WALK
-#undef PLAYER_ANIM_XBOW_RUN
-#undef PLAYER_ANIM_XBOW_ATTACK
-#undef PLAYER_ANIM_BLOWPIPE_ATTACK
-#undef PLAYER_ANIM_EAT
-#undef PLAYER_ANIM_DEATH
-#undef JAD_ANIM_RANGED
-#undef JAD_ANIM_MELEE
-#undef JAD_ANIM_MAGIC
-
 /* Projectile Visual */
-#include <math.h>
+
+typedef struct {
+    float source_x;
+    float source_y;
+    float source_z;
+    float target_x;
+    float target_y;
+    float target_z;
+    float duration;
+    float angle;
+    float progress;
+} FcProjectilePath;
+
+typedef struct {
+    float x;
+    float y;
+    float z;
+    float velocity_x;
+    float velocity_y;
+    float velocity_z;
+} FcProjectileSample;
+
+typedef struct {
+    float launch_delay;
+    float flight_duration;
+    float total_duration;
+} FcProjectileTiming;
 
 float fc_projectile_profile_end_cycle(float launch_cycle,
                                       float length_adjustment,
@@ -8342,6 +7693,9 @@ float fc_projectile_profile_end_cycle(float launch_cycle,
     return end_cycle > launch_cycle ? end_cycle : launch_cycle + 1.0f;
 }
 
+/* Convert the client's 30-cycle-per-game-tick projectile profile to viewer
+ * seconds. The extra client cycle in flight_duration matches the client
+ * endpoint convention used by RuneC's projectile sampler. */
 int fc_projectile_timing_from_client_cycles(float launch_cycle,
                                             float end_cycle,
                                             float ticks_per_second,
@@ -8358,6 +7712,8 @@ int fc_projectile_timing_from_client_cycles(float launch_cycle,
     return 1;
 }
 
+/* Effects are retained only until either their animation ends or the client
+ * retention window closes. This prevents short spot animations from looping. */
 float fc_projectile_effect_duration_seconds(float animation_client_cycles,
                                             float retain_client_cycles,
                                             float ticks_per_second) {
@@ -8370,6 +7726,9 @@ float fc_projectile_effect_duration_seconds(float animation_client_cycles,
     return visible_cycles / (30.0f * ticks_per_second);
 }
 
+/* Sample the client projectile curve at an absolute point in its flight.
+ * The target may be replaced on every render frame to reproduce the client's
+ * actor-targeted homing behavior without frame-rate-dependent integration. */
 int fc_projectile_path_sample(const FcProjectilePath* path,
                               float elapsed,
                               FcProjectileSample* sample) {
@@ -8411,9 +7770,32 @@ int fc_projectile_path_sample(const FcProjectilePath* path,
     return 1;
 }
 
-
 /* Click Feedback */
-#include <string.h>
+
+#define FC_CLICK_CROSS_FRAME_COUNT 4
+#define FC_CLICK_CROSS_FRAME_SECONDS 0.10f
+
+typedef enum {
+    FC_CLICK_CROSS_NONE = 0,
+    FC_CLICK_CROSS_MOVE,
+    FC_CLICK_CROSS_INTERACTION,
+} FcClickCrossKind;
+
+typedef struct {
+    int destination_active;
+    int destination_x;
+    int destination_y;
+
+    int preview_pending;
+    int preview_route_x[FC_MAX_ROUTE];
+    int preview_route_y[FC_MAX_ROUTE];
+    int preview_route_len;
+
+    FcClickCrossKind cross_kind;
+    float cross_screen_x;
+    float cross_screen_y;
+    float cross_elapsed;
+} FcClickFeedback;
 
 void fc_click_feedback_reset(FcClickFeedback* feedback) {
     if (!feedback) return;
@@ -8430,6 +7812,8 @@ static void start_cross(FcClickFeedback* feedback, FcClickCrossKind kind,
     feedback->cross_elapsed = 0.0f;
 }
 
+/* Build a read-only preview with the same move-near pathfinder used by
+ * fc_step(). The simulation state itself is never modified. */
 void fc_click_feedback_select_move(FcClickFeedback* feedback,
                                    const FcState* state,
                                    int tile_x, int tile_y,
@@ -8462,14 +7846,7 @@ void fc_click_feedback_select_interaction(FcClickFeedback* feedback,
     start_cross(feedback, FC_CLICK_CROSS_INTERACTION, screen_x, screen_y);
 }
 
-void fc_click_feedback_accept_move_tick(FcClickFeedback* feedback,
-                                        const FcState* state) {
-    if (!feedback || !state || !feedback->preview_pending) return;
-    feedback->preview_pending = 0;
-    feedback->preview_route_len = 0;
-    fc_click_feedback_sync(feedback, state);
-}
-
+/* Clear a completed or cancelled authoritative destination. */
 void fc_click_feedback_sync(FcClickFeedback* feedback,
                             const FcState* state) {
     if (!feedback || !state || !feedback->destination_active ||
@@ -8481,6 +7858,15 @@ void fc_click_feedback_sync(FcClickFeedback* feedback,
         feedback->destination_x = -1;
         feedback->destination_y = -1;
     }
+}
+
+/* Hand the preview over to the route produced by the authoritative tick. */
+void fc_click_feedback_accept_move_tick(FcClickFeedback* feedback,
+                                        const FcState* state) {
+    if (!feedback || !state || !feedback->preview_pending) return;
+    feedback->preview_pending = 0;
+    feedback->preview_route_len = 0;
+    fc_click_feedback_sync(feedback, state);
 }
 
 void fc_click_feedback_update(FcClickFeedback* feedback,
@@ -8506,6 +7892,8 @@ int fc_click_feedback_cross_frame(const FcClickFeedback* feedback) {
     return frame;
 }
 
+/* Return the immediate preview while the click is buffered, then the live
+ * core route after the next simulation tick accepts it. */
 int fc_click_feedback_route(const FcClickFeedback* feedback,
                             const FcState* state,
                             const int** out_x, const int** out_y,
@@ -8530,22 +7918,36 @@ int fc_click_feedback_route(const FcClickFeedback* feedback,
     return state->player.route_idx < state->player.route_len;
 }
 
-
 /* Combat Presentation */
-#include "raymath.h"
-#include "rlgl.h"
 
-#include <math.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+typedef struct FcCombatPresentation FcCombatPresentation;
+
+typedef struct {
+    const FcState *state;
+    const FcRenderEvents *events;
+    const FcVisualScene *scene;
+    TerrainMesh *terrain;
+    AnimCache *anim_cache;
+    const FcPlayerVisualProfile *player_profile;
+    float tps;
+} FcCombatPresentationContext;
+
+typedef struct {
+    FcCombatPresentationContext presentation;
+    const FcRenderEntity *entities;
+    int entity_count;
+    NpcModelSet *player_models;
+    NpcModelSet *npc_models;
+    int active_loadout;
+    const RuneCUiAssets *ui_assets;
+    Camera3D camera;
+} FcCombatPresentationDrawContext;
 
 #define MAX_HITSPLATS 32
 #define MAX_PROJECTILES 16
 #define MAX_VISUAL_EFFECTS 32
 #define OSRS_HITSPLAT_SECONDS 1.0f
 #define OSRS_HEALTHBAR_SECONDS 6.0f
-#define POLICY_REPLAY_BASE_TPS (5.0f / 3.0f)
 
 #define PROJ_JAD_MAGIC_LAUNCH 439
 #define PROJ_TOK_XIL_SPINE 443
@@ -9700,43 +9102,24 @@ void fc_combat_presentation_draw_hitsplats(
     }
 }
 
-#undef MAX_HITSPLATS
-#undef MAX_PROJECTILES
-#undef MAX_VISUAL_EFFECTS
-#undef OSRS_HITSPLAT_SECONDS
-#undef OSRS_HEALTHBAR_SECONDS
-#undef POLICY_REPLAY_BASE_TPS
-#undef PROJ_JAD_MAGIC_LAUNCH
-#undef PROJ_TOK_XIL_SPINE
-#undef PROJ_TOK_XIL_IMPACT
-#undef PROJ_KET_ZEK_FIRE
-#undef PROJ_KET_ZEK_IMPACT
-#undef PROJ_JAD_MAGIC_TRAVEL
-#undef PROJ_JAD_MAGIC_IMPACT
-#undef PROJ_JAD_RANGED_IMPACT
-#undef PROJ_SPOTANIM_MODEL_BASE
-
 /* Debug Overlay */
 /*
- * fc_debug_overlay.c — viewer debug tooling and overlays.
+ * Viewer debug tooling and overlays.
  *
  * All functions are read-only — they never modify FcState or ViewerState.
  *
- * Two entry points called from the viewer loop below:
- *   debug_overlay_3d()  — called inside BeginMode3D/EndMode3D (tiles, rays, ranges)
- *   debug_overlay_screen() — called after EndMode3D (screen-space overlays)
+ * Two overlay entry points are called from the viewer loop below:
+ *   debug_overlay_3d()     — inside BeginMode3D/EndMode3D (collision tiles)
+ *   debug_overlay_screen() — after EndMode3D (LOS, path and range overlays)
  *
- * Toggle with 'O' key (debug overlay master toggle).
- * Sub-toggles cycle with Shift+O or number keys in debug mode.
+ * O or D toggles all overlays; Shift+O cycles through them one at a time.
  */
 
-#include "raylib.h"
-#include "rlgl.h"
-#include <stdio.h>
-#include <string.h>
-#include <math.h>
-#include <stdlib.h>
-#include <stdarg.h>
+#define DBG_COLLISION (1 << 0)
+#define DBG_LOS (1 << 1)
+#define DBG_PATH (1 << 2)
+#define DBG_RANGE (1 << 3)
+#define DBG_ALL (DBG_COLLISION | DBG_LOS | DBG_PATH | DBG_RANGE)
 
 /* ======================================================================== */
 /* Event log ring buffer                                                    */
@@ -10380,7 +9763,6 @@ int dbg_draw_panel_tabs(const FcState* state,
             for (int i = g_dbg_log.scroll_offset; i < total && drawn < max_visible; i++) {
                 int idx = (g_dbg_log.head - 1 - i + DBG_LOG_MAX_ENTRIES * 2) % DBG_LOG_MAX_ENTRIES;
                 snprintf(buf, sizeof(buf), "t%d %s", g_dbg_log.tick[idx], g_dbg_log.entries[idx]);
-                /* Truncate to fit content width */
                 fc_osrs_draw_text(buf, x, by, 7, g_dbg_log.color[idx]);
                 by += entry_h;
                 drawn++;
@@ -10394,36 +9776,13 @@ int dbg_draw_panel_tabs(const FcState* state,
     return by;
 }
 
-#undef DBG_LOG_MAX_ENTRIES
-#undef DBG_LOG_MAX_MSG
-#undef DBG_COL_WALK
-#undef DBG_COL_BLOCK
-#undef DBG_COL_LOS_OK
-#undef DBG_COL_LOS_FAIL
-#undef DBG_COL_PATH
-#undef DBG_COL_RANGE
-#undef DBG_COL_LABEL
-#undef DBG_COL_VALUE
-#undef DBG_COL_GOOD
-#undef DBG_COL_BAD
-#undef DBG_COL_DIM
-
 /* ===================== Viewer window and main loop ===================== */
-
-#include <ctype.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <math.h>
 
 #define DEFAULT_WINDOW_W 1244
 #define DEFAULT_WINDOW_H 1064
 #define MAX_TPS         60.0f
 #define MIN_TPS         0.25f
 #define HALF_TPS        0.50f
-#define NORMAL_TPS      (5.0f / 3.0f)
-#define POLICY_REPLAY_BASE_TPS NORMAL_TPS
 
 #define FC_UI_ITEM_VIAL          229u
 #define FC_UI_ITEM_SHARK         385u
@@ -10537,8 +9896,8 @@ typedef struct ViewerState {
     Texture2D tex_pray_melee_on, tex_pray_melee_off;
     Texture2D tex_pray_range_on, tex_pray_range_off;
     Texture2D tex_pray_magic_on, tex_pray_magic_off;
-    /* Debug overlay (Phase 9c) — toggled with O key */
-    int dbg_flags;       /* bitmask of DBG_* flags from fc_debug_overlay.h */
+    /* Debug overlay — toggled with O key */
+    int dbg_flags;       /* bitmask of DBG_* flags */
     /* Debug toggles */
     int godmode;        /* 1 = player can't die */
     int policy_replay;    /* 1 = read-only presentation of native policy transitions */
@@ -10553,10 +9912,6 @@ typedef struct ViewerState {
     int reward_config_loaded;
     char reward_config_path[FC_REWARD_CONFIG_PATH_MAX];
 } ViewerState;
-
-/* Forward declarations */
-static void draw_tex_fit(Texture2D tex, int dx, int dy, int dw, int dh,
-                         Color tint);
 
 static void viewer_trace_log_to_stderr(int log_level, const char* text,
                                        va_list args) {
@@ -10714,11 +10069,11 @@ static void sync_fc_ui_minimap(ViewerState* v) {
     Color pixels[FC_MINIMAP_DISPLAY_SIZE * FC_MINIMAP_DISPLAY_SIZE];
     fc_minimap_render(&v->minimap_scene, player_x, player_y, v->cam_yaw,
                       pixels);
-    runec_ui_update_minimap(&v->ui, pixels, FC_MINIMAP_DISPLAY_SIZE,
-                            FC_MINIMAP_DISPLAY_SIZE);
-    runec_ui_set_minimap_rotation(&v->ui, v->cam_yaw);
+    if (v->ui.minimap_texture_ready)
+        UpdateTexture(v->ui.minimap_texture, pixels);
+    v->ui.minimap_rotation = v->cam_yaw;
 
-    runec_ui_clear_minimap(&v->ui);
+    v->ui.minimap_dot_count = 0;
     runec_ui_add_minimap_dot(&v->ui, 0.0f, 0.0f, RUNEC_UI_MINIMAP_DOT_PLAYER);
     if (v->click_feedback.destination_active) {
         int tx = v->click_feedback.destination_x;
@@ -11055,7 +10410,7 @@ static void update_reward_breakdown(ViewerState* v) {
 }
 
 static const float MANUAL_TPS_PRESETS[] = {
-    0.25f, 0.50f, NORMAL_TPS, 4.0f, 10.0f, 15.0f, 30.0f, 60.0f
+    0.25f, 0.50f, POLICY_REPLAY_BASE_TPS, 4.0f, 10.0f, 15.0f, 30.0f, 60.0f
 };
 static const char* MANUAL_TPS_LABELS[] = {
     "0.25", "0.5", "5/3", "4", "10", "15", "30", "60"
@@ -12569,7 +11924,7 @@ static ViewerState* fc_viewer_create(int replay) {
         return NULL;
     }
     int item_icons_ready = load_fc_ui_item_icons(v);
-    v->paused = 1; v->tps = NORMAL_TPS;
+    v->paused = 1; v->tps = POLICY_REPLAY_BASE_TPS;
     v->active_loadout = FC_ACTIVE_LOADOUT;
     v->attack_target = -1;
     v->cam_yaw = 0; v->cam_pitch = 0.8f; v->cam_dist = 30;
