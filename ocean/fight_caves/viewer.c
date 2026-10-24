@@ -1842,59 +1842,59 @@ void fc_player_appearance_free(FcPlayerAppearance *appearance) {
  * hand-tuned gameframe coordinates.
  */
 
-#define RUNEC_OSRS_MAP_CONTAINER_W 211.0f
-#define RUNEC_OSRS_MAP_CONTAINER_H 207.0f
-#define RUNEC_OSRS_MINIMAP_X 53.0f
-#define RUNEC_OSRS_MINIMAP_Y 8.0f
-#define RUNEC_OSRS_MINIMAP_W 152.0f
-#define RUNEC_OSRS_MINIMAP_H 152.0f
-#define RUNEC_OSRS_MAP_SURROUND_X 29.0f
-#define RUNEC_OSRS_MAP_SURROUND_Y 0.0f
-#define RUNEC_OSRS_MAP_SURROUND_W 182.0f
-#define RUNEC_OSRS_MAP_SURROUND_H 166.0f
-#define RUNEC_OSRS_COMPASS_X 34.0f
-#define RUNEC_OSRS_COMPASS_Y 5.0f
-#define RUNEC_OSRS_COMPASS_W 35.0f
-#define RUNEC_OSRS_COMPASS_H 35.0f
+#define FC_OSRS_MAP_CONTAINER_W 211.0f
+#define FC_OSRS_MAP_CONTAINER_H 207.0f
+#define FC_OSRS_MINIMAP_X 53.0f
+#define FC_OSRS_MINIMAP_Y 8.0f
+#define FC_OSRS_MINIMAP_W 152.0f
+#define FC_OSRS_MINIMAP_H 152.0f
+#define FC_OSRS_MAP_SURROUND_X 29.0f
+#define FC_OSRS_MAP_SURROUND_Y 0.0f
+#define FC_OSRS_MAP_SURROUND_W 182.0f
+#define FC_OSRS_MAP_SURROUND_H 166.0f
+#define FC_OSRS_COMPASS_X 34.0f
+#define FC_OSRS_COMPASS_Y 5.0f
+#define FC_OSRS_COMPASS_W 35.0f
+#define FC_OSRS_COMPASS_H 35.0f
 
-#define RUNEC_OSRS_ORBS_X 0.0f
-#define RUNEC_OSRS_ORBS_Y 10.0f
-#define RUNEC_OSRS_HP_X 0.0f
-#define RUNEC_OSRS_HP_Y 37.0f
-#define RUNEC_OSRS_PRAYER_X 0.0f
-#define RUNEC_OSRS_PRAYER_Y 71.0f
-#define RUNEC_OSRS_RUN_X 10.0f
-#define RUNEC_OSRS_RUN_Y 103.0f
-#define RUNEC_OSRS_WORLDMAP_X 177.0f
-#define RUNEC_OSRS_WORLDMAP_Y 137.0f
+#define FC_OSRS_ORBS_X 0.0f
+#define FC_OSRS_ORBS_Y 10.0f
+#define FC_OSRS_HP_X 0.0f
+#define FC_OSRS_HP_Y 37.0f
+#define FC_OSRS_PRAYER_X 0.0f
+#define FC_OSRS_PRAYER_Y 71.0f
+#define FC_OSRS_RUN_X 10.0f
+#define FC_OSRS_RUN_Y 103.0f
+#define FC_OSRS_WORLDMAP_X 177.0f
+#define FC_OSRS_WORLDMAP_Y 137.0f
 
-#define RUNEC_OSRS_CHAT_W 519.0f
-#define RUNEC_OSRS_CHAT_H 165.0f
-#define RUNEC_OSRS_SIDE_MENU_W 241.0f
-#define RUNEC_OSRS_SIDE_MENU_H 335.0f
-#define RUNEC_OSRS_SIDE_CONTENT_X 25.0f
-#define RUNEC_OSRS_SIDE_CONTENT_Y 37.0f
-#define RUNEC_OSRS_SIDE_CONTENT_W 190.0f
-#define RUNEC_OSRS_SIDE_CONTENT_H 261.0f
-#define RUNEC_OSRS_SIDE_TOP_Y 0.0f
-#define RUNEC_OSRS_SIDE_BOTTOM_Y 298.0f
+#define FC_OSRS_CHAT_W 519.0f
+#define FC_OSRS_CHAT_H 165.0f
+#define FC_OSRS_SIDE_MENU_W 241.0f
+#define FC_OSRS_SIDE_MENU_H 335.0f
+#define FC_OSRS_SIDE_CONTENT_X 25.0f
+#define FC_OSRS_SIDE_CONTENT_Y 37.0f
+#define FC_OSRS_SIDE_CONTENT_W 190.0f
+#define FC_OSRS_SIDE_CONTENT_H 261.0f
+#define FC_OSRS_SIDE_TOP_Y 0.0f
+#define FC_OSRS_SIDE_BOTTOM_Y 298.0f
 
-#define RUNEC_OSRS_INVENTORY_SLOT_X 14.0f
-#define RUNEC_OSRS_INVENTORY_SLOT_Y 8.0f
-#define RUNEC_OSRS_INVENTORY_SLOT_STEP_X 42.0f
-#define RUNEC_OSRS_INVENTORY_SLOT_STEP_Y 36.0f
-#define RUNEC_OSRS_INVENTORY_SLOT_W 32.0f
-#define RUNEC_OSRS_INVENTORY_SLOT_H 32.0f
+#define FC_OSRS_INVENTORY_SLOT_X 14.0f
+#define FC_OSRS_INVENTORY_SLOT_Y 8.0f
+#define FC_OSRS_INVENTORY_SLOT_STEP_X 42.0f
+#define FC_OSRS_INVENTORY_SLOT_STEP_Y 36.0f
+#define FC_OSRS_INVENTORY_SLOT_W 32.0f
+#define FC_OSRS_INVENTORY_SLOT_H 32.0f
 
-typedef struct RuneCUiStoneRef {
-    int logical_tab;              /* RuneCUiTab, or -1 for an inert stone */
+typedef struct FcUiStoneRef {
+    int logical_tab;              /* FcUiTab, or -1 for an inert stone */
     const char *stone_asset;
     const char *icon_asset;
     Rectangle rect;
     Rectangle icon_rect;
-} RuneCUiStoneRef;
+} FcUiStoneRef;
 
-static const RuneCUiStoneRef RUNEC_OSRS_SIDE_STONES[] = {
+static const FcUiStoneRef FC_OSRS_SIDE_STONES[] = {
     {0, "side_stone_highlights_0", "side_icon_combat",    {0,   0, 38, 36}, {4,   0, 33, 36}},
     {-1, "side_stone_highlights_4", "side_icon_stats",    {38,  0, 33, 36}, {38,  0, 33, 36}},
     {-1, "side_stone_highlights_4", "side_icon_quests",   {71,  0, 38, 36}, {71,  0, 33, 36}},
@@ -1912,22 +1912,22 @@ static const RuneCUiStoneRef RUNEC_OSRS_SIDE_STONES[] = {
 };
 
 /* Button, icon and label rectangles of a weapon's three combat styles. */
-typedef struct RuneCUiCombatStyleRef {
+typedef struct FcUiCombatStyleRef {
     Rectangle rect;
     Rectangle icon_rect;
     Rectangle text_rect;
-} RuneCUiCombatStyleRef;
+} FcUiCombatStyleRef;
 
-static const RuneCUiCombatStyleRef RUNEC_OSRS_COMBAT_STYLES[] = {
+static const FcUiCombatStyleRef FC_OSRS_COMBAT_STYLES[] = {
     {{20,  46, 68, 47}, {37,  51, 34, 24}, {20,  67, 68, 13}},
     {{102, 46, 68, 47}, {119, 51, 34, 24}, {102, 76, 68, 13}},
     {{20,  99, 68, 47}, {37, 104, 34, 24}, {20, 129, 68, 13}},
 };
 
-static const Rectangle RUNEC_OSRS_COMBAT_HEADER = {10, 0, 170, 44};
-static const Rectangle RUNEC_OSRS_COMBAT_TITLE = {10, 6, 170, 14};
-static const Rectangle RUNEC_OSRS_COMBAT_LEVEL = {10, 26, 170, 12};
-static const Rectangle RUNEC_OSRS_COMBAT_CATEGORY = {0, 233, 190, 28};
+static const Rectangle FC_OSRS_COMBAT_HEADER = {10, 0, 170, 44};
+static const Rectangle FC_OSRS_COMBAT_TITLE = {10, 6, 170, 14};
+static const Rectangle FC_OSRS_COMBAT_LEVEL = {10, 26, 170, 12};
+static const Rectangle FC_OSRS_COMBAT_CATEGORY = {0, 233, 190, 28};
 
 /* Ui Assets */
 
@@ -2000,18 +2000,18 @@ static const char *const g_ui_asset_names[] = {
     "combaticons2_17",
 };
 
-#define RUNEC_UI_ASSET_COUNT \
+#define FC_UI_ASSET_COUNT \
     ((int)(sizeof(g_ui_asset_names) / sizeof(g_ui_asset_names[0])))
 
-typedef struct RuneCUiAssets {
-    Texture2D textures[RUNEC_UI_ASSET_COUNT];
+typedef struct FcUiAssets {
+    Texture2D textures[FC_UI_ASSET_COUNT];
     Font font;
     Font small_font;
     int missing_count;
-} RuneCUiAssets;
+} FcUiAssets;
 
 static int find_asset_index(const char *name) {
-    for (int i = 0; i < RUNEC_UI_ASSET_COUNT; i++) {
+    for (int i = 0; i < FC_UI_ASSET_COUNT; i++) {
         if (strcmp(g_ui_asset_names[i], name) == 0)
             return i;
     }
@@ -2058,9 +2058,9 @@ static Font load_ui_font(const char *path, int size) {
     return font;
 }
 
-void runec_ui_assets_load(RuneCUiAssets *assets) {
+void fc_ui_assets_load(FcUiAssets *assets) {
     memset(assets, 0, sizeof(*assets));
-    for (int i = 0; i < RUNEC_UI_ASSET_COUNT; i++) {
+    for (int i = 0; i < FC_UI_ASSET_COUNT; i++) {
         const char *name = g_ui_asset_names[i];
         char path[256];
         snprintf(path, sizeof(path), "data/sprites/ui/%s.png", name);
@@ -2076,13 +2076,13 @@ void runec_ui_assets_load(RuneCUiAssets *assets) {
         assets->textures[i] = tex;
     }
     fprintf(stderr, "ui_assets: loaded %d/%d sprites\n",
-            RUNEC_UI_ASSET_COUNT - assets->missing_count, RUNEC_UI_ASSET_COUNT);
+            FC_UI_ASSET_COUNT - assets->missing_count, FC_UI_ASSET_COUNT);
     assets->font = load_ui_font("data/fonts/runescape.ttf", 14);
     assets->small_font = load_ui_font("data/fonts/runescape_small.ttf", 12);
 }
 
-void runec_ui_assets_unload(RuneCUiAssets *assets) {
-    for (int i = 0; i < RUNEC_UI_ASSET_COUNT; i++) {
+void fc_ui_assets_unload(FcUiAssets *assets) {
+    for (int i = 0; i < FC_UI_ASSET_COUNT; i++) {
         if (assets->textures[i].id != 0)
             UnloadTexture(assets->textures[i]);
     }
@@ -2093,43 +2093,43 @@ void runec_ui_assets_unload(RuneCUiAssets *assets) {
     memset(assets, 0, sizeof(*assets));
 }
 
-const Texture2D *runec_ui_asset(const RuneCUiAssets *assets, const char *name) {
+const Texture2D *fc_ui_asset(const FcUiAssets *assets, const char *name) {
     int index = find_asset_index(name);
     return index >= 0 ? &assets->textures[index] : NULL;
 }
 
-void runec_ui_draw_asset(const RuneCUiAssets *assets, const char *name,
-                         Rectangle dst, Color tint) {
-    const Texture2D *tex = runec_ui_asset(assets, name);
+void fc_ui_draw_asset(const FcUiAssets *assets, const char *name,
+                      Rectangle dst, Color tint) {
+    const Texture2D *tex = fc_ui_asset(assets, name);
     if (!tex)
         return;
     Rectangle src = {0, 0, (float)tex->width, (float)tex->height};
     DrawTexturePro(*tex, src, dst, (Vector2){0, 0}, 0.0f, tint);
 }
 
-Font runec_ui_font_for_size(const RuneCUiAssets *assets, float size) {
+Font fc_ui_font_for_size(const FcUiAssets *assets, float size) {
     return size <= 12.0f ? assets->small_font : assets->font;
 }
 
 /* Text with the client's one-pixel black drop shadow, drawn exactly at position. */
-void runec_ui_draw_font_shadow(Font font, const char *text, Vector2 position,
-                               float size, Color color) {
+void fc_ui_draw_font_shadow(Font font, const char *text, Vector2 position,
+                            float size, Color color) {
     DrawTextEx(font, text, (Vector2){position.x + 1.0f, position.y + 1.0f},
                size, 0.0f, BLACK);
     DrawTextEx(font, text, position, size, 0.0f, color);
 }
 
 /* UI text in the font for its size, snapped to whole pixels. */
-void runec_ui_draw_text_shadow(const RuneCUiAssets *assets, const char *text,
-                               float x, float y, float size, Color color) {
+void fc_ui_draw_text_shadow(const FcUiAssets *assets, const char *text,
+                            float x, float y, float size, Color color) {
     if (!text || !text[0])
         return;
     if (size < 12.0f)
         size = 12.0f;
-    Font font = runec_ui_font_for_size(assets, size);
+    Font font = fc_ui_font_for_size(assets, size);
     x = (float)((int)(x + 0.5f));
     y = (float)((int)(y + 0.5f));
-    runec_ui_draw_font_shadow(font, text, (Vector2){x, y}, size, color);
+    fc_ui_draw_font_shadow(font, text, (Vector2){x, y}, size, color);
 }
 
 /* Osrs Text */
@@ -2138,7 +2138,7 @@ void runec_ui_draw_text_shadow(const RuneCUiAssets *assets, const char *text,
 #define FC_OSRS_MENU_FONT_ASSET "data/fonts/runescape_bold.ttf"
 
 static Font g_menu_font;
-static Font g_text_font;    /* the UI's small font, owned by RuneCUiAssets */
+static Font g_text_font;    /* the UI's small font, owned by FcUiAssets */
 
 void fc_osrs_text_shutdown(void) {
     if (g_menu_font.texture.id != 0)
@@ -2389,107 +2389,107 @@ int fc_menu_action_at(FcMenuLayout menu, int rows, int x, int y) {
 
 /* Ui */
 
-#define RUNEC_UI_CHAT_INPUT_MAX 128
-#define RUNEC_UI_CONTEXT_ACTIONS 5
-#define RUNEC_UI_MINIMAP_DOTS 256
-#define RUNEC_UI_ITEM_ICON_CACHE 512
-#define RUNEC_UI_COMBAT_STYLE_COUNT 3
+#define FC_UI_CHAT_INPUT_MAX 128
+#define FC_UI_CONTEXT_ACTIONS 5
+#define FC_UI_MINIMAP_DOTS 256
+#define FC_UI_ITEM_ICON_CACHE 512
+#define FC_UI_COMBAT_STYLE_COUNT 3
 
-typedef enum RuneCUiTab {
-    RUNEC_UI_TAB_NONE = -1,
-    RUNEC_UI_TAB_COMBAT = 0,
-    RUNEC_UI_TAB_INVENTORY,
-    RUNEC_UI_TAB_EQUIPMENT,
-    RUNEC_UI_TAB_PRAYER,
-    RUNEC_UI_TAB_COUNT
-} RuneCUiTab;
+typedef enum FcUiTab {
+    FC_UI_TAB_NONE = -1,
+    FC_UI_TAB_COMBAT = 0,
+    FC_UI_TAB_INVENTORY,
+    FC_UI_TAB_EQUIPMENT,
+    FC_UI_TAB_PRAYER,
+    FC_UI_TAB_COUNT
+} FcUiTab;
 
-typedef enum RuneCUiIntentKind {
-    RUNEC_UI_INTENT_NONE = 0,
-    RUNEC_UI_INTENT_TAB,
-    RUNEC_UI_INTENT_INVENTORY_SLOT,
-    RUNEC_UI_INTENT_EQUIPMENT_SLOT,
-    RUNEC_UI_INTENT_PRAYER_SLOT,
-    RUNEC_UI_INTENT_QUICK_PRAYER_TOGGLE,
-    RUNEC_UI_INTENT_MINIMAP_CLICK,
-    RUNEC_UI_INTENT_RUN_TOGGLE,
-    RUNEC_UI_INTENT_WORLD_ACTION,
-    RUNEC_UI_INTENT_INVENTORY_ACTION,
-    RUNEC_UI_INTENT_EQUIPMENT_ACTION,
-    RUNEC_UI_INTENT_INVENTORY_DRAG
-} RuneCUiIntentKind;
+typedef enum FcUiIntentKind {
+    FC_UI_INTENT_NONE = 0,
+    FC_UI_INTENT_TAB,
+    FC_UI_INTENT_INVENTORY_SLOT,
+    FC_UI_INTENT_EQUIPMENT_SLOT,
+    FC_UI_INTENT_PRAYER_SLOT,
+    FC_UI_INTENT_QUICK_PRAYER_TOGGLE,
+    FC_UI_INTENT_MINIMAP_CLICK,
+    FC_UI_INTENT_RUN_TOGGLE,
+    FC_UI_INTENT_WORLD_ACTION,
+    FC_UI_INTENT_INVENTORY_ACTION,
+    FC_UI_INTENT_EQUIPMENT_ACTION,
+    FC_UI_INTENT_INVENTORY_DRAG
+} FcUiIntentKind;
 
-typedef struct RuneCUiIntent {
-    RuneCUiIntentKind kind;
+typedef struct FcUiIntent {
+    FcUiIntentKind kind;
     int primary;
     int secondary;
     Vector2 position;
-    char text[RUNEC_UI_CHAT_INPUT_MAX];
-} RuneCUiIntent;
+    char text[FC_UI_CHAT_INPUT_MAX];
+} FcUiIntent;
 
-typedef struct RuneCUiSlot {
+typedef struct FcUiSlot {
     uint32_t item_id;
     int quantity;
     char label[24];
     int enabled;
     const char *action;           /* supplied by the inventory owner */
-} RuneCUiSlot;
+} FcUiSlot;
 
-typedef enum RuneCUiMinimapDotKind {
-    RUNEC_UI_MINIMAP_DOT_NPC = 0,
-    RUNEC_UI_MINIMAP_DOT_PLAYER,
-    RUNEC_UI_MINIMAP_DOT_DESTINATION
-} RuneCUiMinimapDotKind;
+typedef enum FcUiMinimapDotKind {
+    FC_UI_MINIMAP_DOT_NPC = 0,
+    FC_UI_MINIMAP_DOT_PLAYER,
+    FC_UI_MINIMAP_DOT_DESTINATION
+} FcUiMinimapDotKind;
 
-typedef struct RuneCUiMinimapDot {
+typedef struct FcUiMinimapDot {
     float dx;
     float dy;
-    RuneCUiMinimapDotKind kind;
-} RuneCUiMinimapDot;
+    FcUiMinimapDotKind kind;
+} FcUiMinimapDot;
 
-typedef struct RuneCUiItemIcon {
+typedef struct FcUiItemIcon {
     uint32_t item_id;
     Texture2D texture;
-} RuneCUiItemIcon;
+} FcUiItemIcon;
 
-typedef struct RuneCUiCombatStyleDef {
+typedef struct FcUiCombatStyleDef {
     const char *label;
     const char *mode;
     const char *icon_asset;
-} RuneCUiCombatStyleDef;
+} FcUiCombatStyleDef;
 
 /* A weapon category's combat styles. The tab only shows them: the active
  * style is the one the simulation attacks with. */
-typedef struct RuneCUiCombatProfile {
+typedef struct FcUiCombatProfile {
     int weapon_category;
     int active_style;
-    RuneCUiCombatStyleDef styles[RUNEC_UI_COMBAT_STYLE_COUNT];
-} RuneCUiCombatProfile;
+    FcUiCombatStyleDef styles[FC_UI_COMBAT_STYLE_COUNT];
+} FcUiCombatProfile;
 
-typedef enum RuneCUiContextSourceKind {
-    RUNEC_UI_CONTEXT_NONE = 0,
-    RUNEC_UI_CONTEXT_INVENTORY,
-    RUNEC_UI_CONTEXT_EQUIPMENT,
-    RUNEC_UI_CONTEXT_PRAYER,
-    RUNEC_UI_CONTEXT_WORLD
-} RuneCUiContextSourceKind;
+typedef enum FcUiContextSourceKind {
+    FC_UI_CONTEXT_NONE = 0,
+    FC_UI_CONTEXT_INVENTORY,
+    FC_UI_CONTEXT_EQUIPMENT,
+    FC_UI_CONTEXT_PRAYER,
+    FC_UI_CONTEXT_WORLD
+} FcUiContextSourceKind;
 
-typedef struct RuneCUiDragState {
+typedef struct FcUiDragState {
     int active;
-    RuneCUiContextSourceKind source_kind;
+    FcUiContextSourceKind source_kind;
     int source_slot;
     Vector2 start;
-} RuneCUiDragState;
+} FcUiDragState;
 
-typedef struct RuneCUiState {
-    RuneCUiTab active_tab;
-    RuneCUiIntent last_intent;
-    float tab_press_timer[RUNEC_UI_TAB_COUNT];
+typedef struct FcUiState {
+    FcUiTab active_tab;
+    FcUiIntent last_intent;
+    float tab_press_timer[FC_UI_TAB_COUNT];
 
-    RuneCUiSlot inventory[FC_INVENTORY_SLOTS];
-    RuneCUiSlot equipment[FC_EQUIPMENT_SLOTS];
+    FcUiSlot inventory[FC_INVENTORY_SLOTS];
+    FcUiSlot equipment[FC_EQUIPMENT_SLOTS];
     char combat_weapon_name[64];
-    const RuneCUiCombatProfile *combat_profile;
+    const FcUiCombatProfile *combat_profile;
 
     int hitpoints;
     int hitpoints_max;
@@ -2504,23 +2504,23 @@ typedef struct RuneCUiState {
     Color context_target_color;
     int context_combat_level;
     char context_title[48];
-    char context_actions[RUNEC_UI_CONTEXT_ACTIONS][32];
+    char context_actions[FC_UI_CONTEXT_ACTIONS][32];
     int context_action_count;
-    RuneCUiContextSourceKind context_source_kind;
+    FcUiContextSourceKind context_source_kind;
     int context_source_slot;
     uint32_t context_source_item_id;
 
-    RuneCUiDragState drag;
+    FcUiDragState drag;
 
-    RuneCUiMinimapDot minimap_dots[RUNEC_UI_MINIMAP_DOTS];
+    FcUiMinimapDot minimap_dots[FC_UI_MINIMAP_DOTS];
     int minimap_dot_count;
     float minimap_rotation;
     Texture2D minimap_texture;
-    RuneCUiItemIcon item_icons[RUNEC_UI_ITEM_ICON_CACHE];
+    FcUiItemIcon item_icons[FC_UI_ITEM_ICON_CACHE];
     int item_icon_count;
 
-    RuneCUiAssets assets;
-} RuneCUiState;
+    FcUiAssets assets;
+} FcUiState;
 
 #define OSRS_ORANGE ((Color){255, 152, 31, 255})
 #define OSRS_YELLOW ((Color){255, 255, 0, 255})
@@ -2528,7 +2528,7 @@ typedef struct RuneCUiState {
 #define OSRS_RED    ((Color){255, 40, 25, 255})
 #define OSRS_TAB_PRESS_SECONDS 0.12f
 
-typedef struct RuneCUiLayout {
+typedef struct FcUiLayout {
     Rectangle chat;
     Rectangle chat_messages;
     Rectangle chat_controls;
@@ -2541,8 +2541,8 @@ typedef struct RuneCUiLayout {
     Rectangle run_orb;
     Rectangle side;
     Rectangle side_content;
-    Rectangle tab[RUNEC_UI_TAB_COUNT];
-} RuneCUiLayout;
+    Rectangle tab[FC_UI_TAB_COUNT];
+} FcUiLayout;
 
 static const Rectangle g_equipment_offsets[FC_EQUIPMENT_SLOTS] = {
     {77, 4, 36, 36},
@@ -2574,7 +2574,7 @@ static const char *g_worn_icon_names[FC_EQUIPMENT_SLOTS] = {
  * same labels/icons as OSRS. Core has no style choice: it punches unarmed and
  * always fires the bow on Rapid.
  */
-static const RuneCUiCombatProfile g_combat_profiles[] = {
+static const FcUiCombatProfile g_combat_profiles[] = {
     {0, 0, {    /* unarmed: OSRS category 0 */
         {"Punch", "Accurate", "combaticons_14"},
         {"Kick", "Aggressive", "combaticons_15"},
@@ -2595,7 +2595,7 @@ static void copy_text(char *dst, size_t cap, const char *src) {
     snprintf(dst, cap, "%s", src);
 }
 
-static const RuneCUiCombatProfile *combat_profile_for_weapon_category(int category) {
+static const FcUiCombatProfile *combat_profile_for_weapon_category(int category) {
     int count = (int)(sizeof(g_combat_profiles) / sizeof(g_combat_profiles[0]));
     for (int i = 0; i < count; i++) {
         if (g_combat_profiles[i].weapon_category == category)
@@ -2604,7 +2604,7 @@ static const RuneCUiCombatProfile *combat_profile_for_weapon_category(int catego
     return &g_combat_profiles[0];
 }
 
-void runec_ui_set_combat_weapon_name(RuneCUiState *ui, const char *name) {
+void fc_ui_set_combat_weapon_name(FcUiState *ui, const char *name) {
     if (!ui)
         return;
     copy_text(ui->combat_weapon_name, sizeof(ui->combat_weapon_name),
@@ -2615,63 +2615,63 @@ static float fmin2(float a, float b) {
     return a < b ? a : b;
 }
 
-static void ui_layout(int screen_w, int screen_h, RuneCUiLayout *out) {
+static void ui_layout(int screen_w, int screen_h, FcUiLayout *out) {
     memset(out, 0, sizeof(*out));
 
-    out->chat = (Rectangle){0, (float)screen_h - RUNEC_OSRS_CHAT_H,
-                            RUNEC_OSRS_CHAT_W, RUNEC_OSRS_CHAT_H};
+    out->chat = (Rectangle){0, (float)screen_h - FC_OSRS_CHAT_H,
+                            FC_OSRS_CHAT_W, FC_OSRS_CHAT_H};
     out->chat_messages = (Rectangle){7, out->chat.y + 7, 506, 126};
     out->chat_controls = (Rectangle){0, out->chat.y + 142, 519, 23};
 
-    out->map = (Rectangle){(float)screen_w - RUNEC_OSRS_MAP_CONTAINER_W, 0,
-                           RUNEC_OSRS_MAP_CONTAINER_W, RUNEC_OSRS_MAP_CONTAINER_H};
-    out->minimap = (Rectangle){out->map.x + RUNEC_OSRS_MINIMAP_X,
-                               out->map.y + RUNEC_OSRS_MINIMAP_Y,
-                               RUNEC_OSRS_MINIMAP_W, RUNEC_OSRS_MINIMAP_H};
-    out->compass = (Rectangle){out->map.x + RUNEC_OSRS_COMPASS_X,
-                               out->map.y + RUNEC_OSRS_COMPASS_Y,
-                               RUNEC_OSRS_COMPASS_W, RUNEC_OSRS_COMPASS_H};
-    out->hp_orb = (Rectangle){out->map.x + RUNEC_OSRS_ORBS_X + RUNEC_OSRS_HP_X,
-                              out->map.y + RUNEC_OSRS_ORBS_Y + RUNEC_OSRS_HP_Y, 57, 34};
-    out->prayer_orb = (Rectangle){out->map.x + RUNEC_OSRS_ORBS_X + RUNEC_OSRS_PRAYER_X,
-                                  out->map.y + RUNEC_OSRS_ORBS_Y + RUNEC_OSRS_PRAYER_Y, 57, 34};
-    out->run_orb = (Rectangle){out->map.x + RUNEC_OSRS_ORBS_X + RUNEC_OSRS_RUN_X,
-                               out->map.y + RUNEC_OSRS_ORBS_Y + RUNEC_OSRS_RUN_Y, 57, 34};
-    out->worldmap_button = (Rectangle){out->map.x + RUNEC_OSRS_ORBS_X + RUNEC_OSRS_WORLDMAP_X,
-                                       out->map.y + RUNEC_OSRS_ORBS_Y + RUNEC_OSRS_WORLDMAP_Y,
+    out->map = (Rectangle){(float)screen_w - FC_OSRS_MAP_CONTAINER_W, 0,
+                           FC_OSRS_MAP_CONTAINER_W, FC_OSRS_MAP_CONTAINER_H};
+    out->minimap = (Rectangle){out->map.x + FC_OSRS_MINIMAP_X,
+                               out->map.y + FC_OSRS_MINIMAP_Y,
+                               FC_OSRS_MINIMAP_W, FC_OSRS_MINIMAP_H};
+    out->compass = (Rectangle){out->map.x + FC_OSRS_COMPASS_X,
+                               out->map.y + FC_OSRS_COMPASS_Y,
+                               FC_OSRS_COMPASS_W, FC_OSRS_COMPASS_H};
+    out->hp_orb = (Rectangle){out->map.x + FC_OSRS_ORBS_X + FC_OSRS_HP_X,
+                              out->map.y + FC_OSRS_ORBS_Y + FC_OSRS_HP_Y, 57, 34};
+    out->prayer_orb = (Rectangle){out->map.x + FC_OSRS_ORBS_X + FC_OSRS_PRAYER_X,
+                                  out->map.y + FC_OSRS_ORBS_Y + FC_OSRS_PRAYER_Y, 57, 34};
+    out->run_orb = (Rectangle){out->map.x + FC_OSRS_ORBS_X + FC_OSRS_RUN_X,
+                               out->map.y + FC_OSRS_ORBS_Y + FC_OSRS_RUN_Y, 57, 34};
+    out->worldmap_button = (Rectangle){out->map.x + FC_OSRS_ORBS_X + FC_OSRS_WORLDMAP_X,
+                                       out->map.y + FC_OSRS_ORBS_Y + FC_OSRS_WORLDMAP_Y,
                                        30, 30};
 
-    out->side = (Rectangle){(float)screen_w - RUNEC_OSRS_SIDE_MENU_W,
-                            (float)screen_h - RUNEC_OSRS_SIDE_MENU_H,
-                            RUNEC_OSRS_SIDE_MENU_W, RUNEC_OSRS_SIDE_MENU_H};
-    out->side_content = (Rectangle){out->side.x + RUNEC_OSRS_SIDE_CONTENT_X,
-                                    out->side.y + RUNEC_OSRS_SIDE_CONTENT_Y,
-                                    RUNEC_OSRS_SIDE_CONTENT_W,
-                                    RUNEC_OSRS_SIDE_CONTENT_H};
+    out->side = (Rectangle){(float)screen_w - FC_OSRS_SIDE_MENU_W,
+                            (float)screen_h - FC_OSRS_SIDE_MENU_H,
+                            FC_OSRS_SIDE_MENU_W, FC_OSRS_SIDE_MENU_H};
+    out->side_content = (Rectangle){out->side.x + FC_OSRS_SIDE_CONTENT_X,
+                                    out->side.y + FC_OSRS_SIDE_CONTENT_Y,
+                                    FC_OSRS_SIDE_CONTENT_W,
+                                    FC_OSRS_SIDE_CONTENT_H};
 
-    for (int i = 0; i < (int)(sizeof(RUNEC_OSRS_SIDE_STONES) / sizeof(RUNEC_OSRS_SIDE_STONES[0])); i++) {
-        const RuneCUiStoneRef *ref = &RUNEC_OSRS_SIDE_STONES[i];
-        if (ref->logical_tab < 0 || ref->logical_tab >= RUNEC_UI_TAB_COUNT)
+    for (int i = 0; i < (int)(sizeof(FC_OSRS_SIDE_STONES) / sizeof(FC_OSRS_SIDE_STONES[0])); i++) {
+        const FcUiStoneRef *ref = &FC_OSRS_SIDE_STONES[i];
+        if (ref->logical_tab < 0 || ref->logical_tab >= FC_UI_TAB_COUNT)
             continue;
-        float row_y = out->side.y + (i < 7 ? RUNEC_OSRS_SIDE_TOP_Y : RUNEC_OSRS_SIDE_BOTTOM_Y);
+        float row_y = out->side.y + (i < 7 ? FC_OSRS_SIDE_TOP_Y : FC_OSRS_SIDE_BOTTOM_Y);
         out->tab[ref->logical_tab] =
             (Rectangle){out->side.x + ref->rect.x, row_y + ref->rect.y,
                         ref->rect.width, ref->rect.height};
     }
 }
 
-static int mouse_over_ui(const RuneCUiLayout *layout, Vector2 mouse) {
+static int mouse_over_ui(const FcUiLayout *layout, Vector2 mouse) {
     return CheckCollisionPointRec(mouse, layout->chat)
         || CheckCollisionPointRec(mouse, layout->side)
         || CheckCollisionPointRec(mouse, layout->map);
 }
 
-static void clear_intent(RuneCUiState *ui) {
+static void clear_intent(FcUiState *ui) {
     memset(&ui->last_intent, 0, sizeof(ui->last_intent));
 }
 
 /* Records this frame's UI action; any text is set separately. */
-static void set_intent(RuneCUiState *ui, RuneCUiIntentKind kind,
+static void set_intent(FcUiState *ui, FcUiIntentKind kind,
                        int primary, int secondary, Vector2 position) {
     ui->last_intent.kind = kind;
     ui->last_intent.primary = primary;
@@ -2679,7 +2679,7 @@ static void set_intent(RuneCUiState *ui, RuneCUiIntentKind kind,
     ui->last_intent.position = position;
 }
 
-static void set_context(RuneCUiState *ui, Vector2 pos, const char *title,
+static void set_context(FcUiState *ui, Vector2 pos, const char *title,
                         const char **actions, int action_count) {
     ui->context_open = 1;
     ui->context_pos = pos;
@@ -2687,11 +2687,11 @@ static void set_context(RuneCUiState *ui, Vector2 pos, const char *title,
     ui->context_combat_level = 0;
     ui->drag.active = 0;
     copy_text(ui->context_title, sizeof(ui->context_title), title);
-    ui->context_source_kind = RUNEC_UI_CONTEXT_NONE;
+    ui->context_source_kind = FC_UI_CONTEXT_NONE;
     ui->context_source_slot = -1;
     ui->context_source_item_id = 0;
-    if (action_count > RUNEC_UI_CONTEXT_ACTIONS)
-        action_count = RUNEC_UI_CONTEXT_ACTIONS;
+    if (action_count > FC_UI_CONTEXT_ACTIONS)
+        action_count = FC_UI_CONTEXT_ACTIONS;
     if (action_count < 0) action_count = 0;
     ui->context_action_count = action_count;
     for (int i = 0; i < action_count; i++) {
@@ -2699,8 +2699,8 @@ static void set_context(RuneCUiState *ui, Vector2 pos, const char *title,
     }
 }
 
-static void set_context_source(RuneCUiState *ui,
-                               RuneCUiContextSourceKind source_kind,
+static void set_context_source(FcUiState *ui,
+                               FcUiContextSourceKind source_kind,
                                int source_slot,
                                uint32_t source_item_id) {
     ui->context_source_kind = source_kind;
@@ -2708,14 +2708,14 @@ static void set_context_source(RuneCUiState *ui,
     ui->context_source_item_id = source_item_id;
 }
 
-void runec_ui_close_context(RuneCUiState *ui) {
+void fc_ui_close_context(FcUiState *ui) {
     ui->context_open = 0;
-    ui->context_source_kind = RUNEC_UI_CONTEXT_NONE;
+    ui->context_source_kind = FC_UI_CONTEXT_NONE;
     ui->context_source_slot = -1;
     ui->context_source_item_id = 0;
 }
 
-void runec_ui_open_world_context(RuneCUiState *ui, Vector2 pos, int npc_type, int can_walk) {
+void fc_ui_open_world_context(FcUiState *ui, Vector2 pos, int npc_type, int can_walk) {
     FcNpcMenuInfo npc = fc_menu_npc_info(npc_type);
     const char *actions[4];
     int count = 0;
@@ -2725,30 +2725,30 @@ void runec_ui_open_world_context(RuneCUiState *ui, Vector2 pos, int npc_type, in
     actions[count++] = "Cancel";
     set_context(ui, pos, npc.name, actions, count);
     ui->context_combat_level = npc.level;
-    ui->context_source_kind = RUNEC_UI_CONTEXT_WORLD;
+    ui->context_source_kind = FC_UI_CONTEXT_WORLD;
     ui->context_target_color = OSRS_YELLOW;
 }
 
 /* Menu for one of the viewer's prayer buttons; picking the verb reports
- * RUNEC_UI_INTENT_PRAYER_SLOT with this slot. */
-void runec_ui_open_prayer_context(RuneCUiState *ui, Vector2 pos, int slot,
-                                  const char *name, int active) {
+ * FC_UI_INTENT_PRAYER_SLOT with this slot. */
+void fc_ui_open_prayer_context(FcUiState *ui, Vector2 pos, int slot,
+                               const char *name, int active) {
     const char *actions[] = {active ? "Deactivate" : "Activate", "Cancel"};
     set_context(ui, pos, name, actions, 2);
-    set_context_source(ui, RUNEC_UI_CONTEXT_PRAYER, slot, 0);
+    set_context_source(ui, FC_UI_CONTEXT_PRAYER, slot, 0);
 }
 
-static int context_has_target(const RuneCUiState *ui, const char *action) {
+static int context_has_target(const FcUiState *ui, const char *action) {
     return ui->context_title[0] && strcmp(action, "Cancel") && strcmp(action, "Walk here");
 }
 
-static void context_level_suffix(const RuneCUiState *ui, char suffix[32]) {
+static void context_level_suffix(const FcUiState *ui, char suffix[32]) {
     suffix[0] = '\0';
     if (ui->context_combat_level > 0)
         snprintf(suffix, 32, " (level-%d)", ui->context_combat_level);
 }
 
-static FcMenuLayout context_layout(const RuneCUiState *ui) {
+static FcMenuLayout context_layout(const FcUiState *ui) {
     Font font = fc_osrs_menu_font();
     float width = MeasureTextEx(font, "Choose Option", FC_OSRS_MENU_FONT_SIZE, 0).x;
     char suffix[32];
@@ -2767,14 +2767,14 @@ static FcMenuLayout context_layout(const RuneCUiState *ui) {
         GetScreenWidth(), GetScreenHeight(), (int)ceilf(width), ui->context_action_count);
 }
 
-void runec_ui_init(RuneCUiState *ui) {
+void fc_ui_init(FcUiState *ui) {
     memset(ui, 0, sizeof(*ui));
-    ui->active_tab = RUNEC_UI_TAB_INVENTORY;
+    ui->active_tab = FC_UI_TAB_INVENTORY;
     ui->combat_profile = &g_combat_profiles[0];
     ui->context_source_slot = -1;
     ui->drag.source_slot = -1;
 
-    runec_ui_assets_load(&ui->assets);
+    fc_ui_assets_load(&ui->assets);
     Image minimap = GenImageColor(FC_MINIMAP_DISPLAY_SIZE, FC_MINIMAP_DISPLAY_SIZE, BLANK);
     ui->minimap_texture = LoadTextureFromImage(minimap);
     UnloadImage(minimap);
@@ -2782,24 +2782,24 @@ void runec_ui_init(RuneCUiState *ui) {
         SetTextureFilter(ui->minimap_texture, TEXTURE_FILTER_POINT);
 }
 
-void runec_ui_shutdown(RuneCUiState *ui) {
+void fc_ui_shutdown(FcUiState *ui) {
     if (ui->minimap_texture.id != 0)
         UnloadTexture(ui->minimap_texture);
     for (int i = 0; i < ui->item_icon_count; i++)
         UnloadTexture(ui->item_icons[i].texture);
     ui->item_icon_count = 0;
-    runec_ui_assets_unload(&ui->assets);
+    fc_ui_assets_unload(&ui->assets);
 }
 
-void runec_ui_add_minimap_dot(RuneCUiState *ui, float dx, float dy,
-                              RuneCUiMinimapDotKind kind) {
-    if (ui->minimap_dot_count >= RUNEC_UI_MINIMAP_DOTS)
+void fc_ui_add_minimap_dot(FcUiState *ui, float dx, float dy,
+                           FcUiMinimapDotKind kind) {
+    if (ui->minimap_dot_count >= FC_UI_MINIMAP_DOTS)
         return;
     ui->minimap_dots[ui->minimap_dot_count++] =
-        (RuneCUiMinimapDot){dx, dy, kind};
+        (FcUiMinimapDot){dx, dy, kind};
 }
 
-void runec_ui_set_item_icon(RuneCUiState *ui, uint32_t item_id, Texture2D texture) {
+void fc_ui_set_item_icon(FcUiState *ui, uint32_t item_id, Texture2D texture) {
     if (!ui || item_id == 0 || texture.id == 0)
         return;
     for (int i = 0; i < ui->item_icon_count; i++) {
@@ -2809,20 +2809,20 @@ void runec_ui_set_item_icon(RuneCUiState *ui, uint32_t item_id, Texture2D textur
             return;
         }
     }
-    if (ui->item_icon_count >= RUNEC_UI_ITEM_ICON_CACHE) {
+    if (ui->item_icon_count >= FC_UI_ITEM_ICON_CACHE) {
         UnloadTexture(texture);
         return;
     }
-    ui->item_icons[ui->item_icon_count++] = (RuneCUiItemIcon){item_id, texture};
+    ui->item_icons[ui->item_icon_count++] = (FcUiItemIcon){item_id, texture};
 }
 
-static int handle_context_click(RuneCUiState *ui, Vector2 mouse) {
+static int handle_context_click(FcUiState *ui, Vector2 mouse) {
     if (!ui->context_open)
         return 0;
 
     FcMenuLayout menu = context_layout(ui);
     if (!fc_menu_contains(menu, (int)mouse.x, (int)mouse.y, 0)) {
-        runec_ui_close_context(ui);
+        fc_ui_close_context(ui);
         return 1; /* Dismissal must not click through into the scene/UI. */
     }
 
@@ -2830,28 +2830,28 @@ static int handle_context_click(RuneCUiState *ui, Vector2 mouse) {
         if (fc_menu_action_at(menu, ui->context_action_count, (int)mouse.x, (int)mouse.y) == i) {
             const char *action = ui->context_actions[i];
             if (strcmp(action, "Cancel") == 0) {
-                runec_ui_close_context(ui);
+                fc_ui_close_context(ui);
                 return 1;
             }
             /* Do not act on a different item if the original slot changed
              * while its menu was open (consumption, ammo depletion, etc.). */
-            if ((ui->context_source_kind == RUNEC_UI_CONTEXT_INVENTORY &&
+            if ((ui->context_source_kind == FC_UI_CONTEXT_INVENTORY &&
                  ui->inventory[ui->context_source_slot].item_id != ui->context_source_item_id) ||
-                (ui->context_source_kind == RUNEC_UI_CONTEXT_EQUIPMENT &&
+                (ui->context_source_kind == FC_UI_CONTEXT_EQUIPMENT &&
                  ui->equipment[ui->context_source_slot].item_id != ui->context_source_item_id)) {
-                runec_ui_close_context(ui);
+                fc_ui_close_context(ui);
                 return 1;
             }
             int slot = ui->context_source_slot;
-            if (ui->context_source_kind == RUNEC_UI_CONTEXT_WORLD) {
-                set_intent(ui, RUNEC_UI_INTENT_WORLD_ACTION, i, 0, mouse);
-            } else if (ui->context_source_kind == RUNEC_UI_CONTEXT_INVENTORY) {
-                set_intent(ui, RUNEC_UI_INTENT_INVENTORY_ACTION, slot, i, mouse);
-            } else if (ui->context_source_kind == RUNEC_UI_CONTEXT_EQUIPMENT) {
-                set_intent(ui, RUNEC_UI_INTENT_EQUIPMENT_ACTION, slot, i, mouse);
-            } else if (ui->context_source_kind == RUNEC_UI_CONTEXT_PRAYER) {
+            if (ui->context_source_kind == FC_UI_CONTEXT_WORLD) {
+                set_intent(ui, FC_UI_INTENT_WORLD_ACTION, i, 0, mouse);
+            } else if (ui->context_source_kind == FC_UI_CONTEXT_INVENTORY) {
+                set_intent(ui, FC_UI_INTENT_INVENTORY_ACTION, slot, i, mouse);
+            } else if (ui->context_source_kind == FC_UI_CONTEXT_EQUIPMENT) {
+                set_intent(ui, FC_UI_INTENT_EQUIPMENT_ACTION, slot, i, mouse);
+            } else if (ui->context_source_kind == FC_UI_CONTEXT_PRAYER) {
                 /* Prayer menus offer Activate or Deactivate, then Cancel. */
-                set_intent(ui, RUNEC_UI_INTENT_PRAYER_SLOT, slot,
+                set_intent(ui, FC_UI_INTENT_PRAYER_SLOT, slot,
                            strcmp(action, "Deactivate") == 0 ? -1 : 1, mouse);
                 copy_text(ui->last_intent.text, sizeof(ui->last_intent.text),
                           ui->context_title);
@@ -2859,7 +2859,7 @@ static int handle_context_click(RuneCUiState *ui, Vector2 mouse) {
             if (!ui->last_intent.text[0])
                 copy_text(ui->last_intent.text, sizeof(ui->last_intent.text),
                           action);
-            runec_ui_close_context(ui);
+            fc_ui_close_context(ui);
             return 1;
         }
     }
@@ -2867,30 +2867,30 @@ static int handle_context_click(RuneCUiState *ui, Vector2 mouse) {
     return 1;
 }
 
-static Rectangle side_ref_rect(const RuneCUiLayout *layout, Rectangle ref) {
+static Rectangle side_ref_rect(const FcUiLayout *layout, Rectangle ref) {
     return (Rectangle){layout->side_content.x + ref.x, layout->side_content.y + ref.y,
                        ref.width, ref.height};
 }
 
 /* A grid of equal cells in the side panel content area; first is the first
  * cell relative to that area. */
-typedef struct RuneCUiGrid {
+typedef struct FcUiGrid {
     int count;
     int cols;
     Rectangle first;
     float step_x;
     float step_y;
-} RuneCUiGrid;
+} FcUiGrid;
 
-static const RuneCUiGrid g_inventory_grid = {
+static const FcUiGrid g_inventory_grid = {
     FC_INVENTORY_SLOTS, 4,
-    {RUNEC_OSRS_INVENTORY_SLOT_X, RUNEC_OSRS_INVENTORY_SLOT_Y,
-     RUNEC_OSRS_INVENTORY_SLOT_W, RUNEC_OSRS_INVENTORY_SLOT_H},
-    RUNEC_OSRS_INVENTORY_SLOT_STEP_X, RUNEC_OSRS_INVENTORY_SLOT_STEP_Y,
+    {FC_OSRS_INVENTORY_SLOT_X, FC_OSRS_INVENTORY_SLOT_Y,
+     FC_OSRS_INVENTORY_SLOT_W, FC_OSRS_INVENTORY_SLOT_H},
+    FC_OSRS_INVENTORY_SLOT_STEP_X, FC_OSRS_INVENTORY_SLOT_STEP_Y,
 };
 
-static Rectangle grid_cell_rect(const RuneCUiLayout *layout,
-                                const RuneCUiGrid *grid, int index) {
+static Rectangle grid_cell_rect(const FcUiLayout *layout,
+                                const FcUiGrid *grid, int index) {
     int col = index % grid->cols;
     int row = index / grid->cols;
     return (Rectangle){
@@ -2901,7 +2901,7 @@ static Rectangle grid_cell_rect(const RuneCUiLayout *layout,
     };
 }
 
-static int grid_index_at(const RuneCUiLayout *layout, const RuneCUiGrid *grid,
+static int grid_index_at(const FcUiLayout *layout, const FcUiGrid *grid,
                          Vector2 mouse) {
     for (int i = 0; i < grid->count; i++) {
         if (CheckCollisionPointRec(mouse, grid_cell_rect(layout, grid, i)))
@@ -2910,7 +2910,7 @@ static int grid_index_at(const RuneCUiLayout *layout, const RuneCUiGrid *grid,
     return -1;
 }
 
-static Rectangle equip_slot_rect(const RuneCUiLayout *layout, int slot) {
+static Rectangle equip_slot_rect(const FcUiLayout *layout, int slot) {
     if (slot < 0 || slot >= FC_EQUIPMENT_SLOTS)
         return (Rectangle){0, 0, 0, 0};
     Rectangle off = g_equipment_offsets[slot];
@@ -2919,7 +2919,7 @@ static Rectangle equip_slot_rect(const RuneCUiLayout *layout, int slot) {
     return side_ref_rect(layout, off);
 }
 
-static int equipment_slot_at(const RuneCUiLayout *layout, Vector2 mouse) {
+static int equipment_slot_at(const FcUiLayout *layout, Vector2 mouse) {
     for (int i = 0; i < FC_EQUIPMENT_SLOTS; i++) {
         Rectangle r = equip_slot_rect(layout, i);
         if (r.width > 0 && CheckCollisionPointRec(mouse, r))
@@ -2928,8 +2928,8 @@ static int equipment_slot_at(const RuneCUiLayout *layout, Vector2 mouse) {
     return -1;
 }
 
-static void update_tab_press_timers(RuneCUiState *ui, float dt) {
-    for (int i = 0; i < RUNEC_UI_TAB_COUNT; i++) {
+static void update_tab_press_timers(FcUiState *ui, float dt) {
+    for (int i = 0; i < FC_UI_TAB_COUNT; i++) {
         if (ui->tab_press_timer[i] <= 0.0f)
             continue;
         ui->tab_press_timer[i] -= dt;
@@ -2938,52 +2938,52 @@ static void update_tab_press_timers(RuneCUiState *ui, float dt) {
     }
 }
 
-static int handle_drag_release(RuneCUiState *ui,
-                               const RuneCUiLayout *layout,
+static int handle_drag_release(FcUiState *ui,
+                               const FcUiLayout *layout,
                                Vector2 mouse) {
     if (!ui->drag.active || !IsMouseButtonReleased(MOUSE_BUTTON_LEFT))
         return 0;
 
-    RuneCUiDragState drag = ui->drag;
+    FcUiDragState drag = ui->drag;
     ui->drag.active = 0;
-    ui->drag.source_kind = RUNEC_UI_CONTEXT_NONE;
+    ui->drag.source_kind = FC_UI_CONTEXT_NONE;
     ui->drag.source_slot = -1;
 
-    if (drag.source_kind == RUNEC_UI_CONTEXT_INVENTORY) {
+    if (drag.source_kind == FC_UI_CONTEXT_INVENTORY) {
         int target = grid_index_at(layout, &g_inventory_grid, mouse);
         float dx = mouse.x - drag.start.x;
         float dy = mouse.y - drag.start.y;
         int moved = fabsf(dx) > 3.0f || fabsf(dy) > 3.0f;
         if (target >= 0 && moved)
-            set_intent(ui, RUNEC_UI_INTENT_INVENTORY_DRAG, drag.source_slot, target, mouse);
+            set_intent(ui, FC_UI_INTENT_INVENTORY_DRAG, drag.source_slot, target, mouse);
         else
-            set_intent(ui, RUNEC_UI_INTENT_INVENTORY_SLOT, drag.source_slot, 0, mouse);
+            set_intent(ui, FC_UI_INTENT_INVENTORY_SLOT, drag.source_slot, 0, mouse);
         return 1;
     }
 
-    if (drag.source_kind == RUNEC_UI_CONTEXT_EQUIPMENT) {
-        set_intent(ui, RUNEC_UI_INTENT_EQUIPMENT_SLOT, drag.source_slot, 0, mouse);
+    if (drag.source_kind == FC_UI_CONTEXT_EQUIPMENT) {
+        set_intent(ui, FC_UI_INTENT_EQUIPMENT_SLOT, drag.source_slot, 0, mouse);
         return 1;
     }
     return 0;
 }
 
-static int handle_tab_click(RuneCUiState *ui,
-                            const RuneCUiLayout *layout,
+static int handle_tab_click(FcUiState *ui,
+                            const FcUiLayout *layout,
                             Vector2 mouse) {
-    for (int i = 0; i < RUNEC_UI_TAB_COUNT; i++) {
+    for (int i = 0; i < FC_UI_TAB_COUNT; i++) {
         if (!CheckCollisionPointRec(mouse, layout->tab[i]))
             continue;
-        ui->active_tab = (RuneCUiTab)i;
+        ui->active_tab = (FcUiTab)i;
         ui->tab_press_timer[i] = OSRS_TAB_PRESS_SECONDS;
-        set_intent(ui, RUNEC_UI_INTENT_TAB, i, 0, mouse);
+        set_intent(ui, FC_UI_INTENT_TAB, i, 0, mouse);
         return 1;
     }
     return 0;
 }
 
-static int handle_orb_or_minimap_click(RuneCUiState *ui,
-                                       const RuneCUiLayout *layout,
+static int handle_orb_or_minimap_click(FcUiState *ui,
+                                       const FcUiLayout *layout,
                                        Vector2 mouse) {
     Rectangle run_button = {
         layout->run_orb.x + 3,
@@ -2992,11 +2992,11 @@ static int handle_orb_or_minimap_click(RuneCUiState *ui,
         26,
     };
     if (CheckCollisionPointRec(mouse, run_button)) {
-        set_intent(ui, RUNEC_UI_INTENT_RUN_TOGGLE, 0, 0, mouse);
+        set_intent(ui, FC_UI_INTENT_RUN_TOGGLE, 0, 0, mouse);
         return 1;
     }
     if (CheckCollisionPointRec(mouse, layout->prayer_orb)) {
-        set_intent(ui, RUNEC_UI_INTENT_QUICK_PRAYER_TOGGLE, 1, 0, mouse);
+        set_intent(ui, FC_UI_INTENT_QUICK_PRAYER_TOGGLE, 1, 0, mouse);
         copy_text(ui->last_intent.text, sizeof(ui->last_intent.text),
                   "Quick-prayer");
         return 1;
@@ -3011,53 +3011,53 @@ static int handle_orb_or_minimap_click(RuneCUiState *ui,
     if (!CheckCollisionPointRec(mouse, layout->minimap) ||
         dx * dx + dy * dy > FC_MINIMAP_DISPLAY_RADIUS * FC_MINIMAP_DISPLAY_RADIUS)
         return 0;
-    set_intent(ui, RUNEC_UI_INTENT_MINIMAP_CLICK,
+    set_intent(ui, FC_UI_INTENT_MINIMAP_CLICK,
                (int)(mouse.x - layout->minimap.x),
                (int)(mouse.y - layout->minimap.y), mouse);
     return 1;
 }
 
-static int handle_inventory_click(RuneCUiState *ui,
-                                  const RuneCUiLayout *layout,
+static int handle_inventory_click(FcUiState *ui,
+                                  const FcUiLayout *layout,
                                   Vector2 mouse) {
     int slot = grid_index_at(layout, &g_inventory_grid, mouse);
     if (slot < 0)
         return 0;
     ui->drag.active = 1;
-    ui->drag.source_kind = RUNEC_UI_CONTEXT_INVENTORY;
+    ui->drag.source_kind = FC_UI_CONTEXT_INVENTORY;
     ui->drag.source_slot = slot;
     ui->drag.start = mouse;
     return 1;
 }
 
-static int handle_equipment_click(RuneCUiState *ui,
-                                  const RuneCUiLayout *layout,
+static int handle_equipment_click(FcUiState *ui,
+                                  const FcUiLayout *layout,
                                   Vector2 mouse) {
     int slot = equipment_slot_at(layout, mouse);
     if (slot < 0)
         return 0;
     ui->drag.active = 1;
-    ui->drag.source_kind = RUNEC_UI_CONTEXT_EQUIPMENT;
+    ui->drag.source_kind = FC_UI_CONTEXT_EQUIPMENT;
     ui->drag.source_slot = slot;
     ui->drag.start = mouse;
     return 1;
 }
 
-static int handle_active_tab_click(RuneCUiState *ui,
-                                   const RuneCUiLayout *layout,
+static int handle_active_tab_click(FcUiState *ui,
+                                   const FcUiLayout *layout,
                                    Vector2 mouse) {
     switch (ui->active_tab) {
-    case RUNEC_UI_TAB_INVENTORY:
+    case FC_UI_TAB_INVENTORY:
         return handle_inventory_click(ui, layout, mouse);
-    case RUNEC_UI_TAB_EQUIPMENT:
+    case FC_UI_TAB_EQUIPMENT:
         return handle_equipment_click(ui, layout, mouse);
     default:
         return 0;
     }
 }
 
-static int handle_primary_click(RuneCUiState *ui,
-                                const RuneCUiLayout *layout,
+static int handle_primary_click(FcUiState *ui,
+                                const FcUiLayout *layout,
                                 Vector2 mouse) {
     if (!IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
         return 0;
@@ -3068,14 +3068,14 @@ static int handle_primary_click(RuneCUiState *ui,
     return 0;
 }
 
-static int handle_context_menu_open(RuneCUiState *ui,
-                                    const RuneCUiLayout *layout,
+static int handle_context_menu_open(FcUiState *ui,
+                                    const FcUiLayout *layout,
                                     Vector2 mouse) {
     if (!IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) ||
         !mouse_over_ui(layout, mouse))
         return 0;
 
-    if (ui->active_tab == RUNEC_UI_TAB_INVENTORY) {
+    if (ui->active_tab == FC_UI_TAB_INVENTORY) {
         int slot = grid_index_at(layout, &g_inventory_grid, mouse);
         if (slot >= 0) {
             const char *actions[] = {ui->inventory[slot].action ?
@@ -3085,7 +3085,7 @@ static int handle_context_menu_open(RuneCUiState *ui,
                 ? ui->inventory[slot].label : "Empty inventory slot";
             if (ui->inventory[slot].enabled) {
                 set_context(ui, mouse, title, actions, 3);
-                set_context_source(ui, RUNEC_UI_CONTEXT_INVENTORY, slot,
+                set_context_source(ui, FC_UI_CONTEXT_INVENTORY, slot,
                                    ui->inventory[slot].item_id);
             } else {
                 set_context(ui, mouse, title, empty_actions, 1);
@@ -3093,14 +3093,14 @@ static int handle_context_menu_open(RuneCUiState *ui,
             return 1;
         }
     }
-    if (ui->active_tab == RUNEC_UI_TAB_EQUIPMENT) {
+    if (ui->active_tab == FC_UI_TAB_EQUIPMENT) {
         int slot = equipment_slot_at(layout, mouse);
         if (slot >= 0) {
             static const char *actions[] = {"Remove", "Examine", "Cancel"};
             static const char *empty_actions[] = {"Cancel"};
             if (ui->equipment[slot].enabled) {
                 set_context(ui, mouse, ui->equipment[slot].label, actions, 3);
-                set_context_source(ui, RUNEC_UI_CONTEXT_EQUIPMENT, slot,
+                set_context_source(ui, FC_UI_CONTEXT_EQUIPMENT, slot,
                                    ui->equipment[slot].item_id);
             } else {
                 set_context(ui, mouse, "", empty_actions, 1);
@@ -3110,12 +3110,12 @@ static int handle_context_menu_open(RuneCUiState *ui,
     }
 
     static const char *actions[] = {"Cancel"};
-    set_context(ui, mouse, "RuneC", actions, 1);
+    set_context(ui, mouse, "", actions, 1);
     return 1;
 }
 
-int runec_ui_handle_input(RuneCUiState *ui, int screen_w, int screen_h) {
-    RuneCUiLayout layout;
+int fc_ui_handle_input(FcUiState *ui, int screen_w, int screen_h) {
+    FcUiLayout layout;
     ui_layout(screen_w, screen_h, &layout);
     Vector2 mouse = GetMousePosition();
     clear_intent(ui);
@@ -3123,12 +3123,12 @@ int runec_ui_handle_input(RuneCUiState *ui, int screen_w, int screen_h) {
 
     if (ui->context_open) {
         if (IsKeyPressed(KEY_ESCAPE)) {
-            runec_ui_close_context(ui);
+            fc_ui_close_context(ui);
         } else if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             handle_context_click(ui, mouse);
         } else if (!fc_menu_contains(context_layout(ui), (int)mouse.x, (int)mouse.y,
                                       FC_MENU_DISMISS_MARGIN)) {
-            runec_ui_close_context(ui);
+            fc_ui_close_context(ui);
         }
         return 1;
     }
@@ -3143,24 +3143,24 @@ int runec_ui_handle_input(RuneCUiState *ui, int screen_w, int screen_h) {
     return mouse_over_ui(&layout, mouse);
 }
 
-static void draw_text_shadow(const RuneCUiState *ui, const char *text,
+static void draw_text_shadow(const FcUiState *ui, const char *text,
                              float x, float y, float size, Color color) {
-    runec_ui_draw_text_shadow(&ui->assets, text, x, y, size, color);
+    fc_ui_draw_text_shadow(&ui->assets, text, x, y, size, color);
 }
 
-static void draw_centered_text(const RuneCUiState *ui, const char *text,
+static void draw_centered_text(const FcUiState *ui, const char *text,
                                Rectangle rect, float size, Color color) {
     if (size < 12.0f)
         size = 12.0f;
-    Font font = runec_ui_font_for_size(&ui->assets, size);
+    Font font = fc_ui_font_for_size(&ui->assets, size);
     Vector2 m = MeasureTextEx(font, text, size, 0);
     draw_text_shadow(ui, text, rect.x + (rect.width - m.x) * 0.5f,
                      rect.y + (rect.height - m.y) * 0.5f, size, color);
 }
 
-static void draw_asset_centered(const RuneCUiState *ui, const char *name,
+static void draw_asset_centered(const FcUiState *ui, const char *name,
                                 Rectangle rect, float max_w, float max_h, Color tint) {
-    const Texture2D *tex = runec_ui_asset(&ui->assets, name);
+    const Texture2D *tex = fc_ui_asset(&ui->assets, name);
     if (!tex)
         return;
     float scale = fmin2(max_w / (float)tex->width, max_h / (float)tex->height);
@@ -3172,12 +3172,12 @@ static void draw_asset_centered(const RuneCUiState *ui, const char *name,
         tex->width * scale,
         tex->height * scale,
     };
-    runec_ui_draw_asset(&ui->assets, name, dst, tint);
+    fc_ui_draw_asset(&ui->assets, name, dst, tint);
 }
 
-static void draw_asset_tiled(const RuneCUiState *ui, const char *name,
+static void draw_asset_tiled(const FcUiState *ui, const char *name,
                              Rectangle dst, Color tint) {
-    const Texture2D *tex = runec_ui_asset(&ui->assets, name);
+    const Texture2D *tex = fc_ui_asset(&ui->assets, name);
     if (!tex)
         return;
     for (float y = dst.y; y < dst.y + dst.height; y += (float)tex->height) {
@@ -3190,26 +3190,26 @@ static void draw_asset_tiled(const RuneCUiState *ui, const char *name,
     }
 }
 
-static void draw_side_chrome(const RuneCUiState *ui, const RuneCUiLayout *layout) {
+static void draw_side_chrome(const FcUiState *ui, const FcUiLayout *layout) {
     Rectangle backing = {layout->side.x + 20, layout->side.y + 27, 200, 281};
     draw_asset_tiled(ui, "tradebacking_dark", backing, WHITE);
 
-    runec_ui_draw_asset(&ui->assets, "osrs_stretch_side_topbottom_0",
-                        (Rectangle){layout->side.x, layout->side.y + RUNEC_OSRS_SIDE_TOP_Y,
-                                    241, 37}, WHITE);
-    runec_ui_draw_asset(&ui->assets, "osrs_stretch_side_topbottom_1",
-                        (Rectangle){layout->side.x, layout->side.y + RUNEC_OSRS_SIDE_BOTTOM_Y,
-                                    241, 37}, WHITE);
-    runec_ui_draw_asset(&ui->assets, "osrs_stretch_side_columns_0",
-                        (Rectangle){layout->side.x + 2, layout->side.y + 37, 26, 261}, WHITE);
-    runec_ui_draw_asset(&ui->assets, "osrs_stretch_side_columns_1",
-                        (Rectangle){layout->side.x + 212, layout->side.y + 37, 26, 261}, WHITE);
+    fc_ui_draw_asset(&ui->assets, "osrs_stretch_side_topbottom_0",
+                     (Rectangle){layout->side.x, layout->side.y + FC_OSRS_SIDE_TOP_Y,
+                                 241, 37}, WHITE);
+    fc_ui_draw_asset(&ui->assets, "osrs_stretch_side_topbottom_1",
+                     (Rectangle){layout->side.x, layout->side.y + FC_OSRS_SIDE_BOTTOM_Y,
+                                 241, 37}, WHITE);
+    fc_ui_draw_asset(&ui->assets, "osrs_stretch_side_columns_0",
+                     (Rectangle){layout->side.x + 2, layout->side.y + 37, 26, 261}, WHITE);
+    fc_ui_draw_asset(&ui->assets, "osrs_stretch_side_columns_1",
+                     (Rectangle){layout->side.x + 212, layout->side.y + 37, 26, 261}, WHITE);
 
-    for (int i = 0; i < (int)(sizeof(RUNEC_OSRS_SIDE_STONES) / sizeof(RUNEC_OSRS_SIDE_STONES[0])); i++) {
-        const RuneCUiStoneRef *ref = &RUNEC_OSRS_SIDE_STONES[i];
+    for (int i = 0; i < (int)(sizeof(FC_OSRS_SIDE_STONES) / sizeof(FC_OSRS_SIDE_STONES[0])); i++) {
+        const FcUiStoneRef *ref = &FC_OSRS_SIDE_STONES[i];
         if (ref->logical_tab != ui->active_tab)
             continue;
-        float row_y = layout->side.y + (i < 7 ? RUNEC_OSRS_SIDE_TOP_Y : RUNEC_OSRS_SIDE_BOTTOM_Y);
+        float row_y = layout->side.y + (i < 7 ? FC_OSRS_SIDE_TOP_Y : FC_OSRS_SIDE_BOTTOM_Y);
         float pressed = ui->tab_press_timer[ui->active_tab] > 0.0f ? 1.0f : 0.0f;
         Rectangle stone = {layout->side.x + ref->rect.x,
                            row_y + ref->rect.y + pressed,
@@ -3219,24 +3219,24 @@ static void draw_side_chrome(const RuneCUiState *ui, const RuneCUiLayout *layout
         break;
     }
 
-    for (int i = 0; i < (int)(sizeof(RUNEC_OSRS_SIDE_STONES) / sizeof(RUNEC_OSRS_SIDE_STONES[0])); i++) {
-        const RuneCUiStoneRef *ref = &RUNEC_OSRS_SIDE_STONES[i];
-        float row_y = layout->side.y + (i < 7 ? RUNEC_OSRS_SIDE_TOP_Y : RUNEC_OSRS_SIDE_BOTTOM_Y);
+    for (int i = 0; i < (int)(sizeof(FC_OSRS_SIDE_STONES) / sizeof(FC_OSRS_SIDE_STONES[0])); i++) {
+        const FcUiStoneRef *ref = &FC_OSRS_SIDE_STONES[i];
+        float row_y = layout->side.y + (i < 7 ? FC_OSRS_SIDE_TOP_Y : FC_OSRS_SIDE_BOTTOM_Y);
         float pressed = ref->logical_tab == ui->active_tab
             && ui->tab_press_timer[ui->active_tab] > 0.0f ? 1.0f : 0.0f;
         Rectangle icon = {layout->side.x + ref->icon_rect.x, row_y + ref->icon_rect.y,
                           ref->icon_rect.width, ref->icon_rect.height};
         icon.y += pressed;
-        runec_ui_draw_asset(&ui->assets, ref->icon_asset, icon, WHITE);
+        fc_ui_draw_asset(&ui->assets, ref->icon_asset, icon, WHITE);
     }
 }
 
-static void draw_orb(const RuneCUiState *ui, Rectangle rect, const char *filler,
+static void draw_orb(const FcUiState *ui, Rectangle rect, const char *filler,
                      const char *icon, int value, int max_value) {
-    runec_ui_draw_asset(&ui->assets, "orb_frame_0", rect, WHITE);
+    fc_ui_draw_asset(&ui->assets, "orb_frame_0", rect, WHITE);
     Rectangle fill = {rect.x + 27, rect.y + 4, 26, 26};
-    runec_ui_draw_asset(&ui->assets, "orb_filler_0", fill, WHITE);
-    runec_ui_draw_asset(&ui->assets, filler, fill, WHITE);
+    fc_ui_draw_asset(&ui->assets, "orb_filler_0", fill, WHITE);
+    fc_ui_draw_asset(&ui->assets, filler, fill, WHITE);
     draw_asset_centered(ui, icon, fill, 22, 22, WHITE);
 
     char text[16];
@@ -3265,23 +3265,23 @@ static Color orb_value_color(int value, int max_value) {
     return (Color){255, (unsigned char)green, 0, 255};
 }
 
-static void draw_run_orb(const RuneCUiState *ui, Rectangle rect) {
+static void draw_run_orb(const FcUiState *ui, Rectangle rect) {
     Rectangle button = {rect.x + 3, rect.y + 5, 50, 26};
     const char *frame = CheckCollisionPointRec(GetMousePosition(), button)
         ? "orb_frame_1" : "orb_frame_0";
-    runec_ui_draw_asset(&ui->assets, frame, rect, WHITE);
+    fc_ui_draw_asset(&ui->assets, frame, rect, WHITE);
 
     Rectangle fill = {rect.x + 27, rect.y + 4, 26, 26};
     const char *filler = ui->run_enabled ? "orb_filler_6" : "orb_filler_5";
     const char *icon = ui->run_enabled ? "orb_icon_3" : "orb_icon_2";
-    runec_ui_draw_asset(&ui->assets, filler, fill,
-                        (Color){255, 255, 255, 230});
+    fc_ui_draw_asset(&ui->assets, filler, fill,
+                     (Color){255, 255, 255, 230});
 
     int energy = ui->run_energy;
     if (energy < 0) energy = 0;
     if (energy > 100) energy = 100;
     int empty_height = 26 * (100 - energy) / 100;
-    const Texture2D *empty = runec_ui_asset(&ui->assets, "orb_filler_0");
+    const Texture2D *empty = fc_ui_asset(&ui->assets, "orb_filler_0");
     if (empty_height > 0) {
         float source_height = (float)empty->height * (float)empty_height /
                               fill.height;
@@ -3300,7 +3300,7 @@ static void draw_run_orb(const RuneCUiState *ui, Rectangle rect) {
                        12, orb_value_color(energy, 100));
 }
 
-static void draw_minimap(const RuneCUiState *ui, const RuneCUiLayout *layout) {
+static void draw_minimap(const FcUiState *ui, const FcUiLayout *layout) {
     Vector2 center = {layout->minimap.x + layout->minimap.width * 0.5f,
                       layout->minimap.y + layout->minimap.height * 0.5f};
     DrawTexturePro(ui->minimap_texture,
@@ -3308,7 +3308,7 @@ static void draw_minimap(const RuneCUiState *ui, const RuneCUiLayout *layout) {
                    layout->minimap, (Vector2){0, 0}, 0, WHITE);
 
     for (int i = 0; i < ui->minimap_dot_count; i++) {
-        const RuneCUiMinimapDot *dot = &ui->minimap_dots[i];
+        const FcUiMinimapDot *dot = &ui->minimap_dots[i];
         float px = center.x +
             dot->dx * FC_MINIMAP_DISPLAY_PIXELS_PER_TILE;
         float py = center.y -
@@ -3319,17 +3319,17 @@ static void draw_minimap(const RuneCUiState *ui, const RuneCUiLayout *layout) {
             continue;
         Color c = OSRS_YELLOW;
         float radius = 2.0f;
-        if (dot->kind == RUNEC_UI_MINIMAP_DOT_PLAYER) {
+        if (dot->kind == FC_UI_MINIMAP_DOT_PLAYER) {
             c = WHITE;
             radius = 3.0f;
-        } else if (dot->kind == RUNEC_UI_MINIMAP_DOT_DESTINATION) {
+        } else if (dot->kind == FC_UI_MINIMAP_DOT_DESTINATION) {
             c = OSRS_RED;
             radius = 3.0f;
         }
         DrawCircle((int)px, (int)py, radius, c);
     }
 
-    const Texture2D *compass = runec_ui_asset(&ui->assets, "compass");
+    const Texture2D *compass = fc_ui_asset(&ui->assets, "compass");
     Rectangle source = {0, 0, (float)compass->width, (float)compass->height};
     Rectangle destination = {
         layout->compass.x + layout->compass.width * 0.5f,
@@ -3343,10 +3343,10 @@ static void draw_minimap(const RuneCUiState *ui, const RuneCUiLayout *layout) {
                    ui->minimap_rotation * (180.0f / 3.14159265358979323846f),
                    WHITE);
 
-    Rectangle cover = {layout->map.x + RUNEC_OSRS_MAP_SURROUND_X,
-                       layout->map.y + RUNEC_OSRS_MAP_SURROUND_Y,
-                       RUNEC_OSRS_MAP_SURROUND_W, RUNEC_OSRS_MAP_SURROUND_H};
-    runec_ui_draw_asset(&ui->assets, "osrs_stretch_mapsurround", cover, WHITE);
+    Rectangle cover = {layout->map.x + FC_OSRS_MAP_SURROUND_X,
+                       layout->map.y + FC_OSRS_MAP_SURROUND_Y,
+                       FC_OSRS_MAP_SURROUND_W, FC_OSRS_MAP_SURROUND_H};
+    fc_ui_draw_asset(&ui->assets, "osrs_stretch_mapsurround", cover, WHITE);
 
     draw_orb(ui, layout->hp_orb, "orb_filler_1", "orb_icon_0",
              ui->hitpoints, ui->hitpoints_max);
@@ -3354,16 +3354,16 @@ static void draw_minimap(const RuneCUiState *ui, const RuneCUiLayout *layout) {
              ui->prayer_points, ui->prayer_points_max);
     draw_run_orb(ui, layout->run_orb);
 
-    runec_ui_draw_asset(&ui->assets, "ring_30", layout->worldmap_button, WHITE);
+    fc_ui_draw_asset(&ui->assets, "ring_30", layout->worldmap_button, WHITE);
     draw_asset_centered(ui, "worldmap_icon_0", layout->worldmap_button, 22, 22, WHITE);
 }
 
-static void draw_chat_panel_chrome(const RuneCUiState *ui,
-                                   const RuneCUiLayout *layout) {
-    runec_ui_draw_asset(&ui->assets, "chatbox_bg", layout->chat, WHITE);
+static void draw_chat_panel_chrome(const FcUiState *ui,
+                                   const FcUiLayout *layout) {
+    fc_ui_draw_asset(&ui->assets, "chatbox_bg", layout->chat, WHITE);
     DrawRectangleRec(layout->chat_messages, (Color){0, 0, 0, 104});
-    runec_ui_draw_asset(&ui->assets, "main_stones_bottom",
-                        layout->chat_controls, WHITE);
+    fc_ui_draw_asset(&ui->assets, "main_stones_bottom",
+                     layout->chat_controls, WHITE);
 }
 
 static Color stack_text_color(int quantity) {
@@ -3384,7 +3384,7 @@ static void format_stack_quantity(int quantity, char *dst, size_t cap) {
     }
 }
 
-static const Texture2D *ui_item_icon_texture(const RuneCUiState *ui,
+static const Texture2D *ui_item_icon_texture(const FcUiState *ui,
                                              uint32_t item_id) {
     for (int i = 0; i < ui->item_icon_count; i++) {
         if (ui->item_icons[i].item_id == item_id)
@@ -3393,7 +3393,7 @@ static const Texture2D *ui_item_icon_texture(const RuneCUiState *ui,
     return NULL;
 }
 
-static void draw_inventory_item(const RuneCUiState *ui, const RuneCUiSlot *slot, Rectangle r) {
+static void draw_inventory_item(const FcUiState *ui, const FcUiSlot *slot, Rectangle r) {
     const Texture2D *icon = ui_item_icon_texture(ui, slot->item_id);
     if (!icon)
         return;
@@ -3412,7 +3412,7 @@ static void draw_inventory_item(const RuneCUiState *ui, const RuneCUiSlot *slot,
 }
 
 /* An item icon with its stack size in the top-left corner. */
-static void draw_slot_item(const RuneCUiState *ui, const RuneCUiSlot *slot, Rectangle r) {
+static void draw_slot_item(const FcUiState *ui, const FcUiSlot *slot, Rectangle r) {
     draw_inventory_item(ui, slot, r);
     if (slot->quantity > 1) {
         char q[16];
@@ -3421,14 +3421,14 @@ static void draw_slot_item(const RuneCUiState *ui, const RuneCUiSlot *slot, Rect
     }
 }
 
-static void draw_inventory(const RuneCUiState *ui, const RuneCUiLayout *layout) {
+static void draw_inventory(const FcUiState *ui, const FcUiLayout *layout) {
     for (int i = 0; i < FC_INVENTORY_SLOTS; i++) {
         if (ui->inventory[i].enabled)
             draw_slot_item(ui, &ui->inventory[i], grid_cell_rect(layout, &g_inventory_grid, i));
     }
 }
 
-static void draw_equipment(const RuneCUiState *ui, const RuneCUiLayout *layout) {
+static void draw_equipment(const FcUiState *ui, const FcUiLayout *layout) {
     draw_asset_tiled(ui, "miscgraphics_2",
                      side_ref_rect(layout, (Rectangle){77, 39, 36, 124}), WHITE);
     draw_asset_tiled(ui, "miscgraphics_2",
@@ -3451,31 +3451,31 @@ static void draw_equipment(const RuneCUiState *ui, const RuneCUiLayout *layout) 
     }
 }
 
-static void draw_combat_box(const RuneCUiState *ui, Rectangle r, int selected) {
+static void draw_combat_box(const FcUiState *ui, Rectangle r, int selected) {
     const char *asset = selected ? "combatboxes_1" : "combatboxes_0";
-    runec_ui_draw_asset(&ui->assets, asset, r, WHITE);
+    fc_ui_draw_asset(&ui->assets, asset, r, WHITE);
     if (selected)
         DrawRectangleRec(r, (Color){120, 27, 20, 54});
 }
 
-static void draw_combat(const RuneCUiState *ui, const RuneCUiLayout *layout) {
-    Rectangle header = side_ref_rect(layout, RUNEC_OSRS_COMBAT_HEADER);
+static void draw_combat(const FcUiState *ui, const FcUiLayout *layout) {
+    Rectangle header = side_ref_rect(layout, FC_OSRS_COMBAT_HEADER);
     const char *weapon_name = ui->combat_weapon_name[0]
         ? ui->combat_weapon_name : "Unarmed";
-    draw_centered_text(ui, weapon_name, side_ref_rect(layout, RUNEC_OSRS_COMBAT_TITLE),
+    draw_centered_text(ui, weapon_name, side_ref_rect(layout, FC_OSRS_COMBAT_TITLE),
                        13, OSRS_ORANGE);
     char level[32];
     snprintf(level, sizeof(level), "Combat Lvl: %d", ui->combat_level);
-    draw_centered_text(ui, level, side_ref_rect(layout, RUNEC_OSRS_COMBAT_LEVEL),
+    draw_centered_text(ui, level, side_ref_rect(layout, FC_OSRS_COMBAT_LEVEL),
                        12, OSRS_ORANGE);
     DrawLineEx((Vector2){header.x + 10, header.y + 42},
                (Vector2){header.x + header.width - 10, header.y + 42}, 1,
                (Color){75, 64, 45, 180});
 
-    const RuneCUiCombatProfile *profile = ui->combat_profile;
-    for (int i = 0; i < RUNEC_UI_COMBAT_STYLE_COUNT; i++) {
-        const RuneCUiCombatStyleDef *option = &profile->styles[i];
-        const RuneCUiCombatStyleRef *style = &RUNEC_OSRS_COMBAT_STYLES[i];
+    const FcUiCombatProfile *profile = ui->combat_profile;
+    for (int i = 0; i < FC_UI_COMBAT_STYLE_COUNT; i++) {
+        const FcUiCombatStyleDef *option = &profile->styles[i];
+        const FcUiCombatStyleRef *style = &FC_OSRS_COMBAT_STYLES[i];
         int active = i == profile->active_style;
         Rectangle button = side_ref_rect(layout, style->rect);
         draw_combat_box(ui, button, active);
@@ -3488,24 +3488,24 @@ static void draw_combat(const RuneCUiState *ui, const RuneCUiLayout *layout) {
     char category[64];
     snprintf(category, sizeof(category), "Attack style: %s",
              profile->styles[profile->active_style].mode);
-    draw_centered_text(ui, category, side_ref_rect(layout, RUNEC_OSRS_COMBAT_CATEGORY),
+    draw_centered_text(ui, category, side_ref_rect(layout, FC_OSRS_COMBAT_CATEGORY),
                        12, OSRS_ORANGE);
 }
 
-static void draw_side(RuneCUiState *ui, const RuneCUiLayout *layout) {
+static void draw_side(FcUiState *ui, const FcUiLayout *layout) {
     draw_side_chrome(ui, layout);
 
     switch (ui->active_tab) {
-    case RUNEC_UI_TAB_INVENTORY:
+    case FC_UI_TAB_INVENTORY:
         draw_inventory(ui, layout);
         break;
-    case RUNEC_UI_TAB_EQUIPMENT:
+    case FC_UI_TAB_EQUIPMENT:
         draw_equipment(ui, layout);
         break;
-    case RUNEC_UI_TAB_PRAYER:
+    case FC_UI_TAB_PRAYER:
         /* The viewer draws its protection-prayer tab over the content. */
         break;
-    case RUNEC_UI_TAB_COMBAT:
+    case FC_UI_TAB_COMBAT:
         draw_combat(ui, layout);
         break;
     default:
@@ -3513,7 +3513,7 @@ static void draw_side(RuneCUiState *ui, const RuneCUiLayout *layout) {
     }
 }
 
-void runec_ui_draw_context(const RuneCUiState *ui) {
+void fc_ui_draw_context(const FcUiState *ui) {
     if (!ui->context_open)
         return;
     FcMenuLayout menu = context_layout(ui);
@@ -3532,22 +3532,22 @@ void runec_ui_draw_context(const RuneCUiState *ui) {
         float x = menu.x + 4;
         float y = menu.y + FC_MENU_HEADER_HEIGHT + i * FC_MENU_ROW_HEIGHT + 1;
         const char *action = ui->context_actions[i];
-        runec_ui_draw_font_shadow(font, action, (Vector2){x, y}, FC_OSRS_MENU_FONT_SIZE,
-                                  hovered == i ? OSRS_YELLOW : WHITE);
+        fc_ui_draw_font_shadow(font, action, (Vector2){x, y}, FC_OSRS_MENU_FONT_SIZE,
+                               hovered == i ? OSRS_YELLOW : WHITE);
         if (context_has_target(ui, action)) {
             char target[52];
             snprintf(target, sizeof(target), " %s", ui->context_title);
             x += MeasureTextEx(font, action, FC_OSRS_MENU_FONT_SIZE, 0).x;
-            runec_ui_draw_font_shadow(font, target, (Vector2){x, y}, FC_OSRS_MENU_FONT_SIZE,
-                                      ui->context_target_color);
+            fc_ui_draw_font_shadow(font, target, (Vector2){x, y}, FC_OSRS_MENU_FONT_SIZE,
+                                   ui->context_target_color);
             if (ui->context_combat_level > 0) {
                 char suffix[32];
                 context_level_suffix(ui, suffix);
                 x += MeasureTextEx(font, target, FC_OSRS_MENU_FONT_SIZE, 0).x;
                 Color color = GetColor((fc_menu_level_color(ui->combat_level,
                     ui->context_combat_level) << 8) | 0xffu);
-                runec_ui_draw_font_shadow(font, suffix, (Vector2){x, y},
-                                          FC_OSRS_MENU_FONT_SIZE, color);
+                fc_ui_draw_font_shadow(font, suffix, (Vector2){x, y},
+                                       FC_OSRS_MENU_FONT_SIZE, color);
             }
         }
     }
@@ -3555,22 +3555,22 @@ void runec_ui_draw_context(const RuneCUiState *ui) {
 }
 
 /* The inventory item being dragged, under the cursor. */
-static void draw_dragged_item(const RuneCUiState *ui) {
-    if (ui->drag.active && ui->drag.source_kind == RUNEC_UI_CONTEXT_INVENTORY
+static void draw_dragged_item(const FcUiState *ui) {
+    if (ui->drag.active && ui->drag.source_kind == FC_UI_CONTEXT_INVENTORY
             && ui->drag.source_slot >= 0
             && ui->drag.source_slot < FC_INVENTORY_SLOTS
             && ui->inventory[ui->drag.source_slot].enabled) {
         Vector2 mouse = GetMousePosition();
         Rectangle r = {mouse.x - 16, mouse.y - 16,
-                       RUNEC_OSRS_INVENTORY_SLOT_W,
-                       RUNEC_OSRS_INVENTORY_SLOT_H};
+                       FC_OSRS_INVENTORY_SLOT_W,
+                       FC_OSRS_INVENTORY_SLOT_H};
         DrawRectangleRec(r, (Color){0, 0, 0, 80});
         draw_inventory_item(ui, &ui->inventory[ui->drag.source_slot], r);
     }
 }
 
-void runec_ui_draw(RuneCUiState *ui, int screen_w, int screen_h) {
-    RuneCUiLayout layout;
+void fc_ui_draw(FcUiState *ui, int screen_w, int screen_h) {
+    FcUiLayout layout;
     ui_layout(screen_w, screen_h, &layout);
 
     draw_chat_panel_chrome(ui, &layout);
@@ -3579,14 +3579,14 @@ void runec_ui_draw(RuneCUiState *ui, int screen_w, int screen_h) {
     draw_dragged_item(ui);
 }
 
-Rectangle runec_ui_chat_panel_rect(int screen_w, int screen_h) {
-    RuneCUiLayout layout;
+Rectangle fc_ui_chat_panel_rect(int screen_w, int screen_h) {
+    FcUiLayout layout;
     ui_layout(screen_w, screen_h, &layout);
     return layout.chat;
 }
 
-Rectangle runec_ui_side_content_rect(int screen_w, int screen_h) {
-    RuneCUiLayout layout;
+Rectangle fc_ui_side_content_rect(int screen_w, int screen_h) {
+    FcUiLayout layout;
     ui_layout(screen_w, screen_h, &layout);
     return layout.side_content;
 }
@@ -4676,7 +4676,7 @@ typedef struct {
     int entity_count;
     ModelSet *player_models;
     ModelSet *npc_models;
-    const RuneCUiAssets *ui_assets;
+    const FcUiAssets *ui_assets;
     Camera3D camera;
 } FcCombatPresentationDrawContext;
 
@@ -5681,12 +5681,12 @@ void fc_combat_presentation_draw_hitsplats(
         char text[16];
         snprintf(text, sizeof(text), "%d", value);
         const float font_size = 12.0f;
-        Font font = runec_ui_font_for_size(context->ui_assets, font_size);
+        Font font = fc_ui_font_for_size(context->ui_assets, font_size);
         Vector2 measured = MeasureTextEx(font, text, font_size, 0.0f);
         float text_x = floorf((float)center_x - 1.0f - measured.x * 0.5f);
         float text_y = floorf((float)center_y - 6.0f);
-        runec_ui_draw_font_shadow(font, text, (Vector2){text_x, text_y},
-                                  font_size, WHITE);
+        fc_ui_draw_font_shadow(font, text, (Vector2){text_x, text_y},
+                               font_size, WHITE);
     }
 }
 
@@ -6289,7 +6289,7 @@ typedef struct ViewerState {
     FcRenderEvents render_events;
     FcActorAnimation actor_animation;
     FcCombatPresentation* combat_presentation;
-    RuneCUiState ui;
+    FcUiState ui;
     FcRenderEntity entities[FC_MAX_RENDER_ENTITIES];
     int entity_count;
     int paused, step_once;
@@ -6380,14 +6380,14 @@ static void queue_viewer_prayer_button(ViewerState* v,
     v->pending_prayer = protection_prayer_toggle(p, row);
 }
 
-static int load_ui_item_icon(RuneCUiState* ui, uint32_t item_id) {
+static int load_ui_item_icon(FcUiState* ui, uint32_t item_id) {
     if (!ui || item_id == 0) return 0;
     char path[128];
     snprintf(path, sizeof(path), "data/sprites/items/item_%u.png", item_id);
     Texture2D tex = fc_load_texture_asset(path);
     if (tex.id == 0) return 0;
     SetTextureFilter(tex, TEXTURE_FILTER_POINT);
-    runec_ui_set_item_icon(ui, item_id, tex);
+    fc_ui_set_item_icon(ui, item_id, tex);
     return 1;
 }
 
@@ -6400,9 +6400,9 @@ static int load_fc_ui_item_icons(ViewerState* v) {
     return ready;
 }
 
-static void sync_item_slots(RuneCUiSlot *slots, const FcItemStack *items, int count) {
+static void sync_item_slots(FcUiSlot *slots, const FcItemStack *items, int count) {
     for (int i = 0; i < count; i++) {
-        RuneCUiSlot *slot = &slots[i];
+        FcUiSlot *slot = &slots[i];
         memset(slot, 0, sizeof(*slot));
         const FcItemDef *item = fc_item_definition(items[i].item_id);
         if (!item) continue;
@@ -6446,7 +6446,7 @@ static void sync_fc_ui_status(ViewerState* v) {
     v->ui.run_enabled = p->is_running != 0;
     v->ui.combat_level = player_combat_level(p);
     const FcItemDef *weapon = fc_item_definition(p->equipment[FC_EQUIP_SLOT_WEAPON].item_id);
-    runec_ui_set_combat_weapon_name(&v->ui, weapon ? weapon->name : "Unarmed");
+    fc_ui_set_combat_weapon_name(&v->ui, weapon ? weapon->name : "Unarmed");
     v->ui.combat_profile = combat_profile_for_weapon_category(
         weapon ? FC_LOADOUT.combat_style_profile : 0);
 }
@@ -6473,7 +6473,7 @@ static void sync_fc_ui_minimap(ViewerState* v) {
     v->ui.minimap_rotation = v->cam_yaw;
 
     v->ui.minimap_dot_count = 0;
-    runec_ui_add_minimap_dot(&v->ui, 0.0f, 0.0f, RUNEC_UI_MINIMAP_DOT_PLAYER);
+    fc_ui_add_minimap_dot(&v->ui, 0.0f, 0.0f, FC_UI_MINIMAP_DOT_PLAYER);
     /* The destination flag: the clicked tile, else the end of the route. */
     int has_destination = 0, tx = 0, ty = 0;
     if (v->click_feedback.destination_active) {
@@ -6489,8 +6489,8 @@ static void sync_fc_ui_minimap(ViewerState* v) {
         Vector2 offset = fc_minimap_rotate_offset(
             (float)tx + 0.5f - player.x,
             (float)ty + 0.5f - player.y, v->cam_yaw);
-        runec_ui_add_minimap_dot(&v->ui, offset.x, offset.y,
-                                 RUNEC_UI_MINIMAP_DOT_DESTINATION);
+        fc_ui_add_minimap_dot(&v->ui, offset.x, offset.y,
+                              FC_UI_MINIMAP_DOT_DESTINATION);
     }
     for (int i = 0; i < FC_MAX_NPCS; i++) {
         FcNpc* n = &v->state.npcs[i];
@@ -6503,8 +6503,8 @@ static void sync_fc_ui_minimap(ViewerState* v) {
             ? npc_pose.y : (float)n->y + (float)n->size * 0.5f;
         Vector2 offset = fc_minimap_rotate_offset(
             npc_x - player.x, npc_y - player.y, v->cam_yaw);
-        runec_ui_add_minimap_dot(&v->ui, offset.x, offset.y,
-                                 RUNEC_UI_MINIMAP_DOT_NPC);
+        fc_ui_add_minimap_dot(&v->ui, offset.x, offset.y,
+                              FC_UI_MINIMAP_DOT_NPC);
     }
 }
 
@@ -6558,12 +6558,12 @@ static void use_inventory_slot(ViewerState *v, int slot) {
     show_item_result(v, result);
 }
 
-static void handle_runec_ui_intent(ViewerState* v) {
+static void handle_fc_ui_intent(ViewerState* v) {
     if (!v) return;
-    RuneCUiIntent* intent = &v->ui.last_intent;
+    FcUiIntent* intent = &v->ui.last_intent;
     FcPlayer* p = &v->state.player;
     switch (intent->kind) {
-        case RUNEC_UI_INTENT_WORLD_ACTION: {
+        case FC_UI_INTENT_WORLD_ACTION: {
             int slot = v->context_npc_slot;
             const FcNpc *npc = slot >= 0 && slot < FC_MAX_NPCS ? &v->state.npcs[slot] : NULL;
             int same_npc = npc && npc->active && !npc->is_dead &&
@@ -6580,10 +6580,10 @@ static void handle_runec_ui_intent(ViewerState* v) {
             }
             break;
         }
-        case RUNEC_UI_INTENT_INVENTORY_SLOT:
+        case FC_UI_INTENT_INVENTORY_SLOT:
             use_inventory_slot(v, intent->primary);
             break;
-        case RUNEC_UI_INTENT_INVENTORY_ACTION:
+        case FC_UI_INTENT_INVENTORY_ACTION:
             /* The menu offers the slot's left-click verb, then Examine. */
             if (strcmp(intent->text, "Examine") == 0) {
                 snprintf(v->item_message, sizeof(v->item_message), "%s",
@@ -6593,7 +6593,7 @@ static void handle_runec_ui_intent(ViewerState* v) {
                 use_inventory_slot(v, intent->primary);
             }
             break;
-        case RUNEC_UI_INTENT_EQUIPMENT_ACTION:
+        case FC_UI_INTENT_EQUIPMENT_ACTION:
             if (strcmp(intent->text, "Examine") == 0) {
                 snprintf(v->item_message, sizeof(v->item_message), "%s",
                          v->ui.equipment[intent->primary].label);
@@ -6601,15 +6601,15 @@ static void handle_runec_ui_intent(ViewerState* v) {
             }
             if (strcmp(intent->text, "Remove") != 0) break;
             /* fall through */
-        case RUNEC_UI_INTENT_EQUIPMENT_SLOT:
+        case FC_UI_INTENT_EQUIPMENT_SLOT:
             if (!v->policy_replay)
                 show_item_result(v, fc_unequip_item(&v->state, intent->primary));
             break;
-        case RUNEC_UI_INTENT_INVENTORY_DRAG:
+        case FC_UI_INTENT_INVENTORY_DRAG:
             if (!v->policy_replay)
                 show_item_result(v, fc_inventory_swap(&v->state, intent->primary, intent->secondary));
             break;
-        case RUNEC_UI_INTENT_PRAYER_SLOT: {
+        case FC_UI_INTENT_PRAYER_SLOT: {
             int row = intent->primary;
             if (row < 0 || row >= FC_PROTECTION_PRAYER_COUNT ||
                 p->current_prayer <= 0)
@@ -6622,13 +6622,13 @@ static void handle_runec_ui_intent(ViewerState* v) {
             if (action && !v->policy_replay) v->pending_prayer = action;
             break;
         }
-        case RUNEC_UI_INTENT_RUN_TOGGLE:
+        case FC_UI_INTENT_RUN_TOGGLE:
             if (!v->policy_replay) {
                 fc_request_set_running(&v->state, !p->is_running);
                 v->ui.run_enabled = p->is_running != 0;
             }
             break;
-        case RUNEC_UI_INTENT_MINIMAP_CLICK: {
+        case FC_UI_INTENT_MINIMAP_CLICK: {
             Vector2 player = minimap_player_position(v);
             int tile_x = -1;
             int tile_y = -1;
@@ -6802,7 +6802,7 @@ static void restart_at_wave(FcState* state, int wave) {
 }
 
 static void reset_ep(ViewerState* v) {
-    runec_ui_close_context(&v->ui);
+    fc_ui_close_context(&v->ui);
     v->scene_right_tracking = v->scene_right_dragged = 0;
     load_reward_params(v);
     fc_reset(&v->state, (uint32_t)GetRandomValue(1, 999999));
@@ -6815,7 +6815,7 @@ static void reset_ep(ViewerState* v) {
 
 static void viewer_jump_to_wave(ViewerState* v, int wave) {
     if (!v || v->policy_replay) return;
-    runec_ui_close_context(&v->ui);
+    fc_ui_close_context(&v->ui);
     if (wave < 1) wave = 1;
     if (wave > FC_NUM_WAVES) wave = FC_NUM_WAVES;
     restart_at_wave(&v->state, wave);
@@ -6880,7 +6880,7 @@ static void open_scene_context_menu(ViewerState *v) {
     v->context_npc_spawn_index = slot >= 0 ? v->state.npcs[slot].spawn_index : -1;
     v->context_tile_x = tx;
     v->context_tile_y = ty;
-    runec_ui_open_world_context(&v->ui, GetMousePosition(),
+    fc_ui_open_world_context(&v->ui, GetMousePosition(),
         slot >= 0 ? v->state.npcs[slot].npc_type : 0, can_walk);
 }
 
@@ -7288,68 +7288,68 @@ static void draw_scene(ViewerState* v) {
 /* UI drawing                                                                */
 /* ======================================================================== */
 
-#define RUNEC_CONSOLE_TAB_COUNT 6
-#define RUNEC_CONSOLE_NPC_ROWS 8
-#define RUNEC_CONSOLE_NPC_ROW_H 13
-#define RUNEC_CONSOLE_TPS_COLS 4
+#define FC_CONSOLE_TAB_COUNT 6
+#define FC_CONSOLE_NPC_ROWS 8
+#define FC_CONSOLE_NPC_ROW_H 13
+#define FC_CONSOLE_TPS_COLS 4
 
-static Rectangle runec_console_panel_rect(void) {
-    return runec_ui_chat_panel_rect(GetScreenWidth(), GetScreenHeight());
+static Rectangle fc_console_panel_rect(void) {
+    return fc_ui_chat_panel_rect(GetScreenWidth(), GetScreenHeight());
 }
 
-static Rectangle runec_console_body_rect(Rectangle panel) {
+static Rectangle fc_console_body_rect(Rectangle panel) {
     return (Rectangle){panel.x + 7.0f, panel.y + 7.0f,
                        panel.width - 13.0f, panel.height - 39.0f};
 }
 
-static Rectangle runec_console_tab_rect(Rectangle panel, int index) {
-    float width = (panel.width - 6.0f) / (float)RUNEC_CONSOLE_TAB_COUNT;
+static Rectangle fc_console_tab_rect(Rectangle panel, int index) {
+    float width = (panel.width - 6.0f) / (float)FC_CONSOLE_TAB_COUNT;
     return (Rectangle){panel.x + 3.0f + width * (float)index,
                        panel.y + panel.height - 23.0f,
                        width, 21.0f};
 }
 
-static Rectangle runec_console_debug_button_rect(Rectangle body) {
+static Rectangle fc_console_debug_button_rect(Rectangle body) {
     float right_x = body.x + 286.0f;
     float width = body.x + body.width - right_x;
     return (Rectangle){right_x, body.y + 15.0f,
                        (width - 4.0f) * 0.5f, 18.0f};
 }
 
-static Rectangle runec_console_god_button_rect(Rectangle body) {
-    Rectangle debug = runec_console_debug_button_rect(body);
+static Rectangle fc_console_god_button_rect(Rectangle body) {
+    Rectangle debug = fc_console_debug_button_rect(body);
     return (Rectangle){debug.x + debug.width + 4.0f, debug.y,
                        debug.width, debug.height};
 }
 
-static Rectangle runec_console_wave_button_rect(Rectangle body) {
+static Rectangle fc_console_wave_button_rect(Rectangle body) {
     return (Rectangle){body.x + 286.0f, body.y + 37.0f,
                        body.width - 286.0f, 20.0f};
 }
 
-static Rectangle runec_console_tps_button_rect(Rectangle body,
-                                               int index) {
+static Rectangle fc_console_tps_button_rect(Rectangle body,
+                                            int index) {
     float box_x = body.x + 286.0f;
     float box_w = body.width - 286.0f;
     const float gap = 3.0f;
-    float button_w = (box_w - gap * (RUNEC_CONSOLE_TPS_COLS - 1)) /
-                     RUNEC_CONSOLE_TPS_COLS;
-    int row = index / RUNEC_CONSOLE_TPS_COLS;
-    int col = index % RUNEC_CONSOLE_TPS_COLS;
+    float button_w = (box_w - gap * (FC_CONSOLE_TPS_COLS - 1)) /
+                     FC_CONSOLE_TPS_COLS;
+    int row = index / FC_CONSOLE_TPS_COLS;
+    int col = index % FC_CONSOLE_TPS_COLS;
     return (Rectangle){box_x + col * (button_w + gap),
                        body.y + 78.0f + row * 20.0f,
                        button_w, 17.0f};
 }
 
-static Rectangle runec_console_target_row_rect(Rectangle body,
-                                               int row) {
+static Rectangle fc_console_target_row_rect(Rectangle body,
+                                            int row) {
     return (Rectangle){body.x + 1.0f,
-                       body.y + 16.0f + row * RUNEC_CONSOLE_NPC_ROW_H,
-                       277.0f, RUNEC_CONSOLE_NPC_ROW_H};
+                       body.y + 16.0f + row * FC_CONSOLE_NPC_ROW_H,
+                       277.0f, FC_CONSOLE_NPC_ROW_H};
 }
 
-static Rectangle runec_console_wave_cell_rect(Rectangle body,
-                                              int wave) {
+static Rectangle fc_console_wave_cell_rect(Rectangle body,
+                                           int wave) {
     const int columns = 9;
     const float gap = 1.0f;
     float cell_w = (body.width - 6.0f - gap * (columns - 1)) / columns;
@@ -7361,8 +7361,8 @@ static Rectangle runec_console_wave_cell_rect(Rectangle body,
                        cell_w, 14.0f};
 }
 
-static void draw_runec_console_button(Rectangle rect, const char* label,
-                                      int selected) {
+static void draw_fc_console_button(Rectangle rect, const char* label,
+                                   int selected) {
     int hovered = CheckCollisionPointRec(GetMousePosition(), rect);
     Color background = selected ? CLITERAL(Color){82, 73, 61, 245}
         : (hovered ? CLITERAL(Color){72, 63, 51, 245}
@@ -7375,7 +7375,7 @@ static void draw_runec_console_button(Rectangle rect, const char* label,
                       (int)(rect.y + (rect.height - size.y) * 0.5f), text);
 }
 
-static void draw_runec_console_wave_grid(ViewerState* v, Rectangle body) {
+static void draw_fc_console_wave_grid(ViewerState* v, Rectangle body) {
     Vector2 mouse = GetMousePosition();
     DrawRectangleRec(body, CLITERAL(Color){18, 16, 13, 252});
     DrawRectangleLinesEx(body, 1, COL_PANEL_BORDER);
@@ -7383,7 +7383,7 @@ static void draw_runec_console_wave_grid(ViewerState* v, Rectangle body) {
     fc_osrs_draw_text("click current selection to close",
                       (int)(body.x + body.width) - 155, (int)body.y + 4, COL_TEXT_DIM);
     for (int wave = 1; wave <= FC_NUM_WAVES; wave++) {
-        Rectangle cell = runec_console_wave_cell_rect(body, wave);
+        Rectangle cell = fc_console_wave_cell_rect(body, wave);
         int current = wave == v->state.current_wave;
         int hovered = CheckCollisionPointRec(mouse, cell);
         Color bg = current ? CLITERAL(Color){60, 80, 40, 250}
@@ -7401,9 +7401,9 @@ static void draw_runec_console_wave_grid(ViewerState* v, Rectangle body) {
 
 /* The NPC slots the console's target rows list: living NPCs in slot order. */
 static int console_target_slots(const FcState* state,
-                                int slots[RUNEC_CONSOLE_NPC_ROWS]) {
+                                int slots[FC_CONSOLE_NPC_ROWS]) {
     int count = 0;
-    for (int ni = 0; ni < FC_MAX_NPCS && count < RUNEC_CONSOLE_NPC_ROWS; ni++) {
+    for (int ni = 0; ni < FC_MAX_NPCS && count < FC_CONSOLE_NPC_ROWS; ni++) {
         const FcNpc* npc = &state->npcs[ni];
         if (npc->active && !npc->is_dead) slots[count++] = ni;
     }
@@ -7420,18 +7420,18 @@ static int clamp_console_scroll(ViewerState* v, int tab, int visible_height) {
     return max_scroll;
 }
 
-static void draw_runec_console_controls(ViewerState* v, Rectangle body) {
+static void draw_fc_console_controls(ViewerState* v, Rectangle body) {
     Vector2 mouse = GetMousePosition();
     int x = (int)body.x + 4;
     char text[128];
 
     fc_osrs_draw_text("NPC Targets", x, (int)body.y + 3, COL_TEXT_YELLOW);
-    int slots[RUNEC_CONSOLE_NPC_ROWS];
+    int slots[FC_CONSOLE_NPC_ROWS];
     int shown = console_target_slots(&v->state, slots);
     for (int i = 0; i < shown; i++) {
         int ni = slots[i];
         FcNpc* npc = &v->state.npcs[ni];
-        Rectangle row = runec_console_target_row_rect(body, i);
+        Rectangle row = fc_console_target_row_rect(body, i);
         int selected = ni == v->state.player.attack_target_idx;
         int hovered = CheckCollisionPointRec(mouse, row);
         if (selected || hovered) {
@@ -7470,33 +7470,33 @@ static void draw_runec_console_controls(ViewerState* v, Rectangle body) {
     char debug_label[24];
     snprintf(debug_label, sizeof(debug_label), "Debug: %s",
              v->dbg_flags ? "ON" : "OFF");
-    draw_runec_console_button(runec_console_debug_button_rect(body),
-                              debug_label, v->dbg_flags != 0);
+    draw_fc_console_button(fc_console_debug_button_rect(body),
+                           debug_label, v->dbg_flags != 0);
     char god_label[24];
     snprintf(god_label, sizeof(god_label), "God: %s",
              v->godmode ? "ON" : "OFF");
-    draw_runec_console_button(runec_console_god_button_rect(body),
-                              god_label, v->godmode);
+    draw_fc_console_button(fc_console_god_button_rect(body),
+                           god_label, v->godmode);
 
-    Rectangle wave = runec_console_wave_button_rect(body);
+    Rectangle wave = fc_console_wave_button_rect(body);
     snprintf(text, sizeof(text), "Jump to Wave: %d  v",
              v->state.current_wave);
-    draw_runec_console_button(wave, text, 0);
+    draw_fc_console_button(wave, text, 0);
 
     fc_osrs_draw_text(v->policy_replay ? "Replay TPS" : "TPS Presets",
                       right_x, (int)body.y + 62, COL_TEXT_DIM);
     for (int i = 0; i < NUM_MANUAL_TPS_PRESETS; i++) {
-        draw_runec_console_button(runec_console_tps_button_rect(body, i),
-                                  MANUAL_TPS_LABELS[i],
-                                  float_near(v->tps, MANUAL_TPS_PRESETS[i]));
+        draw_fc_console_button(fc_console_tps_button_rect(body, i),
+                               MANUAL_TPS_LABELS[i],
+                               float_near(v->tps, MANUAL_TPS_PRESETS[i]));
     }
 
     if (v->console_wave_dropdown_open)
-        draw_runec_console_wave_grid(v, body);
+        draw_fc_console_wave_grid(v, body);
 }
 
 /* Console tabs 1-5 show debug tabs 0-4, scrolled by the mouse wheel. */
-static void draw_runec_console_diagnostics(ViewerState* v, Rectangle body) {
+static void draw_fc_console_diagnostics(ViewerState* v, Rectangle body) {
     int debug_tab = v->console_tab - 1;
     int available_height = (int)body.height - 6;
     clamp_console_scroll(v, debug_tab, available_height);
@@ -7534,21 +7534,21 @@ static void draw_runec_console_diagnostics(ViewerState* v, Rectangle body) {
     }
 }
 
-static void draw_runec_console(ViewerState* v) {
-    static const char* labels[RUNEC_CONSOLE_TAB_COUNT] = {
+static void draw_fc_console(ViewerState* v) {
+    static const char* labels[FC_CONSOLE_TAB_COUNT] = {
         "Controls", "Player", "Obs", "Mask", "Reward", "Log"
     };
-    Rectangle panel = runec_console_panel_rect();
-    Rectangle body = runec_console_body_rect(panel);
+    Rectangle panel = fc_console_panel_rect();
+    Rectangle body = fc_console_body_rect(panel);
     DrawRectangleRec(body, CLITERAL(Color){0, 0, 0, 76});
     if (v->console_tab == 0)
-        draw_runec_console_controls(v, body);
+        draw_fc_console_controls(v, body);
     else
-        draw_runec_console_diagnostics(v, body);
+        draw_fc_console_diagnostics(v, body);
 
-    for (int tab = 0; tab < RUNEC_CONSOLE_TAB_COUNT; tab++) {
-        Rectangle rect = runec_console_tab_rect(panel, tab);
-        runec_ui_draw_asset(&v->ui.assets, "chat_tab_button_0", rect, WHITE);
+    for (int tab = 0; tab < FC_CONSOLE_TAB_COUNT; tab++) {
+        Rectangle rect = fc_console_tab_rect(panel, tab);
+        fc_ui_draw_asset(&v->ui.assets, "chat_tab_button_0", rect, WHITE);
         int selected = tab == v->console_tab;
         int hovered = CheckCollisionPointRec(GetMousePosition(), rect);
         DrawRectangleRec(rect, selected
@@ -7566,18 +7566,18 @@ static void draw_runec_console(ViewerState* v) {
     }
 }
 
-static int process_runec_console_input(ViewerState* v) {
+static int process_fc_console_input(ViewerState* v) {
     if (!v) return 0;
-    Rectangle panel = runec_console_panel_rect();
+    Rectangle panel = fc_console_panel_rect();
     Vector2 mouse = GetMousePosition();
     if (!CheckCollisionPointRec(mouse, panel))
         return 0;
 
     int clicked = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
     if (clicked) {
-        for (int tab = 0; tab < RUNEC_CONSOLE_TAB_COUNT; tab++) {
+        for (int tab = 0; tab < FC_CONSOLE_TAB_COUNT; tab++) {
             if (!CheckCollisionPointRec(mouse,
-                                        runec_console_tab_rect(panel, tab)))
+                                        fc_console_tab_rect(panel, tab)))
                 continue;
             v->console_tab = tab;
             v->console_wave_dropdown_open = 0;
@@ -7585,12 +7585,12 @@ static int process_runec_console_input(ViewerState* v) {
         }
     }
 
-    Rectangle body = runec_console_body_rect(panel);
+    Rectangle body = fc_console_body_rect(panel);
     if (v->console_tab == 0 && clicked) {
         if (v->console_wave_dropdown_open) {
             for (int wave = 1; wave <= FC_NUM_WAVES; wave++) {
                 if (!CheckCollisionPointRec(
-                        mouse, runec_console_wave_cell_rect(body, wave)))
+                        mouse, fc_console_wave_cell_rect(body, wave)))
                     continue;
                 if (wave != v->state.current_wave)
                     viewer_jump_to_wave(v, wave);
@@ -7602,33 +7602,33 @@ static int process_runec_console_input(ViewerState* v) {
         }
 
         if (CheckCollisionPointRec(mouse,
-                                   runec_console_debug_button_rect(body))) {
+                                   fc_console_debug_button_rect(body))) {
             toggle_debug_overlay(v);
             return 1;
         }
         if (CheckCollisionPointRec(mouse,
-                                   runec_console_god_button_rect(body))) {
+                                   fc_console_god_button_rect(body))) {
             toggle_godmode(v);
             return 1;
         }
         if (CheckCollisionPointRec(mouse,
-                                   runec_console_wave_button_rect(body))) {
+                                   fc_console_wave_button_rect(body))) {
             v->console_wave_dropdown_open = 1;
             return 1;
         }
         for (int i = 0; i < NUM_MANUAL_TPS_PRESETS; i++) {
             if (!CheckCollisionPointRec(
-                    mouse, runec_console_tps_button_rect(body, i)))
+                    mouse, fc_console_tps_button_rect(body, i)))
                 continue;
             set_viewer_tps(v, MANUAL_TPS_PRESETS[i]);
             return 1;
         }
 
-        int slots[RUNEC_CONSOLE_NPC_ROWS];
+        int slots[FC_CONSOLE_NPC_ROWS];
         int shown = console_target_slots(&v->state, slots);
         for (int i = 0; i < shown; i++) {
             if (CheckCollisionPointRec(
-                    mouse, runec_console_target_row_rect(body, i))) {
+                    mouse, fc_console_target_row_rect(body, i))) {
                 queue_player_attack_request(v, slots[i], mouse.x, mouse.y);
                 fprintf(stderr, "CONSOLE CLICK -> ATTACK npc_idx=%d\n", slots[i]);
                 return 1;
@@ -7665,7 +7665,7 @@ static void draw_tex_fit(Texture2D tex, int dx, int dy, int dw, int dh,
     DrawTexturePro(tex, src, dst, (Vector2){0, 0}, 0, tint);
 }
 
-static Rectangle runec_prayer_button_rect(Rectangle content, int index) {
+static Rectangle fc_prayer_button_rect(Rectangle content, int index) {
     const int btn_h = 34;
     const int gap = 3;
     int x = (int)content.x + 8;
@@ -7675,7 +7675,7 @@ static Rectangle runec_prayer_button_rect(Rectangle content, int index) {
     return (Rectangle){(float)x, (float)y, (float)w, (float)btn_h};
 }
 
-static void draw_runec_prayer_tab(ViewerState* v, Rectangle content) {
+static void draw_fc_prayer_tab(ViewerState* v, Rectangle content) {
     BeginScissorMode((int)content.x, (int)content.y,
                      (int)content.width, (int)content.height);
 
@@ -7713,7 +7713,7 @@ static void draw_runec_prayer_tab(ViewerState* v, Rectangle content) {
     const Color pray_button = CLITERAL(Color){50, 44, 36, 255};
     for (int i = 0; i < FC_PROTECTION_PRAYER_COUNT; i++) {
         const FcProtectionPrayer* row = &FC_PROTECTION_PRAYERS[i];
-        Rectangle br = runec_prayer_button_rect(content, i);
+        Rectangle br = fc_prayer_button_rect(content, i);
         int is_active = (rendered_prayer == row->prayer);
         int hovered = CheckCollisionPointRec(mouse, br);
 
@@ -7747,7 +7747,7 @@ static void draw_runec_prayer_tab(ViewerState* v, Rectangle content) {
         }
     }
 
-    by = (int)runec_prayer_button_rect(
+    by = (int)fc_prayer_button_rect(
         content, FC_PROTECTION_PRAYER_COUNT - 1).y + 34 + 9;
     snprintf(b, sizeof(b), "Prayer bonus: +%d", p->prayer_bonus);
     text_s(b, x, by, COL_TEXT_DIM);
@@ -7755,34 +7755,34 @@ static void draw_runec_prayer_tab(ViewerState* v, Rectangle content) {
     EndScissorMode();
 }
 
-static void draw_runec_side_overrides(ViewerState* v) {
-    Rectangle content = runec_ui_side_content_rect(GetScreenWidth(), GetScreenHeight());
-    if (v->ui.active_tab == RUNEC_UI_TAB_PRAYER)
-        draw_runec_prayer_tab(v, content);
+static void draw_fc_side_overrides(ViewerState* v) {
+    Rectangle content = fc_ui_side_content_rect(GetScreenWidth(), GetScreenHeight());
+    if (v->ui.active_tab == FC_UI_TAB_PRAYER)
+        draw_fc_prayer_tab(v, content);
 }
 
-static int process_runec_prayer_click(ViewerState* v) {
-    if (!v || v->ui.active_tab != RUNEC_UI_TAB_PRAYER)
+static int process_fc_prayer_click(ViewerState* v) {
+    if (!v || v->ui.active_tab != FC_UI_TAB_PRAYER)
         return 0;
     int left_click = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
     int right_click = IsMouseButtonPressed(MOUSE_BUTTON_RIGHT);
     if (!left_click && !right_click)
         return 0;
 
-    Rectangle content = runec_ui_side_content_rect(GetScreenWidth(), GetScreenHeight());
+    Rectangle content = fc_ui_side_content_rect(GetScreenWidth(), GetScreenHeight());
     Vector2 mouse = GetMousePosition();
     if (!CheckCollisionPointRec(mouse, content))
         return 0;
 
     for (int i = 0; i < FC_PROTECTION_PRAYER_COUNT; i++) {
         const FcProtectionPrayer* row = &FC_PROTECTION_PRAYERS[i];
-        Rectangle r = runec_prayer_button_rect(content, i);
+        Rectangle r = fc_prayer_button_rect(content, i);
         if (!CheckCollisionPointRec(mouse, r))
             continue;
         if (right_click) {
             int active = fc_actor_animation_render_prayer(
                 &v->actor_animation, &v->state) == row->prayer;
-            runec_ui_open_prayer_context(&v->ui, mouse, i, row->name, active);
+            fc_ui_open_prayer_context(&v->ui, mouse, i, row->name, active);
         } else {
             queue_viewer_prayer_button(v, row);
         }
@@ -7826,7 +7826,7 @@ static void fc_viewer_destroy(ViewerState* v) {
     fc_minimap_scene_free(&v->minimap_scene);
     terrain_free(v->terrain);
     fc_osrs_text_shutdown();
-    runec_ui_shutdown(&v->ui);
+    fc_ui_shutdown(&v->ui);
     CloseWindow();
     fc_destroy(&v->state);
     free(v);
@@ -7868,7 +7868,7 @@ static ViewerState* fc_viewer_create(int replay) {
         return NULL;
     }
     fc_init(&v->state);
-    runec_ui_init(&v->ui);
+    fc_ui_init(&v->ui);
     if (!fc_osrs_text_init(v->ui.assets.small_font)) {
         fprintf(stderr,
                 "error: required OSRS viewer fonts failed to load\n");
@@ -7986,10 +7986,10 @@ static ViewerState* fc_viewer_create(int replay) {
         }                                                                    \
     } while (0)
     REQUIRE_VIEWER_RESOURCE(v->ui.assets.missing_count == 0,
-                            "RuneC UI sprites");
+                            "UI sprites");
     REQUIRE_VIEWER_RESOURCE(v->ui.assets.font.texture.id > 0 &&
                             v->ui.assets.small_font.texture.id > 0,
-                            "RuneC UI fonts");
+                            "UI fonts");
     REQUIRE_VIEWER_RESOURCE(v->ui.minimap_texture.id > 0,
                             "minimap render texture");
     REQUIRE_VIEWER_RESOURCE(item_icons_ready, "Fight Caves item icons");
@@ -8125,17 +8125,17 @@ static int fc_viewer_frame(ViewerState* v) {
 
     sync_fc_ui(v);
     if (v->ui.context_open) {
-        ui_capture = runec_ui_handle_input(&v->ui, GetScreenWidth(), GetScreenHeight());
-        handle_runec_ui_intent(v);
+        ui_capture = fc_ui_handle_input(&v->ui, GetScreenWidth(), GetScreenHeight());
+        handle_fc_ui_intent(v);
     } else {
-        ui_capture = process_runec_prayer_click(v);
+        ui_capture = process_fc_prayer_click(v);
         if (!ui_capture)
-            ui_capture = process_runec_console_input(v);
+            ui_capture = process_fc_console_input(v);
         if (!ui_capture) {
-            ui_capture = runec_ui_handle_input(&v->ui, GetScreenWidth(), GetScreenHeight());
-            handle_runec_ui_intent(v);
+            ui_capture = fc_ui_handle_input(&v->ui, GetScreenWidth(), GetScreenHeight());
+            handle_fc_ui_intent(v);
         } else {
-            v->ui.last_intent.kind = RUNEC_UI_INTENT_NONE;
+            v->ui.last_intent.kind = FC_UI_INTENT_NONE;
         }
     }
 
@@ -8154,7 +8154,7 @@ static int fc_viewer_frame(ViewerState* v) {
         float dy = mouse.y - v->scene_right_start.y;
         if (dx * dx + dy * dy > 9.0f) v->scene_right_dragged = 1;
         if (v->scene_right_dragged) {
-            runec_ui_close_context(&v->ui);
+            fc_ui_close_context(&v->ui);
             Vector2 d = GetMouseDelta();
             v->cam_yaw += d.x*0.005f; v->cam_pitch -= d.y*0.005f;
             if (v->cam_pitch < 0.1f) v->cam_pitch = 0.1f;
@@ -8245,16 +8245,16 @@ static int fc_viewer_frame(ViewerState* v) {
     draw_scene(v);
     sync_fc_ui(v);
     sync_fc_ui_minimap(v);
-    runec_ui_draw(&v->ui, GetScreenWidth(), GetScreenHeight());
-    draw_runec_side_overrides(v);
-    draw_runec_console(v);
+    fc_ui_draw(&v->ui, GetScreenWidth(), GetScreenHeight());
+    draw_fc_side_overrides(v);
+    draw_fc_console(v);
     draw_click_cross(v);
     if (v->item_message_seconds > 0) {
         DrawRectangle(8, GetScreenHeight() - 34, 490, 26, (Color){20, 16, 12, 240});
         text_s(v->item_message, 16, GetScreenHeight() - 29, YELLOW);
     }
     /* Menus must cover the console and prayer overrides, not sit behind them. */
-    runec_ui_draw_context(&v->ui);
+    fc_ui_draw_context(&v->ui);
 
     EndDrawing();
     return tick;
