@@ -523,13 +523,14 @@ typedef struct {
 _Static_assert(sizeof(FcTextureAnimRow) == 16,
                "TANM rows must retain their 16-byte file layout");
 
-/* The animation table is optional: without it the atlas stays static. */
-static void fc_animated_atlas_load_anims(FcAnimatedAtlas* atlas,
-                                         const char* path) {
+/* Reads the atlas's animation table: which cells scroll, which way and how
+ * fast. */
+static int fc_animated_atlas_load_anims(FcAnimatedAtlas* atlas,
+                                        const char* path) {
     FcReader r;
 
-    if (!fc_asset_exists(path) || !fc_reader_open(&r, path))
-        return;
+    if (!fc_reader_open(&r, path))
+        return 0;
     uint32_t magic = fc_read_u32(&r);
     uint32_t version = fc_read_u32(&r);
     uint32_t count = fc_read_u32(&r);
@@ -546,12 +547,13 @@ static void fc_animated_atlas_load_anims(FcAnimatedAtlas* atlas,
     fc_reader_close(&r);
     if (!r.ok) {
         free(rows);
-        return;
+        return 0;
     }
     atlas->anims = rows;
     atlas->anim_count = (int)count;
     fprintf(stderr, "animated atlas: %d cells loaded from %s\n",
             atlas->anim_count, path);
+    return 1;
 }
 
 int fc_animated_atlas_load(FcAnimatedAtlas* atlas, const char* atlas_path,
@@ -587,7 +589,11 @@ int fc_animated_atlas_load(FcAnimatedAtlas* atlas, const char* atlas_path,
     SetTextureFilter(loaded.texture, TEXTURE_FILTER_POINT);
     loaded.width = (int)width;
     loaded.height = (int)height;
-    fc_animated_atlas_load_anims(&loaded, anim_path);
+    if (!fc_animated_atlas_load_anims(&loaded, anim_path)) {
+        UnloadTexture(loaded.texture);
+        free(loaded.base_pixels);
+        return 0;
+    }
     *atlas = loaded;
     fprintf(stderr, "animated atlas: %ux%u loaded from %s\n",
             width, height, atlas_path);
@@ -673,13 +679,10 @@ void fc_animated_atlas_unload(FcAnimatedAtlas* atlas) {
  *   3 = scale (relative to pivot, 128 = 1.0x identity)
  *   5 = alpha (face transparency, not used in our viewer)
  *
- * Binary format (.anims):
- *   legacy header: uint32 magic ("MINA"), uint16 framebase_count,
- *                  uint16 sequence_count
- *   current header: char[4] magic ("ANM2"), uint16 version,
- *                   uint16 header_size, uint32 framebase_count,
- *                   uint32 sequence_count, uint32 sequence_frame_count,
- *                   uint32 flags
+ * Binary format (.anims, ANM2 version 3):
+ *   header: char[4] magic ("ANM2"), uint16 version (3), uint16 header_size
+ *           (24), uint32 framebase_count, uint32 sequence_count,
+ *           uint32 sequence_frame_count, uint32 flags
  *   framebases section, sequences section with inlined frame data.
  */
 
@@ -743,9 +746,7 @@ typedef struct {
     float timer;
 } AnimTrack;
 
-#define ANIM_MAGIC 0x414E494D  /* legacy bytes "MINA" when read little-endian */
 #define ANIM2_MAGIC 0x324D4E41 /* bytes "ANM2" when read little-endian */
-#define ANIM2_MIN_VERSION 2
 #define ANIM2_VERSION 3
 #define ANIM2_HEADER_SIZE 24
 #define ANIM_SINE_COUNT 2048
@@ -814,25 +815,15 @@ static void anim_read_framebase(FcReader* r, AnimFrameBase* fb) {
     }
 }
 
-static void anim_read_sequence(FcReader* r, AnimSequence* seq,
-                               int format_version) {
+static void anim_read_sequence(FcReader* r, AnimSequence* seq) {
     seq->seq_id = fc_read_u16(r);
     uint16_t frame_count = fc_read_u16(r);
     seq->interleave_count = fc_read_u8(r);
     seq->interleave_order = fc_read_array(r, seq->interleave_count, 1);
-
-    if (format_version >= 3) {
-        seq->frame_step = fc_read_i16(r);
-        fc_reader_skip(r, 1); /* pre-animation movement: unused */
-        seq->postanim_move = (int8_t)fc_read_u8(r);
-        fc_reader_skip(r, 4); /* priority, loops, reply mode, stretch: unused */
-    } else {
-        int8_t walk_flag = (int8_t)fc_read_u8(r);
-        seq->frame_step = -1;
-        seq->postanim_move = walk_flag >= 0
-            ? walk_flag
-            : (seq->interleave_count > 0 ? 2 : 0);
-    }
+    seq->frame_step = fc_read_i16(r);
+    fc_reader_skip(r, 1); /* pre-animation movement: unused */
+    seq->postanim_move = (int8_t)fc_read_u8(r);
+    fc_reader_skip(r, 4); /* priority, loops, reply mode, stretch: unused */
 
     seq->frames = fc_alloc_array(r, frame_count, sizeof(AnimSequenceFrame));
     if (!r->ok) return;
@@ -864,29 +855,16 @@ AnimCache* anim_cache_load(const char* path) {
         return NULL;
     }
 
-    uint32_t base_count = 0;
-    uint32_t seq_count = 0;
-    int format_version = 1;
     uint32_t magic = fc_read_u32(&r);
-    if (magic == ANIM_MAGIC) {
-        base_count = fc_read_u16(&r);
-        seq_count = fc_read_u16(&r);
-    } else if (magic == ANIM2_MAGIC) {
-        uint16_t version = fc_read_u16(&r);
-        uint16_t header_size = fc_read_u16(&r);
-        base_count = fc_read_u32(&r);
-        seq_count = fc_read_u32(&r);
-        fc_reader_skip(&r, 8); /* total sequence frames and flags: unused */
-        fc_reader_require(&r, version >= ANIM2_MIN_VERSION
-                              && version <= ANIM2_VERSION
-                              && header_size >= ANIM2_HEADER_SIZE,
-                          "unsupported ANM2 version or header size");
-        if (header_size > ANIM2_HEADER_SIZE)
-            fc_reader_skip(&r, header_size - ANIM2_HEADER_SIZE);
-        format_version = version;
-    } else {
-        fc_reader_fail(&r, "not an animation file");
-    }
+    fc_reader_require(&r, magic == ANIM2_MAGIC, "not an animation file");
+    uint16_t version = fc_read_u16(&r);
+    uint16_t header_size = fc_read_u16(&r);
+    fc_reader_require(&r, version == ANIM2_VERSION
+                          && header_size == ANIM2_HEADER_SIZE,
+                      "unsupported ANM2 version or header size");
+    uint32_t base_count = fc_read_u32(&r);
+    uint32_t seq_count = fc_read_u32(&r);
+    fc_reader_skip(&r, 8); /* total sequence frames and flags: unused */
     fc_reader_require(&r, base_count <= 65535u && seq_count <= 65535u,
                       "unreasonable framebase or sequence count");
 
@@ -898,7 +876,7 @@ AnimCache* anim_cache_load(const char* path) {
     cache->sequences = fc_alloc_array(&r, seq_count, sizeof(AnimSequence));
     if (r.ok) cache->seq_count = (int)seq_count;
     for (int i = 0; r.ok && i < cache->seq_count; i++)
-        anim_read_sequence(&r, &cache->sequences[i], format_version);
+        anim_read_sequence(&r, &cache->sequences[i]);
 
     fc_reader_close(&r);
     if (!r.ok) {
@@ -1230,7 +1208,6 @@ typedef struct {
     float v_base;
     float u_scale;
     float v_scale;
-    float repeat_v_margin;
 } ModelFaceUvInfo;
 
 typedef struct {
@@ -1316,16 +1293,6 @@ static float model_clamp_uv(float v) {
     return v;
 }
 
-static float model_repeat_uv_with_margin(float v, float margin) {
-    if (margin <= 0.0f)
-        return model_clamp_uv(v);
-    while (v < -margin) v += 1.0f;
-    while (v > 1.0f + margin) v -= 1.0f;
-    if (v < -margin) return -margin;
-    if (v > 1.0f + margin) return 1.0f + margin;
-    return v;
-}
-
 static void model_project_uvs_for_face(const int16_t *verts,
                                        int tri_a, int tri_b, int tri_c,
                                        int tex_a, int tex_b, int tex_c,
@@ -1405,8 +1372,7 @@ void models_recompute_texture_uvs_from_vertices(ModelEntry *entry,
                                    u, v);
         for (int j = 0; j < 3; j++) {
             float cu = model_clamp_uv(u[j]);
-            float cv = model_repeat_uv_with_margin(v[j],
-                                                   info->repeat_v_margin);
+            float cv = model_clamp_uv(v[j]);
             int out = (fi * 3 + j) * 2;
             mesh->texcoords[out] = info->u_base + cu * info->u_scale;
             mesh->texcoords[out + 1] = info->v_base + cv * info->v_scale;
@@ -1479,12 +1445,12 @@ static Model fc_mesh_upload(Mesh mesh, int world_to_arena) {
     return LoadModelFromMesh(mesh);
 }
 
-/* Reads one model record; end is where the next record starts. Textured files
- * may follow the base data with a MUV1 block holding each face's UV
- * projection, used to re-texture posed vertices. Arrays go straight into the
- * entry so models_free releases them on failure. */
+/* Reads one model record. Textured (MDL3) records end with a MUV1 block
+ * holding each face's UV projection, used to re-texture posed vertices.
+ * Arrays go straight into the entry so models_free releases them on
+ * failure. */
 static void model_entry_read(FcReader *r, ModelEntry *entry, int has_textures,
-                             size_t end, Texture2D atlas_texture) {
+                             Texture2D atlas_texture) {
     uint32_t id = fc_read_u32(r);
     int vertex_count = fc_read_u16(r);
     int face_count = fc_read_u16(r);
@@ -1501,12 +1467,14 @@ static void model_entry_read(FcReader *r, ModelEntry *entry, int has_textures,
     entry->face_indices = fc_read_array(r, (size_t)face_count * 3,
                                         sizeof(uint16_t));
     fc_reader_skip(r, face_count); /* face render priorities: unused */
-    if (r->ok && has_textures && end >= r->pos + 8) {
+    if (has_textures) {
         uint32_t uv_magic = fc_read_u32(r);
         uint32_t uv_count = fc_read_u32(r);
-        if (uv_magic == MUV1_MAGIC && uv_count == (uint32_t)face_count)
-            entry->face_uvs = fc_alloc_array(r, face_count,
-                                             sizeof(ModelFaceUvInfo));
+        fc_reader_require(r, uv_magic == MUV1_MAGIC
+                             && uv_count == (uint32_t)face_count,
+                          "textured model without a MUV1 block");
+        entry->face_uvs = fc_alloc_array(r, face_count,
+                                         sizeof(ModelFaceUvInfo));
         for (int i = 0; entry->face_uvs && i < face_count; i++) {
             ModelFaceUvInfo *uv = &entry->face_uvs[i];
             uv->textured = fc_read_u8(r) != 0;
@@ -1518,7 +1486,7 @@ static void model_entry_read(FcReader *r, ModelEntry *entry, int has_textures,
             uv->v_base = fc_read_f32(r);
             uv->u_scale = fc_read_f32(r);
             uv->v_scale = fc_read_f32(r);
-            uv->repeat_v_margin = fc_read_f32(r);
+            fc_reader_skip(r, 4); /* V repeat margin: unused, V is clamped */
         }
     }
     entry->rest_verts = fc_alloc_array(r, (size_t)vertex_count * 3,
@@ -1568,8 +1536,7 @@ ModelSet *models_load(const char *path, Texture2D atlas_texture) {
     if (r.ok) set->count = (int)count;
     for (int m = 0; r.ok && m < set->count; m++) {
         fc_reader_seek(&r, offsets[m]);
-        size_t end = m + 1 < set->count ? offsets[m + 1] : r.size;
-        model_entry_read(&r, &set->entries[m], set->has_textures, end,
+        model_entry_read(&r, &set->entries[m], set->has_textures,
                          atlas_texture);
     }
     free(offsets);
@@ -1679,21 +1646,16 @@ void fc_model_animation_update(ModelEntry *entry,
 /**
  * @fileoverview Loads placed map objects from .objects binary into a single raylib Model.
  *
- * Supports two binary formats:
- *   v1 (OBJS): vertices + colors only (flat vertex coloring)
- *   v2 (OBJ2): vertices + colors + texcoords (texture atlas support)
+ * Binary format (OBJ2): vertices + colors + texcoords (texture atlas support).
  *
- * In the v2 format the shared texture atlas becomes the model's diffuse
- * texture. Vertex colors are multiplied by the texture sample: textured faces
- * use white vertex color + real texture, non-textured faces use HSL vertex
- * color + white atlas pixel.
+ * The shared texture atlas becomes the model's diffuse texture. Vertex
+ * colors are multiplied by the texture sample: textured faces use white
+ * vertex color + real texture, non-textured faces use HSL vertex color +
+ * white atlas pixel.
  */
-
-#define OANM_FLAG_DYNAMIC_REPLACEMENT 2u
 
 typedef struct {
     Model model;
-    int has_textures;
 } ObjectMesh;
 
 typedef struct {
@@ -1705,7 +1667,7 @@ typedef struct {
     uint8_t plane;
     uint8_t obj_type;
     uint8_t rotation;
-    uint8_t flags;
+    uint8_t flags; /* unused: zero for every shipped placement */
     float pos_x;
     float pos_y;
     float pos_z;
@@ -1717,8 +1679,7 @@ typedef struct {
     int count;
 } ObjectAnimSet;
 
-#define OBJS_MAGIC 0x4F424A53  /* "OBJS" v1 */
-#define OBJ2_MAGIC 0x4F424A32  /* "OBJ2" v2 with texcoords */
+#define OBJ2_MAGIC 0x4F424A32  /* "OBJ2" with texcoords */
 #define OANM_MAGIC 0x4D4E414F  /* "OANM" animated object placements */
 #define OANM_VERSION 1
 ObjectMesh* objects_load(const char* path, Texture2D atlas_texture) {
@@ -1730,9 +1691,7 @@ ObjectMesh* objects_load(const char* path, Texture2D atlas_texture) {
     }
 
     uint32_t magic = fc_read_u32(&r);
-    fc_reader_require(&r, magic == OBJ2_MAGIC || magic == OBJS_MAGIC,
-                      "not an objects file");
-    om->has_textures = magic == OBJ2_MAGIC;
+    fc_reader_require(&r, magic == OBJ2_MAGIC, "not an OBJ2 objects file");
     uint32_t placement_count = fc_read_u32(&r);
     fc_reader_skip(&r, 8); /* minimum world x and y: unused */
     uint32_t total_verts = fc_read_u32(&r);
@@ -1742,10 +1701,7 @@ ObjectMesh* objects_load(const char* path, Texture2D atlas_texture) {
     mesh.triangleCount = (int)(total_verts / 3);
     mesh.vertices = fc_read_array(&r, (size_t)total_verts * 3, sizeof(float));
     mesh.colors = fc_read_array(&r, (size_t)total_verts * 4, 1);
-    /* texture coordinates (v2 only) */
-    if (om->has_textures)
-        mesh.texcoords = fc_read_array(&r, (size_t)total_verts * 2,
-                                       sizeof(float));
+    mesh.texcoords = fc_read_array(&r, (size_t)total_verts * 2, sizeof(float));
     mesh.normals = fc_alloc_array(&r, (size_t)total_verts * 3, sizeof(float));
     fc_reader_close(&r);
     if (!r.ok) {
@@ -1753,13 +1709,11 @@ ObjectMesh* objects_load(const char* path, Texture2D atlas_texture) {
         free(om);
         return NULL;
     }
-    fprintf(stderr, "objects_load: %u placements, %u verts, format=%s\n",
-            placement_count, total_verts, om->has_textures ? "OBJ2" : "OBJS");
+    fprintf(stderr, "objects_load: %u placements, %u verts\n",
+            placement_count, total_verts);
 
     om->model = fc_mesh_upload(mesh, 1);
-    if (om->has_textures)
-        om->model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture =
-            atlas_texture;
+    om->model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = atlas_texture;
     return om;
 }
 
@@ -1823,8 +1777,8 @@ ObjectAnimSet* object_anims_load(const char* path) {
  *   min_world_y: int32
  *   vertices: float32[vertex_count * 3]
  *   colors: uint8[vertex_count * 4]
- *   optional heightmap: int32 min_x, int32 min_y, uint32 width,
- *                       uint32 height, float32[width * height]
+ *   heightmap: int32 min_x, int32 min_y, uint32 width, uint32 height,
+ *              float32[width * height]
  */
 
 typedef struct {
@@ -1867,19 +1821,16 @@ TerrainMesh* terrain_load(const char* path) {
     mesh.colors = fc_read_array(&r, (size_t)vert_count * 4, 1);
     mesh.normals = fc_alloc_array(&r, (size_t)vert_count * 3, sizeof(float));
 
-    /* optional heightmap appended after the colors, moved to arena tiles */
-    if (r.ok && r.pos < r.size) {
-        tm->hm_min_x = fc_read_i32(&r) - FC_WORLD_ORIGIN_X;
-        tm->hm_min_y = fc_read_i32(&r) - FC_WORLD_ORIGIN_Y;
-        uint32_t hm_w = fc_read_u32(&r);
-        uint32_t hm_h = fc_read_u32(&r);
-        fc_reader_require(&r, hm_w > 0 && hm_h > 0 && hm_w <= 4096
-                              && hm_h <= 4096,
-                          "invalid terrain heightmap dimensions");
-        tm->hm_width = (int)hm_w;
-        tm->hm_height = (int)hm_h;
-        tm->heightmap = fc_read_array(&r, (size_t)hm_w * hm_h, sizeof(float));
-    }
+    /* the heightmap follows the colors; its origin moves to arena tiles */
+    tm->hm_min_x = fc_read_i32(&r) - FC_WORLD_ORIGIN_X;
+    tm->hm_min_y = fc_read_i32(&r) - FC_WORLD_ORIGIN_Y;
+    uint32_t hm_w = fc_read_u32(&r);
+    uint32_t hm_h = fc_read_u32(&r);
+    fc_reader_require(&r, hm_w > 0 && hm_h > 0 && hm_w <= 4096 && hm_h <= 4096,
+                      "invalid terrain heightmap dimensions");
+    tm->hm_width = (int)hm_w;
+    tm->hm_height = (int)hm_h;
+    tm->heightmap = fc_read_array(&r, (size_t)hm_w * hm_h, sizeof(float));
     fc_reader_close(&r);
     if (!r.ok) {
         fc_mesh_free_arrays(&mesh);
@@ -1890,15 +1841,14 @@ TerrainMesh* terrain_load(const char* path) {
             vert_count, region_count, min_wx, min_wy);
 
     tm->model = fc_mesh_upload(mesh, 1);
-    if (tm->heightmap)
-        fprintf(stderr, "terrain heightmap: %dx%d, arena origin (%d, %d)\n",
-                tm->hm_width, tm->hm_height, tm->hm_min_x, tm->hm_min_y);
+    fprintf(stderr, "terrain heightmap: %dx%d, arena origin (%d, %d)\n",
+            tm->hm_width, tm->hm_height, tm->hm_min_x, tm->hm_min_y);
     return tm;
 }
 
 /* query terrain height at a world tile position (tile corner) */
 float terrain_height_at(TerrainMesh* tm, int world_x, int world_y) {
-    if (!tm || !tm->heightmap) return -2.0f;
+    if (!tm) return -2.0f;
     int lx = world_x - tm->hm_min_x;
     int ly = world_y - tm->hm_min_y;
     if (lx < 0 || lx >= tm->hm_width || ly < 0 || ly >= tm->hm_height)
@@ -8541,11 +8491,6 @@ static void draw_npc_prayer_window_indicators(ViewerState* v) {
 /* Scene drawing                                                             */
 /* ======================================================================== */
 
-static int object_anim_row_visible(const ObjectAnimPlacement* row) {
-    if (!row) return 0;
-    return (row->flags & OANM_FLAG_DYNAMIC_REPLACEMENT) == 0;
-}
-
 static void draw_animated_objects(ViewerState* v) {
     if (!v || !v->object_anims ||
         !v->object_anim_models || !v->object_anim_runtimes)
@@ -8555,8 +8500,6 @@ static void draw_animated_objects(ViewerState* v) {
     rlDisableBackfaceCulling();
     for (int i = 0; i < v->object_anims->count; i++) {
         ObjectAnimPlacement* row = &v->object_anims->rows[i];
-        if (!object_anim_row_visible(row)) continue;
-
         ModelEntry* entry = model_find(v->object_anim_models, row->model_id);
         if (!entry) continue;
 
@@ -9499,8 +9442,7 @@ static ViewerState* fc_viewer_create(int replay) {
     REQUIRE_VIEWER_RESOURCE(v->terrain, "terrain mesh");
     REQUIRE_VIEWER_RESOURCE(v->minimap_scene.ready, "minimap scene raster");
     REQUIRE_VIEWER_RESOURCE(v->atlas.texture.id > 0, "texture atlas");
-    REQUIRE_VIEWER_RESOURCE(v->objects && v->objects->has_textures,
-                            "textured terrain objects");
+    REQUIRE_VIEWER_RESOURCE(v->objects, "textured terrain objects");
     REQUIRE_VIEWER_RESOURCE(v->object_anims, "object animation placements");
     REQUIRE_VIEWER_RESOURCE(v->object_anim_models, "animated object models");
     REQUIRE_VIEWER_RESOURCE(!v->object_anims || v->object_anims->count == 0 ||
