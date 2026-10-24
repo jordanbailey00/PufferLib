@@ -55,8 +55,7 @@ struct Env {
 };
 typedef Env FightCaves;
 
-/* Environment-owned entry points shared by native tooling and manual play. */
-const char* fc_training_contract_json(void);
+/* Manual play: implemented in viewer.c, run by fight_caves.c's main. */
 int fc_viewer_main(int argc, char** argv);
 
 #ifdef __cplusplus

@@ -205,7 +205,6 @@ class Acceptance:
         self.run("build-native", "./build.sh", "fight_caves", timeout=1800)
         self.run("build-cpu", "./build.sh", "fight_caves", "--cpu", timeout=600)
         self.run("assets-verified", *tool, "setup", "--all", "--verify-only")
-        self.run("contract", *tool, "contract")
         # Test the real window; do not require the optional xdpyinfo diagnostic.
         # Raylib TakeScreenshot writes a basename in the current directory.
         self.run("manual-play", "./fight_caves", "--screenshot", "playable.png")

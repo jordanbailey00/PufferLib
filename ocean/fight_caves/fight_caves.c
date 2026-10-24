@@ -215,13 +215,8 @@ int main(int argc, char** argv) {
     if (argc > 1 && (strcmp(argv[1], "eval") == 0 || strcmp(argv[1], "check") == 0))
         return replay(argc, argv, strcmp(argv[1], "check") == 0);
     if (argc == 2 && strcmp(argv[1], "--help") == 0)
-        printf("CPU tools: %s --contract | --benchmark | check CHECKPOINT.bin | "
+        printf("CPU tools: %s --benchmark | check CHECKPOINT.bin | "
                "eval CHECKPOINT.bin [--headless] [--section.key=value ...]\n", argv[0]);
-    /* Inspect this compiled adapter without loading assets or opening a window. */
-    if (argc == 2 && strcmp(argv[1], "--contract") == 0) {
-        puts(fc_training_contract_json());
-        return 0;
-    }
     if (argc == 2 && strcmp(argv[1], "--benchmark") == 0)
         return benchmark();
     return fc_viewer_main(argc, argv);

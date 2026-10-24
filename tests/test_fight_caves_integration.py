@@ -64,14 +64,6 @@ def test_graphical_suite(native_suites, tmp_path):
     assert screenshot.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
 
-def test_built_executable_contract(executable):
-    tools = load_setup_data()
-    contract = tools.load_compiled_contract(executable)
-    tools.validate_compiled_contract(contract)
-    assert (contract["policy_obs_size"], contract["puffer_obs_size"],
-            contract["puffer_mask_size"], contract["puffer_action_dims"]) == (286, 320, 34, [17, 9, 8])
-
-
 def load_setup_data():
     spec = importlib.util.spec_from_file_location("fight_caves_setup_data_test", SETUP_DATA)
     assert spec is not None and spec.loader is not None
@@ -288,96 +280,6 @@ def test_asset_setup_verification_is_independent_of_display(monkeypatch, broken,
     assert len(checked) == (1 if broken else 2)
     if broken:
         assert "Fight Caves asset setup failed" in capsys.readouterr().err
-
-
-@pytest.fixture
-def compiled_contract():
-    return {
-        "contract_dump_schema_version": 1,
-        "policy_obs_size": 286, "puffer_obs_size": 320,
-        "puffer_action_dims": [17, 9, 8], "puffer_mask_size": 34,
-        "observation_version": "test_obs", "action_version": "test_actions",
-        "reward_version": "test_rewards", "prayer_timing_version": "test_prayer",
-        "state_hash_version": 6, "active_loadout": "test_loadout",
-    }
-
-
-def test_executable_contract_uses_subprocess(tmp_path, monkeypatch, compiled_contract):
-    tools = load_setup_data()
-    executable = tmp_path / "fight_caves"
-    executable.touch()
-    def run(argv, **kwargs):
-        assert argv == [str(executable), "--contract"]
-        assert kwargs["cwd"] == REPO_ROOT
-        assert kwargs["timeout"] == 10
-        return subprocess.CompletedProcess(argv, 0, json.dumps(compiled_contract), "")
-    monkeypatch.setattr(tools.subprocess, "run", run)
-    contract = tools.load_compiled_contract(executable)
-    tools.validate_compiled_contract(contract, "test_loadout")
-    assert contract == compiled_contract
-
-
-@pytest.mark.parametrize("output,message", [
-    ("", "invalid JSON"), ("noise\\n{}", "invalid JSON"), ("[]", "not an object"),
-])
-def test_executable_contract_rejects_bad_output(tmp_path, monkeypatch, output, message):
-    tools = load_setup_data()
-    executable = tmp_path / "fight_caves"
-    executable.touch()
-    monkeypatch.setattr(tools.subprocess, "run", lambda *a, **k:
-                        subprocess.CompletedProcess(a, 0, output, ""))
-    with pytest.raises(tools.ContractError, match=message):
-        tools.load_compiled_contract(executable)
-
-
-@pytest.mark.parametrize("failure", ["missing", "permission", "timeout", "exit"])
-def test_executable_contract_reports_failures(tmp_path, monkeypatch, failure):
-    tools = load_setup_data()
-    executable = tmp_path / "fight_caves"
-    if failure != "missing":
-        executable.touch()
-    def run(*args, **kwargs):
-        if failure == "permission":
-            raise PermissionError("not executable")
-        if failure == "timeout":
-            raise subprocess.TimeoutExpired(args, 10)
-        return subprocess.CompletedProcess(args, 2, "", "unsupported --contract")
-    monkeypatch.setattr(tools.subprocess, "run", run)
-    with pytest.raises(tools.ContractError):
-        tools.load_compiled_contract(executable)
-
-
-@pytest.mark.parametrize("field,value", [
-    ("contract_dump_schema_version", 2), ("contract_dump_schema_version", True),
-    ("policy_obs_size", 0), ("puffer_obs_size", 319), ("puffer_mask_size", -1),
-    ("policy_obs_size", True), ("puffer_action_dims", []),
-    ("puffer_action_dims", [17, 9, True]), ("puffer_action_dims", [17, 9, 9]),
-])
-def test_compiled_contract_rejects_invalid_dimensions(compiled_contract, field, value):
-    tools = load_setup_data()
-    compiled_contract[field] = value
-    with pytest.raises(tools.ContractError):
-        tools.validate_compiled_contract(compiled_contract)
-
-
-def test_compiled_contract_checks_required_fields_and_loadout(compiled_contract):
-    tools = load_setup_data()
-    with pytest.raises(tools.ContractError, match="active loadout mismatch"):
-        tools.validate_compiled_contract(compiled_contract, "another_loadout")
-    for field in tools.REQUIRED_FIELDS:
-        incomplete = dict(compiled_contract)
-        del incomplete[field]
-        with pytest.raises(tools.ContractError, match="omits"):
-            tools.validate_compiled_contract(incomplete)
-
-
-def test_contract_identity_is_exact(compiled_contract):
-    tools = load_setup_data()
-    same = dict(reversed(list(compiled_contract.items())))
-    assert tools.contract_identity(same) == tools.contract_identity(compiled_contract)
-    for field in compiled_contract:
-        changed = dict(compiled_contract, **{field: "changed"})
-        assert tools.contract_identity(changed) != tools.contract_identity(compiled_contract)
 
 
 ENV_ROOT = REPO_ROOT / "ocean" / "fight_caves"

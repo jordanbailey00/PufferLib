@@ -201,7 +201,7 @@ FC_TEST_RENDER=1 python3 -m pytest -q tests/test_fight_caves_integration.py
 
 The suite builds a fresh CPU executable in pytest's temporary directory and
 installs/verifies assets through the standard build. It checks the asset installer,
-reproducible release bundles, compiled metadata, invalid checkpoints, CPU replay,
+reproducible release bundles, invalid checkpoints, CPU replay,
 and two C suites: simulation/adapter and independent C/C++ linkage. The
 simulation suite includes wave/equipment/analytics fixtures, observations,
 masks, terminal rewards, autoreset, metrics, viewer snapshots and the CPU
@@ -218,18 +218,11 @@ Useful standalone diagnostics:
 
 ```bash
 ./fight_caves --benchmark
-./fight_caves --contract
-python3 ocean/fight_caves/tools.py contract
 ```
 
-The Python contract command validates the compiled CPU executable's dimensions,
-versions and loadout, and reports its SHA-256 and metadata fingerprint. Use
-`--executable PATH` or `--active-loadout NAME` when needed. This describes that
-executable, not an arbitrary CUDA trainer or checkpoint.
-
 Release bundles can be generated reproducibly with
-`python3 ocean/fight_caves/tools.py bundle --help`. The installer, bundle generator,
-and compiled-contract inspection are all in this one helper.
+`python3 ocean/fight_caves/tools.py bundle --help`. The installer and bundle
+generator are both in this one helper.
 
 ### Disposable-checkout acceptance
 

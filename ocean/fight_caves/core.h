@@ -541,30 +541,10 @@ typedef struct {
 
 /* Contracts */
 
-/* Machine-readable training-contract metadata. These identifiers describe
- * compiled semantics, not tunable reward weights. A selected runnable config
- * may override FC_REWARD_VERSION at build time when it preserves its own
- * reward-family name under the same Prayer parity semantics. */
-#define FC_CONTRACT_DUMP_SCHEMA_VERSION 1
-#ifndef FC_OBSERVATION_VERSION
-#define FC_OBSERVATION_VERSION "fight_caves_puffer_policy_obs_v9_run_energy_prayer_timing_mask8_no_supplies"
-#endif
-#ifndef FC_ACTION_VERSION
-#define FC_ACTION_VERSION "fight_caves_multidiscrete_3_head_no_supplies_v4_run_energy_prayer8_stationary_attack_tick"
-#endif
-#ifndef FC_REWARD_VERSION
-#define FC_REWARD_VERSION "fight_caves_v4_progress_npc_heal_penalty_m0005_prayer_snapshot_flick_drain"
-#endif
-#ifndef FC_PRAYER_TIMING_VERSION
-#define FC_PRAYER_TIMING_VERSION "fight_caves_prayer_timing_v1_tick_start_snapshot_flick_drain_jad_lock"
-#endif
-
 /*
  * Observation, action and mask contracts.
  *
- * SINGLE SOURCE OF TRUTH for all buffer layouts. Python reads the compiled
- * values from the --contract JSON (fc_training_contract_json) instead of
- * redefining them.
+ * SINGLE SOURCE OF TRUTH for all buffer layouts.
  *
  * All observations are float32, normalized to [0,1]. All actions are int32 per
  * head.

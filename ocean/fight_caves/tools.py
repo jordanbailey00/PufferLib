@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fight Caves asset installation, release bundles and validation helpers."""
+"""Fight Caves asset installation and release bundles."""
 
 from __future__ import annotations
 
@@ -10,11 +10,9 @@ import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import shutil
-import subprocess
 import sys
 import tarfile
 import tempfile
-from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -428,127 +426,11 @@ def bundle_main() -> int:
     return 0
 
 
-# Compiled environment inspection (not checkpoint compatibility)
-
-class ContractError(RuntimeError):
-    pass
-
-
-REQUIRED_FIELDS = (
-    "contract_dump_schema_version",
-    "policy_obs_size",
-    "puffer_obs_size",
-    "puffer_action_dims",
-    "puffer_mask_size",
-    "observation_version",
-    "action_version",
-    "reward_version",
-    "prayer_timing_version",
-    "state_hash_version",
-    "active_loadout",
-)
-
-
-def contract_identity(contract: dict[str, Any]) -> str:
-    encoded = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def load_compiled_contract(executable_path: str | Path) -> dict[str, Any]:
-    executable = Path(executable_path).resolve()
-    if not executable.is_file():
-        raise ContractError(
-            f"Fight Caves executable is unavailable: {executable}; "
-            "run ./build.sh fight_caves --cpu"
-        )
-    try:
-        result = subprocess.run(
-            [str(executable), "--contract"], cwd=REPO_ROOT,
-            capture_output=True, text=True, timeout=10, check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired, UnicodeError) as exc:
-        raise ContractError(f"cannot inspect Fight Caves executable {executable}: {exc}") from exc
-    if result.returncode != 0:
-        raise ContractError(
-            f"Fight Caves executable contract command failed ({result.returncode}): "
-            f"{executable}\n{result.stderr.strip()}"
-        )
-    try:
-        contract = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        raise ContractError("compiled Fight Caves contract is invalid JSON") from exc
-    if not isinstance(contract, dict):
-        raise ContractError("compiled Fight Caves contract is not an object")
-    return contract
-
-
-def validate_compiled_contract(
-    contract: dict[str, Any], expected_active_loadout: str | None = None
-) -> None:
-    missing = [field for field in REQUIRED_FIELDS if field not in contract]
-    if missing:
-        raise ContractError(f"compiled contract omits {missing[0]}")
-    schema = contract["contract_dump_schema_version"]
-    if type(schema) is not int or schema != 1:
-        raise ContractError("unsupported compiled contract schema")
-
-    policy_obs_size = contract["policy_obs_size"]
-    puffer_obs_size = contract["puffer_obs_size"]
-    mask_size = contract["puffer_mask_size"]
-    action_dims = contract["puffer_action_dims"]
-    if not all(type(value) is int and value > 0 for value in (
-        policy_obs_size, puffer_obs_size, mask_size
-    )):
-        raise ContractError("compiled contract contains invalid observation sizes")
-    if (
-        not isinstance(action_dims, list)
-        or not action_dims
-        or not all(type(value) is int and value > 0 for value in action_dims)
-    ):
-        raise ContractError("compiled contract contains invalid action dimensions")
-    if sum(action_dims) != mask_size:
-        raise ContractError("compiled action dimensions do not match mask size")
-    if policy_obs_size + mask_size != puffer_obs_size:
-        raise ContractError("compiled policy observation and mask sizes do not add up")
-    if expected_active_loadout is not None:
-        actual = contract["active_loadout"]
-        if actual != expected_active_loadout:
-            raise ContractError(
-                "compiled active loadout mismatch: "
-                f"expected={expected_active_loadout!r}, actual={actual!r}"
-            )
-
-
-def contract_main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Inspect the compiled Fight Caves CPU executable. "
-                    "This is not a checkpoint or CUDA trainer compatibility check."
-    )
-    parser.add_argument("--executable", type=Path, default=REPO_ROOT / "fight_caves")
-    parser.add_argument("--active-loadout", help="optional expected compiled loadout")
-    args = parser.parse_args()
-    try:
-        executable = args.executable.resolve()
-        contract = load_compiled_contract(executable)
-        validate_compiled_contract(contract, args.active_loadout)
-        print(json.dumps({
-            "contract": contract,
-            "contract_identity": contract_identity(contract),
-            "executable_path": str(executable),
-            "executable_sha256": sha256_file(executable),
-        }, sort_keys=True, indent=2))
-    except (ContractError, OSError) as exc:
-        print(f"Fight Caves contract check failed: {exc}", file=sys.stderr)
-        return 1
-    return 0
-
-
 def main() -> int:
-    commands = {"setup": setup_main, "bundle": bundle_main,
-                "contract": contract_main}
+    commands = {"setup": setup_main, "bundle": bundle_main}
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
         print("Usage: python3 ocean/fight_caves/tools.py "
-              "{setup,bundle,contract} [options]\n"
+              "{setup,bundle} [options]\n"
               "Use COMMAND --help for command options.")
         return 0 if len(sys.argv) > 1 else 2
     command = sys.argv.pop(1)

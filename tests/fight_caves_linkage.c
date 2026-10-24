@@ -115,7 +115,6 @@ int main(void) {
     Dict out = {};
     puf_log(&envs[0].log, &out);
     assert(dict_get(&out, "perf") == envs[0].log.jad_kill_rate);
-    assert(strstr(fc_training_contract_json(), "\"puffer_obs_size\":320") != NULL);
     for (int i = 0; i < 2; i++) puf_close(&envs[i]);
     free(envs);
     dict_clear(&kwargs);

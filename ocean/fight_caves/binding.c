@@ -190,56 +190,6 @@ void puf_close(Env* env) {
     fc_destroy(&env->state);
 }
 
-/* Cold-path metadata for C callers and the standalone --contract command. */
-
-const char* fc_training_contract_json(void) {
-    static char json[2048];
-    static int initialized = 0;
-    if (!initialized) {
-        snprintf(
-            json,
-            sizeof(json),
-            "{"
-            "\"contract_dump_schema_version\":%d,"
-            "\"policy_obs_size\":%d,"
-            "\"puffer_obs_size\":%d,"
-            "\"puffer_action_dims\":[%d,%d,%d],"
-            "\"puffer_mask_size\":%d,"
-            "\"core_action_dims\":[%d,%d,%d,%d,%d,%d,%d],"
-            "\"core_action_mask\":%d,"
-            "\"observation_version\":\"%s\","
-            "\"action_version\":\"%s\","
-            "\"reward_version\":\"%s\","
-            "\"prayer_timing_version\":\"%s\","
-            "\"state_hash_version\":%u,"
-            "\"active_loadout\":\"FC_LOADOUT_SOTA_TBOW\""
-            "}",
-            FC_CONTRACT_DUMP_SCHEMA_VERSION,
-            FC_POLICY_OBS_SIZE,
-            FC_PUFFER_OBS_SIZE,
-            FC_PUFFER_ACTION_DIMS[0],
-            FC_PUFFER_ACTION_DIMS[1],
-            FC_PUFFER_ACTION_DIMS[2],
-            FC_PUFFER_MASK_SIZE,
-            FC_ACTION_DIMS[0],
-            FC_ACTION_DIMS[1],
-            FC_ACTION_DIMS[2],
-            FC_ACTION_DIMS[3],
-            FC_ACTION_DIMS[4],
-            FC_ACTION_DIMS[5],
-            FC_ACTION_DIMS[6],
-            FC_ACTION_MASK_SIZE,
-            FC_OBSERVATION_VERSION,
-            FC_ACTION_VERSION,
-            FC_REWARD_VERSION,
-            FC_PRAYER_TIMING_VERSION,
-            FC_STATE_HASH_VERSION);
-        initialized = 1;
-    }
-    return json;
-}
-
-
 void puf_init(Env* env, Dict* kwargs) {
     env->num_agents = 1;  /* Fight Caves is single-agent */
     fc_apply_env_config(kwargs, &env->reward_params, &env->initial_sharks,
