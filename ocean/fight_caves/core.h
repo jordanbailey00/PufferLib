@@ -717,7 +717,7 @@ typedef struct {
 #define FC_NPC_HEALED_SELF             27  /* 1 if this NPC restored its own HP this tick */
 #define FC_NPC_TARGETS_PLAYER          28  /* 1 if the NPC's current movement/combat target is the player */
 #define FC_NPC_HEAL_COOLDOWN           29  /* normalized time until the next possible healing cycle */
-#define FC_NPC_KILL_REWARD_ELIGIBLE    30  /* 1 if this NPC's death would pay FC_RWD_NPC_KILL */
+#define FC_NPC_KILL_REWARD_ELIGIBLE    30  /* 1 unless this NPC is a respawned Jad healer */
 
 #define FC_OBS_NPC_TOTAL        (FC_OBS_NPC_STRIDE * FC_OBS_NPC_SLOTS)  /* 248 */
 
@@ -959,27 +959,14 @@ typedef struct {
 /* Reward */
 
 typedef struct {
-    float w_damage_dealt;      /* legacy per-hit shaping; active config uses 0 */
     float w_progress;          /* reward per required-work unit removed */
-    float negative_progress_multiplier;
     float w_damage_taken;
-    float w_npc_kill;
-    float w_wave_clear;
-    float w_jad_kill;
     float w_cave_complete;
     float w_player_death;
-    int scale_player_death_with_progress;
-    float player_death_min_scale;
-    float w_correct_jad_prayer;
-    float w_correct_danger_prayer;
     float w_prayer_lost;
     float w_invalid_action;
     float w_tick_penalty;
 
-    float shape_unnecessary_prayer_penalty;
-    float shape_wave_stall_base_penalty;
-    float shape_wave_stall_cap;
-    float shape_jad_heal_penalty;
     float shape_npc_heal_penalty;
     float shape_no_progress_penalty_1;
     float shape_no_progress_penalty_2;
@@ -987,8 +974,6 @@ typedef struct {
     float shape_no_attack_base_penalty;
     float shape_no_attack_wave_scale;
 
-    int shape_wave_stall_start;
-    int shape_wave_stall_ramp_interval;
     int shape_no_progress_start_1;
     int shape_no_progress_start_2;
     int shape_no_progress_start_3;
@@ -997,7 +982,6 @@ typedef struct {
 
 typedef struct {
     int ticks_since_attack;
-    int ticks_in_wave;
     float required_work_at_wave_start;
     float cave_progress_prev;
     float last_required_work_remaining;
@@ -1028,30 +1012,20 @@ typedef struct {
 typedef struct {
     float raw[FC_REWARD_FEATURES];
 
-    float damage_dealt;
     float progress;
     float damage_taken;
-    float npc_kill;
-    float wave_clear;
-    float jad_kill;
     float cave_complete;
     float player_death;
 
-    float correct_jad_prayer;
-    float correct_danger_prayer;
     float prayer_lost;
-    float unnecessary_prayer;
-    float wave_stall;
     float no_progress;
     float no_attack;
-    float jad_heal;
     float npc_heal;
 
     float invalid_action;
     float tick_penalty;
 
     float total;
-    int any_threat;
 } FcRewardBreakdown;
 
 FcRewardParams fc_reward_default_params(void);
@@ -3499,32 +3473,14 @@ typedef struct {
 } FcRewardSetting;
 
 static const FcRewardSetting FC_REWARD_SETTINGS[] = {
-    {"w_damage_dealt",
-     offsetof(FcRewardParams, w_damage_dealt), 0, 0.0f},
     {"w_progress",
      offsetof(FcRewardParams, w_progress), 0, 0.001f},
-    {"negative_progress_multiplier",
-     offsetof(FcRewardParams, negative_progress_multiplier), 0, 1.0f},
     {"w_damage_taken",
      offsetof(FcRewardParams, w_damage_taken), 0, -0.25f},
-    {"w_npc_kill",
-     offsetof(FcRewardParams, w_npc_kill), 0, 0.0f},
-    {"w_wave_clear",
-     offsetof(FcRewardParams, w_wave_clear), 0, 0.0f},
-    {"w_jad_kill",
-     offsetof(FcRewardParams, w_jad_kill), 0, 0.0f},
     {"w_cave_complete",
      offsetof(FcRewardParams, w_cave_complete), 0, 1.0f},
     {"w_player_death",
      offsetof(FcRewardParams, w_player_death), 0, -1.0f},
-    {"scale_player_death_with_progress",
-     offsetof(FcRewardParams, scale_player_death_with_progress), 1, 0},
-    {"player_death_min_scale",
-     offsetof(FcRewardParams, player_death_min_scale), 0, 0.1f},
-    {"w_correct_jad_prayer",
-     offsetof(FcRewardParams, w_correct_jad_prayer), 0, 0.0f},
-    {"w_correct_danger_prayer",
-     offsetof(FcRewardParams, w_correct_danger_prayer), 0, 0.005f},
     {"w_prayer_lost",
      offsetof(FcRewardParams, w_prayer_lost), 0, -0.02f},
     {"w_invalid_action",
@@ -3532,14 +3488,6 @@ static const FcRewardSetting FC_REWARD_SETTINGS[] = {
     {"w_tick_penalty",
      offsetof(FcRewardParams, w_tick_penalty), 0, -0.0001f},
 
-    {"shape_unnecessary_prayer_penalty",
-     offsetof(FcRewardParams, shape_unnecessary_prayer_penalty), 0, 0.0f},
-    {"shape_wave_stall_base_penalty",
-     offsetof(FcRewardParams, shape_wave_stall_base_penalty), 0, 0.0f},
-    {"shape_wave_stall_cap",
-     offsetof(FcRewardParams, shape_wave_stall_cap), 0, 0.0f},
-    {"shape_jad_heal_penalty",
-     offsetof(FcRewardParams, shape_jad_heal_penalty), 0, 0.0f},
     {"shape_npc_heal_penalty",
      offsetof(FcRewardParams, shape_npc_heal_penalty), 0, 0.0f},
     {"shape_no_progress_penalty_1",
@@ -3553,10 +3501,6 @@ static const FcRewardSetting FC_REWARD_SETTINGS[] = {
     {"shape_no_attack_wave_scale",
      offsetof(FcRewardParams, shape_no_attack_wave_scale), 0, 0.05f},
 
-    {"shape_wave_stall_start",
-     offsetof(FcRewardParams, shape_wave_stall_start), 1, 0},
-    {"shape_wave_stall_ramp_interval",
-     offsetof(FcRewardParams, shape_wave_stall_ramp_interval), 1, 0},
     {"shape_no_progress_start_1",
      offsetof(FcRewardParams, shape_no_progress_start_1), 1, 800},
     {"shape_no_progress_start_2",
@@ -3598,15 +3542,6 @@ static float clamp01(float value) {
     if (value < 0.0f) return 0.0f;
     if (value > 1.0f) return 1.0f;
     return value;
-}
-
-static float fc_reward_player_death_scale(
-        const FcRewardParams* params, float cave_progress) {
-    if (!params->scale_player_death_with_progress) return 1.0f;
-
-    float floor = clamp01(params->player_death_min_scale);
-    float progress = clamp01(cave_progress);
-    return floor + (1.0f - floor) * progress;
 }
 
 static float fc_reward_required_work_remaining(const FcState* state) {
@@ -3691,30 +3626,13 @@ static void fc_reward_runtime_begin_episode(
     fc_reward_sync_progress_state(state, runtime);
 }
 
-static int reward_has_threat(const FcState* state) {
-    const FcPlayer* p = &state->player;
-    for (int i = 0; i < FC_MAX_NPCS; i++) {
-        const FcNpc* n = &state->npcs[i];
-        if (n->active && !n->is_dead &&
-            fc_distance_to_npc(p->x, p->y, n) <= n->attack_range) return 1;
-    }
-    for (int i = 0; i < p->num_pending_hits; i++) {
-        if (p->pending_hits[i].active) return 1;
-    }
-    return 0;
-}
-
 static FcRewardBreakdown fc_reward_compute_breakdown(
         const FcState* state, const FcRewardParams* params, FcRewardRuntime* runtime) {
     FcRewardBreakdown out;
     const FcPlayer* p = &state->player;
-    int prayer_reward_idle;
 
     memset(&out, 0, sizeof(out));
     fc_write_reward_features(state, out.raw);
-    out.any_threat = reward_has_threat(state);
-    prayer_reward_idle =
-        (runtime->ticks_since_attack >= 1 && out.raw[FC_RWD_ATTACK_ATTEMPT] <= 0.0f);
 
     {
         float work_remaining = fc_reward_required_work_remaining(state);
@@ -3729,15 +3647,10 @@ static FcRewardBreakdown fc_reward_compute_breakdown(
         /* Scalar reward uses raw net required-work removed. The cave-progress
          * delta stays normalized for observations, while this channel pays
          * for actual HP/work removed and goes negative when healing restores
-         * work. The optional negative multiplier makes restored work more costly
-         * without changing positive progress. Multiplying by the wave's start
-         * work preserves wave-clear handling and avoids treating the next wave
-         * spawn as negative progress. */
-        float progress_weight = params->w_progress;
-        if (net_work_removed < 0.0f) {
-            progress_weight *= params->negative_progress_multiplier;
-        }
-        out.progress = net_work_removed * progress_weight;
+         * work. Multiplying by the wave's start work preserves wave-clear
+         * handling and avoids treating the next wave spawn as negative
+         * progress. */
+        out.progress = net_work_removed * params->w_progress;
 
         runtime->last_required_work_remaining = work_remaining;
         runtime->last_current_wave_progress = wave_progress;
@@ -3764,44 +3677,10 @@ static FcRewardBreakdown fc_reward_compute_breakdown(
         }
     }
 
-    /* damage_dealt fires per damaging hit: (damage + damaging_hits) * w.
-     * Base reward per hit only applies when actual damage is dealt; zero
-     * damage impacts still resolve mechanically but do not pay damage reward. */
-    out.damage_dealt = (out.raw[FC_RWD_DAMAGE_DEALT] +
-                       (float)state->hits_landed_this_tick) * params->w_damage_dealt;
-
-    {
-        float dmg_frac = out.raw[FC_RWD_DAMAGE_TAKEN];
-        out.damage_taken = dmg_frac * params->w_damage_taken;
-    }
-
-    out.npc_kill = out.raw[FC_RWD_NPC_KILL] * params->w_npc_kill;
-
-    if (out.raw[FC_RWD_WAVE_CLEAR] > 0.0f) {
-        int cleared_wave = state->current_wave - 1;
-        if (cleared_wave < 1) cleared_wave = 1;
-        out.wave_clear = params->w_wave_clear * (float)cleared_wave;
-    }
-
-    out.jad_kill = out.raw[FC_RWD_JAD_KILL] * params->w_jad_kill;
+    out.damage_taken = out.raw[FC_RWD_DAMAGE_TAKEN] * params->w_damage_taken;
     out.cave_complete = out.raw[FC_RWD_CAVE_COMPLETE] * params->w_cave_complete;
-    out.player_death = out.raw[FC_RWD_PLAYER_DEATH] * params->w_player_death *
-        fc_reward_player_death_scale(params, runtime->last_cave_progress);
-
-    /* Jad now participates in the same correct-block reward as every other
-     * NPC. Preserve the existing attack-idle suppression unchanged. Jad's
-     * separate channel remains an optional additional bonus. */
-    if (!prayer_reward_idle) {
-        out.correct_jad_prayer =
-            out.raw[FC_RWD_CORRECT_JAD_PRAY] * params->w_correct_jad_prayer;
-        out.correct_danger_prayer =
-            out.raw[FC_RWD_CORRECT_DANGER_PRAY] * params->w_correct_danger_prayer;
-    }
+    out.player_death = out.raw[FC_RWD_PLAYER_DEATH] * params->w_player_death;
     out.prayer_lost = out.raw[FC_RWD_PRAYER_LOST] * params->w_prayer_lost;
-    if (p->prayer != PRAYER_NONE && !out.any_threat) {
-        out.unnecessary_prayer = params->shape_unnecessary_prayer_penalty;
-    }
-
     out.invalid_action = out.raw[FC_RWD_INVALID_ACTION] * params->w_invalid_action;
     out.tick_penalty = out.raw[FC_RWD_TICK_PENALTY] * params->w_tick_penalty;
 
@@ -3825,34 +3704,7 @@ static FcRewardBreakdown fc_reward_compute_breakdown(
         out.no_attack = params->shape_no_attack_base_penalty * multiplier;
     }
 
-    /* Wave-stall penalty — timer-based, fires every tick past the threshold
-     * while the wave still has NPCs. Ramps linearly and clamps at cap.
-     * Runtime timer resets when a wave_clear fires this tick. */
-    if (state->npcs_remaining > 0) {
-        runtime->ticks_in_wave++;
-        if (params->shape_wave_stall_base_penalty != 0.0f &&
-            runtime->ticks_in_wave > params->shape_wave_stall_start) {
-            int over = runtime->ticks_in_wave - params->shape_wave_stall_start;
-            int ramps = (params->shape_wave_stall_ramp_interval > 0)
-                ? over / params->shape_wave_stall_ramp_interval : 0;
-            float p = params->shape_wave_stall_base_penalty * (1.0f + (float)ramps);
-            float cap = params->shape_wave_stall_cap;
-            if (cap != 0.0f && p < cap) p = cap;
-            out.wave_stall = p;
-        }
-    }
-    if (out.raw[FC_RWD_WAVE_CLEAR] > 0.0f) {
-        runtime->ticks_in_wave = 0;
-    }
-
-    /* Jad heal penalty: fires per Yt-HurKot heal proc that landed on Jad
-     * this tick. Encourages the agent to break healer link or kill healers
-     * before they restore Jad's HP. */
-    if (state->jad_heal_procs_this_tick > 0 &&
-        params->shape_jad_heal_penalty != 0.0f) {
-        out.jad_heal = params->shape_jad_heal_penalty *
-                       (float)state->jad_heal_procs_this_tick;
-    }
+    /* Penalty per heal that restored NPC HP this tick. */
     if (state->npc_heal_procs_this_tick > 0 &&
         params->shape_npc_heal_penalty != 0.0f) {
         out.npc_heal = params->shape_npc_heal_penalty *
@@ -3871,22 +3723,13 @@ static FcRewardBreakdown fc_reward_compute_breakdown(
     runtime->cave_progress_prev = runtime->last_cave_progress;
 
     out.total =
-        out.damage_dealt +
         out.progress +
         out.damage_taken +
-        out.npc_kill +
-        out.wave_clear +
-        out.jad_kill +
         out.cave_complete +
         out.player_death +
-        out.correct_jad_prayer +
-        out.correct_danger_prayer +
         out.prayer_lost +
-        out.unnecessary_prayer +
-        out.wave_stall +
         out.no_progress +
         out.no_attack +
-        out.jad_heal +
         out.npc_heal +
         out.invalid_action +
         out.tick_penalty;

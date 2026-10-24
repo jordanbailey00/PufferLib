@@ -7592,33 +7592,22 @@ int dbg_draw_panel_tabs(const FcState* state,
                        "Training reward parity");
         dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL, "cfg:%s%s", cfg_name,
                        reward_config_loaded ? "" : " (defaults)");
-        dbg_print_line(x, &by, lh, 8, dbg_reward_color(b->total),
+        dbg_print_line(x, &by, lh + 2, 8, dbg_reward_color(b->total),
                        "total:%+.4f noatk_t:%d", b->total,
                        reward_runtime->ticks_since_attack);
-        dbg_print_line(x, &by, lh + 2, 8, DBG_COL_LABEL, "threat:%d",
-                       b->any_threat);
 
         {
             struct {
                 const char* name;
                 float value;
             } terms[] = {
-                {"dmg_dealt", b->damage_dealt},
                 {"progress", b->progress},
                 {"dmg_taken", b->damage_taken},
-                {"npc_kill", b->npc_kill},
-                {"wave_clear", b->wave_clear},
-                {"jad_kill", b->jad_kill},
                 {"complete", b->cave_complete},
                 {"death", b->player_death},
-                {"jad_ok", b->correct_jad_prayer},
-                {"danger_ok", b->correct_danger_prayer},
                 {"pray_lost", b->prayer_lost},
-                {"pray_waste", b->unnecessary_prayer},
-                {"wave_stall", b->wave_stall},
                 {"no_progress", b->no_progress},
                 {"no_attack", b->no_attack},
-                {"jad_heal", b->jad_heal},
                 {"npc_heal", b->npc_heal},
                 {"invalid", b->invalid_action},
                 {"tick_pen", b->tick_penalty},

@@ -940,7 +940,7 @@ static void native_config_test(void) {
     assert(puf_ini_get(&ini, "train", "vtrace") == 0);
     assert(puf_ini_get(&ini, "base", "reset_every_horizon") == 0);
     assert(puf_ini_get(&ini, "base", "async") == 1);
-    assert(puf_ini_get(&ini, "env", "w_correct_danger_prayer") == 0);
+    assert(puf_ini_get(&ini, "env", "shape_npc_heal_penalty") == -0.005);
     assert(puf_ini_get(&ini, "env", "obs_ablate_incoming_aggregates") == 1);
     puf_ini_free(&ini);
     puts("native config: merged settings, batch geometry and CLI precedence passed");
