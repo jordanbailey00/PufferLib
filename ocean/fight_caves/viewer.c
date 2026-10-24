@@ -51,27 +51,6 @@
 
 /* ===================== Asset loading ===================== */
 
-/* Io */
-
-static inline bool fc_read_exact(FILE* f, void* dst, size_t elem_size,
-                                 size_t elem_count, const char* path,
-                                 const char* what) {
-    if (fread(dst, elem_size, elem_count, f) != elem_count) {
-        fprintf(stderr, "%s: short read while loading %s\n", path, what);
-        return false;
-    }
-    return true;
-}
-
-static inline bool fc_seek(FILE* f, long offset, int origin,
-                           const char* path, const char* what) {
-    if (fseek(f, offset, origin) != 0) {
-        fprintf(stderr, "%s: seek failed while loading %s\n", path, what);
-        return false;
-    }
-    return true;
-}
-
 /* Assets */
 
 #define FC_ASSET_PATH_MAX 1024
@@ -313,10 +292,6 @@ FILE* fc_asset_fopen(const char* logical_path, const char* mode) {
     return f;
 }
 
-int fc_asset_close(FILE* f) {
-    return f ? fclose(f) : 0;
-}
-
 unsigned char* fc_asset_read_all(const char* logical_path, size_t* out_size) {
     FILE* f = fc_asset_fopen(logical_path, "rb");
     long size;
@@ -327,28 +302,28 @@ unsigned char* fc_asset_read_all(const char* logical_path, size_t* out_size) {
     if (!f) return NULL;
     if (fseek(f, 0, SEEK_END) != 0) {
         fprintf(stderr, "%s: seek failed while reading asset\n", logical_path);
-        fc_asset_close(f);
+        fclose(f);
         return NULL;
     }
     size = ftell(f);
     if (size <= 0) {
         fprintf(stderr, "%s: empty or unreadable asset\n", logical_path);
-        fc_asset_close(f);
+        fclose(f);
         return NULL;
     }
     if (fseek(f, 0, SEEK_SET) != 0) {
         fprintf(stderr, "%s: seek failed while reading asset\n", logical_path);
-        fc_asset_close(f);
+        fclose(f);
         return NULL;
     }
     data = malloc((size_t)size);
     if (!data) {
         fprintf(stderr, "%s: out of memory while reading asset\n", logical_path);
-        fc_asset_close(f);
+        fclose(f);
         return NULL;
     }
     got = fread(data, 1, (size_t)size, f);
-    fc_asset_close(f);
+    fclose(f);
     if (got != (size_t)size) {
         fprintf(stderr, "%s: short read while reading asset\n", logical_path);
         free(data);
@@ -356,6 +331,122 @@ unsigned char* fc_asset_read_all(const char* logical_path, size_t* out_size) {
     }
     if (out_size) *out_size = (size_t)size;
     return data;
+}
+
+/* Asset Reader */
+
+/* Bounds-checked reader over a whole asset file. The first failure (a short
+ * file, a bad header or an allocation failure) prints one message and clears
+ * ok; every later read is a no-op that yields zeros or NULL, so a loader can
+ * read a whole record and check ok once. Fields are copied as stored: the
+ * asset files are little-endian like every platform the viewer supports. */
+typedef struct {
+    unsigned char* data;
+    size_t size;
+    size_t pos;
+    int ok;
+    const char* path;
+} FcReader;
+
+static int fc_reader_open(FcReader* r, const char* path) {
+    r->path = path;
+    r->pos = 0;
+    r->data = fc_asset_read_all(path, &r->size);
+    r->ok = r->data != NULL;
+    return r->ok;
+}
+
+static void fc_reader_close(FcReader* r) {
+    free(r->data);
+    r->data = NULL;
+}
+
+static void fc_reader_fail(FcReader* r, const char* reason) {
+    if (r->ok) fprintf(stderr, "%s: %s\n", r->path, reason);
+    r->ok = 0;
+}
+
+static void fc_reader_require(FcReader* r, int condition, const char* reason) {
+    if (!condition) fc_reader_fail(r, reason);
+}
+
+/* The next count * size bytes, or NULL once the reader has failed. */
+static const unsigned char* fc_reader_take(FcReader* r, size_t count,
+                                           size_t size) {
+    if (r->ok && size > 0 && count > (r->size - r->pos) / size)
+        fc_reader_fail(r, "file is truncated");
+    if (!r->ok) return NULL;
+    const unsigned char* bytes = r->data + r->pos;
+    r->pos += count * size;
+    return bytes;
+}
+
+static void fc_read(FcReader* r, void* dst, size_t count, size_t size) {
+    const unsigned char* bytes = fc_reader_take(r, count, size);
+    if (bytes) memcpy(dst, bytes, count * size);
+    else memset(dst, 0, count * size);
+}
+
+static uint8_t fc_read_u8(FcReader* r) {
+    uint8_t value;
+    fc_read(r, &value, 1, sizeof(value));
+    return value;
+}
+
+static uint16_t fc_read_u16(FcReader* r) {
+    uint16_t value;
+    fc_read(r, &value, 1, sizeof(value));
+    return value;
+}
+
+static int16_t fc_read_i16(FcReader* r) {
+    int16_t value;
+    fc_read(r, &value, 1, sizeof(value));
+    return value;
+}
+
+static uint32_t fc_read_u32(FcReader* r) {
+    uint32_t value;
+    fc_read(r, &value, 1, sizeof(value));
+    return value;
+}
+
+static int32_t fc_read_i32(FcReader* r) {
+    int32_t value;
+    fc_read(r, &value, 1, sizeof(value));
+    return value;
+}
+
+static float fc_read_f32(FcReader* r) {
+    float value;
+    fc_read(r, &value, 1, sizeof(value));
+    return value;
+}
+
+static void fc_reader_skip(FcReader* r, size_t bytes) {
+    fc_reader_take(r, bytes, 1);
+}
+
+static void fc_reader_seek(FcReader* r, size_t pos) {
+    if (r->ok && pos > r->size) fc_reader_fail(r, "file is truncated");
+    if (r->ok) r->pos = pos;
+}
+
+/* A zeroed array of count elements. NULL when count is 0 or the reader has
+ * failed, so callers check r->ok rather than the pointer. */
+static void* fc_alloc_array(FcReader* r, size_t count, size_t size) {
+    if (!r->ok || count == 0 || size == 0) return NULL;
+    void* array = calloc(count, size);
+    if (!array) fc_reader_fail(r, "out of memory");
+    return array;
+}
+
+/* Reads count elements into a new array; NULL as for fc_alloc_array. */
+static void* fc_read_array(FcReader* r, size_t count, size_t size) {
+    const unsigned char* bytes = fc_reader_take(r, count, size);
+    void* array = bytes ? fc_alloc_array(r, count, size) : NULL;
+    if (array) memcpy(array, bytes, count * size);
+    return array;
 }
 
 /* Asset Raylib */
@@ -456,42 +547,21 @@ static int fc_companion_path(char* out, size_t cap, const char* path,
 static void fc_animated_atlas_load_anims(FcAnimatedAtlas* atlas,
                                          const char* atlas_path) {
     char path[FC_ASSET_PATH_MAX];
-    FILE* file;
-    uint32_t magic = 0;
-    uint32_t version = 0;
-    uint32_t count = 0;
-    FcTextureAnimRow* rows;
+    FcReader r;
 
     if (!atlas || !atlas->base_pixels || !atlas->pixels
             || !fc_companion_path(path, sizeof(path), atlas_path, ".tanim")
-            || !fc_asset_exists(path))
+            || !fc_asset_exists(path) || !fc_reader_open(&r, path))
         return;
-    file = fc_asset_fopen(path, "rb");
-    if (!file) return;
-    if (!fc_read_exact(file, &magic, sizeof(magic), 1, path, "tanim magic")
-            || !fc_read_exact(file, &version, sizeof(version), 1, path,
-                              "tanim version")
-            || !fc_read_exact(file, &count, sizeof(count), 1, path,
-                              "tanim count")
-            || magic != FC_TEXTURE_ANIM_MAGIC
-            || version != FC_TEXTURE_ANIM_VERSION) {
-        fc_asset_close(file);
-        return;
-    }
-    rows = count > 0 ? calloc(count, sizeof(*rows)) : NULL;
-    if (count > 0 && !rows) {
-        fc_asset_close(file);
-        return;
-    }
-    for (uint32_t i = 0; i < count; i++) {
-        if (!fc_read_exact(file, &rows[i], sizeof(rows[i]), 1, path,
-                           "tanim row")) {
-            free(rows);
-            fc_asset_close(file);
-            return;
-        }
-    }
-    fc_asset_close(file);
+    uint32_t magic = fc_read_u32(&r);
+    uint32_t version = fc_read_u32(&r);
+    uint32_t count = fc_read_u32(&r);
+    fc_reader_require(&r, magic == FC_TEXTURE_ANIM_MAGIC
+                          && version == FC_TEXTURE_ANIM_VERSION,
+                      "unsupported texture animation format");
+    FcTextureAnimRow* rows = fc_read_array(&r, count, sizeof(*rows));
+    fc_reader_close(&r);
+    if (!r.ok) return;
     atlas->anims = rows;
     atlas->anim_count = (int)count;
     fprintf(stderr, "animated atlas: %d cells loaded from %s\n",
@@ -501,44 +571,22 @@ static void fc_animated_atlas_load_anims(FcAnimatedAtlas* atlas,
 int fc_animated_atlas_load(FcAnimatedAtlas* atlas, const char* atlas_path,
                            int enable_animation) {
     FcAnimatedAtlas loaded = {0};
-    FILE* file;
-    uint32_t magic = 0;
-    uint32_t width = 0;
-    uint32_t height = 0;
-    size_t pixel_count;
-    size_t pixel_size;
-    unsigned char* source_pixels;
+    FcReader r;
     Image image;
 
-    if (!atlas || !atlas_path || atlas->texture.id > 0) return 0;
-    file = fc_asset_fopen(atlas_path, "rb");
-    if (!file) return 0;
-    if (!fc_read_exact(file, &magic, sizeof(magic), 1, atlas_path,
-                       "atlas magic")
-            || !fc_read_exact(file, &width, sizeof(width), 1, atlas_path,
-                              "atlas width")
-            || !fc_read_exact(file, &height, sizeof(height), 1, atlas_path,
-                              "atlas height")
-            || magic != FC_ATLAS_MAGIC || width == 0 || height == 0
-            || (size_t)width > SIZE_MAX / (size_t)height) {
-        fc_asset_close(file);
+    if (!atlas || !atlas_path || atlas->texture.id > 0
+            || !fc_reader_open(&r, atlas_path))
         return 0;
-    }
-    pixel_count = (size_t)width * (size_t)height;
-    if (pixel_count > SIZE_MAX / 4) {
-        fc_asset_close(file);
-        return 0;
-    }
-    pixel_size = pixel_count * 4;
-    source_pixels = malloc(pixel_size);
-    if (!source_pixels
-            || !fc_read_exact(file, source_pixels, 1, pixel_size, atlas_path,
-                              "atlas pixels")) {
-        free(source_pixels);
-        fc_asset_close(file);
-        return 0;
-    }
-    fc_asset_close(file);
+    uint32_t magic = fc_read_u32(&r);
+    uint32_t width = fc_read_u32(&r);
+    uint32_t height = fc_read_u32(&r);
+    fc_reader_require(&r, magic == FC_ATLAS_MAGIC && width > 0 && height > 0,
+                      "not a texture atlas");
+    unsigned char* source_pixels =
+        fc_read_array(&r, (size_t)width * height, 4);
+    fc_reader_close(&r);
+    if (!r.ok) return 0;
+    size_t pixel_size = (size_t)width * height * 4;
 
     image = (Image) {
         .data = source_pixels,
@@ -757,59 +805,6 @@ static void anim_init_trig(void) {
 /* loading                                                                    */
 /* ======================================================================== */
 
-typedef struct {
-    const uint8_t* p;
-    size_t remaining;
-    const char* path;
-} AnimCursor;
-
-static int anim_take(AnimCursor* c, void* dst, size_t size, const char* what) {
-    if (!c || c->remaining < size) {
-        fprintf(stderr, "%s: short read while loading %s\n",
-                c && c->path ? c->path : "(anim)", what);
-        return 0;
-    }
-    if (dst) memcpy(dst, c->p, size);
-    c->p += size;
-    c->remaining -= size;
-    return 1;
-}
-
-static int anim_read_u8(AnimCursor* c, uint8_t* out, const char* what) {
-    return anim_take(c, out, 1, what);
-}
-
-static int anim_read_u16(AnimCursor* c, uint16_t* out, const char* what) {
-    uint8_t b[2];
-    if (!anim_take(c, b, sizeof(b), what)) return 0;
-    *out = (uint16_t)b[0] | ((uint16_t)b[1] << 8);
-    return 1;
-}
-
-static int anim_read_i16(AnimCursor* c, int16_t* out, const char* what) {
-    uint16_t u = 0;
-    if (!anim_read_u16(c, &u, what)) return 0;
-    *out = (int16_t)u;
-    return 1;
-}
-
-static int anim_read_i8(AnimCursor* c, int8_t* out, const char* what) {
-    uint8_t u = 0;
-    if (!anim_read_u8(c, &u, what)) return 0;
-    *out = (int8_t)u;
-    return 1;
-}
-
-static int anim_read_u32(AnimCursor* c, uint32_t* out, const char* what) {
-    uint8_t b[4];
-    if (!anim_take(c, b, sizeof(b), what)) return 0;
-    *out = (uint32_t)b[0]
-         | ((uint32_t)b[1] << 8)
-         | ((uint32_t)b[2] << 16)
-         | ((uint32_t)b[3] << 24);
-    return 1;
-}
-
 void anim_cache_free(AnimCache* cache) {
     if (!cache) return;
 
@@ -837,271 +832,125 @@ void anim_cache_free(AnimCache* cache) {
     free(cache);
 }
 
+/* Counts are stored only once their arrays exist, so anim_cache_free can
+ * release a partly loaded cache. */
+static void anim_read_framebase(FcReader* r, AnimFrameBase* fb) {
+    fb->base_id = fc_read_u16(r);
+    uint8_t slot_count = fc_read_u8(r);
+    fb->types = fc_read_array(r, slot_count, 1);
+    fb->map_lengths = fc_alloc_array(r, slot_count, 1);
+    fb->frame_maps = fc_alloc_array(r, slot_count, sizeof(uint8_t*));
+    if (!r->ok) return;
+    fb->slot_count = slot_count;
+    for (int s = 0; s < slot_count; s++) {
+        fb->map_lengths[s] = fc_read_u8(r);
+        fb->frame_maps[s] = fc_read_array(r, fb->map_lengths[s], 1);
+    }
+}
+
+static void anim_read_sequence(FcReader* r, AnimSequence* seq,
+                               int format_version) {
+    seq->seq_id = fc_read_u16(r);
+    uint16_t frame_count = fc_read_u16(r);
+    seq->interleave_count = fc_read_u8(r);
+    seq->interleave_order = fc_read_array(r, seq->interleave_count, 1);
+
+    if (format_version >= 3) {
+        seq->frame_step = fc_read_i16(r);
+        seq->preanim_move = (int8_t)fc_read_u8(r);
+        seq->postanim_move = (int8_t)fc_read_u8(r);
+        seq->forced_priority = fc_read_u8(r);
+        seq->max_loops = fc_read_u8(r);
+        seq->reply_mode = (int8_t)fc_read_u8(r);
+        seq->stretches = fc_read_u8(r);
+        seq->walk_flag = seq->postanim_move;
+    } else {
+        seq->walk_flag = (int8_t)fc_read_u8(r);
+        seq->frame_step = -1;
+        seq->preanim_move = seq->interleave_count > 0 ? 2 : 0;
+        seq->postanim_move = seq->walk_flag >= 0
+            ? seq->walk_flag
+            : (seq->interleave_count > 0 ? 2 : 0);
+        seq->forced_priority = 5;
+        seq->max_loops = 99;
+        seq->reply_mode = -1;
+        seq->stretches = 0;
+    }
+
+    seq->frames = fc_alloc_array(r, frame_count, sizeof(AnimSequenceFrame));
+    if (!r->ok) return;
+    seq->frame_count = frame_count;
+    for (int fi = 0; fi < frame_count; fi++) {
+        AnimSequenceFrame* sf = &seq->frames[fi];
+        sf->delay = fc_read_u16(r);
+        sf->frame.framebase_id = fc_read_u16(r);
+        uint8_t transform_count = fc_read_u8(r);
+        sf->frame.transforms =
+            fc_alloc_array(r, transform_count, sizeof(AnimTransform));
+        if (!r->ok) return;
+        sf->frame.transform_count = transform_count;
+        for (int t = 0; t < transform_count; t++) {
+            AnimTransform* transform = &sf->frame.transforms[t];
+            transform->slot_index = fc_read_u8(r);
+            transform->dx = fc_read_i16(r);
+            transform->dy = fc_read_i16(r);
+            transform->dz = fc_read_i16(r);
+        }
+    }
+}
+
 AnimCache* anim_cache_load(const char* path) {
-    size_t size = 0;
-    uint8_t* buf = fc_asset_read_all(path, &size);
-    AnimCursor cur;
-    uint32_t magic = 0;
+    AnimCache* cache = calloc(1, sizeof(AnimCache));
+    FcReader r;
+    if (!cache || !fc_reader_open(&r, path)) {
+        free(cache);
+        return NULL;
+    }
+
     uint32_t base_count = 0;
     uint32_t seq_count = 0;
-    uint16_t format_version = 1;
-    AnimCache* cache;
-
-    if (!buf) return NULL;
-    cur.p = buf;
-    cur.remaining = size;
-    cur.path = path;
-
-    if (!anim_read_u32(&cur, &magic, "anim magic")) {
-        free(buf);
-        return NULL;
-    }
+    int format_version = 1;
+    uint32_t magic = fc_read_u32(&r);
     if (magic == ANIM_MAGIC) {
-        uint16_t legacy_base_count = 0;
-        uint16_t legacy_seq_count = 0;
-        if (!anim_read_u16(&cur, &legacy_base_count, "framebase count") ||
-            !anim_read_u16(&cur, &legacy_seq_count, "sequence count")) {
-            free(buf);
-            return NULL;
-        }
-        base_count = legacy_base_count;
-        seq_count = legacy_seq_count;
+        base_count = fc_read_u16(&r);
+        seq_count = fc_read_u16(&r);
     } else if (magic == ANIM2_MAGIC) {
-        uint16_t version = 0;
-        uint16_t header_size = 0;
-        uint32_t sequence_frame_count = 0;
-        uint32_t flags = 0;
-        (void)sequence_frame_count;
-        (void)flags;
-        if (!anim_read_u16(&cur, &version, "anim version") ||
-            !anim_read_u16(&cur, &header_size, "anim header size") ||
-            !anim_read_u32(&cur, &base_count, "framebase count") ||
-            !anim_read_u32(&cur, &seq_count, "sequence count") ||
-            !anim_read_u32(&cur, &sequence_frame_count, "sequence frame count") ||
-            !anim_read_u32(&cur, &flags, "anim flags")) {
-            free(buf);
-            return NULL;
-        }
-        if (version < ANIM2_MIN_VERSION || version > ANIM2_VERSION ||
-            header_size < ANIM2_HEADER_SIZE) {
-            fprintf(stderr, "anim_cache_load: unsupported ANM2 v%u header %u\n",
-                    version, header_size);
-            free(buf);
-            return NULL;
-        }
+        uint16_t version = fc_read_u16(&r);
+        uint16_t header_size = fc_read_u16(&r);
+        base_count = fc_read_u32(&r);
+        seq_count = fc_read_u32(&r);
+        fc_reader_skip(&r, 8); /* total sequence frames and flags: unused */
+        fc_reader_require(&r, version >= ANIM2_MIN_VERSION
+                              && version <= ANIM2_VERSION
+                              && header_size >= ANIM2_HEADER_SIZE,
+                          "unsupported ANM2 version or header size");
+        if (header_size > ANIM2_HEADER_SIZE)
+            fc_reader_skip(&r, header_size - ANIM2_HEADER_SIZE);
         format_version = version;
-        if (header_size > ANIM2_HEADER_SIZE &&
-            !anim_take(&cur, NULL, header_size - ANIM2_HEADER_SIZE,
-                       "anim header extension")) {
-            free(buf);
-            return NULL;
-        }
     } else {
-        fprintf(stderr, "anim_cache_load: bad magic 0x%08X\n", magic);
-        free(buf);
-        return NULL;
+        fc_reader_fail(&r, "not an animation file");
+    }
+    fc_reader_require(&r, base_count <= 65535u && seq_count <= 65535u,
+                      "unreasonable framebase or sequence count");
+
+    cache->bases = fc_alloc_array(&r, base_count, sizeof(AnimFrameBase));
+    cache->base_ids = fc_alloc_array(&r, base_count, sizeof(uint16_t));
+    if (r.ok) cache->base_count = (int)base_count;
+    for (int i = 0; r.ok && i < cache->base_count; i++) {
+        anim_read_framebase(&r, &cache->bases[i]);
+        cache->base_ids[i] = cache->bases[i].base_id;
     }
 
-    if (base_count > 65535u || seq_count > 65535u) {
-        fprintf(stderr, "anim_cache_load: unreasonable counts %u/%u\n",
-                base_count, seq_count);
-        free(buf);
-        return NULL;
-    }
+    cache->sequences = fc_alloc_array(&r, seq_count, sizeof(AnimSequence));
+    if (r.ok) cache->seq_count = (int)seq_count;
+    for (int i = 0; r.ok && i < cache->seq_count; i++)
+        anim_read_sequence(&r, &cache->sequences[i], format_version);
 
-    cache = (AnimCache*)calloc(1, sizeof(AnimCache));
-    if (!cache) {
-        free(buf);
-        return NULL;
-    }
-    cache->base_count = (int)base_count;
-    cache->seq_count = (int)seq_count;
-
-    /* load framebases */
-    cache->bases = (AnimFrameBase*)calloc(cache->base_count, sizeof(AnimFrameBase));
-    cache->base_ids = (uint16_t*)malloc(cache->base_count * sizeof(uint16_t));
-    if (!cache->bases || !cache->base_ids) {
-        free(buf);
+    fc_reader_close(&r);
+    if (!r.ok) {
         anim_cache_free(cache);
         return NULL;
     }
-
-    for (int i = 0; i < cache->base_count; i++) {
-        AnimFrameBase* fb = &cache->bases[i];
-        if (!anim_read_u16(&cur, &fb->base_id, "framebase id")) {
-            free(buf);
-            anim_cache_free(cache);
-            return NULL;
-        }
-        cache->base_ids[i] = fb->base_id;
-        if (!anim_read_u8(&cur, &fb->slot_count, "framebase slot count")) {
-            free(buf);
-            anim_cache_free(cache);
-            return NULL;
-        }
-
-        fb->types = (uint8_t*)malloc(fb->slot_count);
-        for (int s = 0; s < fb->slot_count; s++) {
-            if (!fb->types ||
-                !anim_read_u8(&cur, &fb->types[s], "framebase slot type")) {
-                free(buf);
-                anim_cache_free(cache);
-                return NULL;
-            }
-        }
-
-        fb->map_lengths = (uint8_t*)malloc(fb->slot_count);
-        fb->frame_maps = (uint8_t**)malloc(fb->slot_count * sizeof(uint8_t*));
-        if (!fb->map_lengths || !fb->frame_maps) {
-            free(buf);
-            anim_cache_free(cache);
-            return NULL;
-        }
-        for (int s = 0; s < fb->slot_count; s++) {
-            uint8_t ml = 0;
-            if (!anim_read_u8(&cur, &ml, "framebase map length")) {
-                free(buf);
-                anim_cache_free(cache);
-                return NULL;
-            }
-            fb->map_lengths[s] = ml;
-            fb->frame_maps[s] = (uint8_t*)malloc(ml);
-            if (ml > 0 && !fb->frame_maps[s]) {
-                free(buf);
-                anim_cache_free(cache);
-                return NULL;
-            }
-            for (int j = 0; j < ml; j++) {
-                if (!anim_read_u8(&cur, &fb->frame_maps[s][j],
-                                  "framebase map label")) {
-                    free(buf);
-                    anim_cache_free(cache);
-                    return NULL;
-                }
-            }
-        }
-    }
-
-    /* load sequences */
-    cache->sequences = (AnimSequence*)calloc(cache->seq_count, sizeof(AnimSequence));
-    if (!cache->sequences) {
-        free(buf);
-        anim_cache_free(cache);
-        return NULL;
-    }
-    for (int i = 0; i < cache->seq_count; i++) {
-        AnimSequence* seq = &cache->sequences[i];
-        if (!anim_read_u16(&cur, &seq->seq_id, "sequence id") ||
-            !anim_read_u16(&cur, &seq->frame_count, "sequence frame count")) {
-            free(buf);
-            anim_cache_free(cache);
-            return NULL;
-        }
-
-        if (!anim_read_u8(&cur, &seq->interleave_count, "sequence interleave count")) {
-            free(buf);
-            anim_cache_free(cache);
-            return NULL;
-        }
-        if (seq->interleave_count > 0) {
-            seq->interleave_order = (uint8_t*)malloc(seq->interleave_count);
-            if (!seq->interleave_order) {
-                free(buf);
-                anim_cache_free(cache);
-                return NULL;
-            }
-            for (int j = 0; j < seq->interleave_count; j++) {
-                if (!anim_read_u8(&cur, &seq->interleave_order[j],
-                                  "sequence interleave slot")) {
-                    free(buf);
-                    anim_cache_free(cache);
-                    return NULL;
-                }
-            }
-        }
-
-        if (format_version >= 3) {
-            if (!anim_read_i16(&cur, &seq->frame_step,
-                               "sequence frame step") ||
-                !anim_read_i8(&cur, &seq->preanim_move,
-                              "sequence pre-animation movement") ||
-                !anim_read_i8(&cur, &seq->postanim_move,
-                              "sequence post-animation movement") ||
-                !anim_read_u8(&cur, &seq->forced_priority,
-                              "sequence forced priority") ||
-                !anim_read_u8(&cur, &seq->max_loops,
-                              "sequence max loops") ||
-                !anim_read_i8(&cur, &seq->reply_mode,
-                              "sequence reply mode") ||
-                !anim_read_u8(&cur, &seq->stretches,
-                              "sequence stretches")) {
-                free(buf);
-                anim_cache_free(cache);
-                return NULL;
-            }
-            seq->walk_flag = seq->postanim_move;
-        } else {
-            uint8_t walk_flag = 0;
-            if (!anim_read_u8(&cur, &walk_flag, "sequence walk flag")) {
-                free(buf);
-                anim_cache_free(cache);
-                return NULL;
-            }
-            seq->walk_flag = (int8_t)walk_flag;
-            seq->frame_step = -1;
-            seq->preanim_move = seq->interleave_count > 0 ? 2 : 0;
-            seq->postanim_move = seq->walk_flag >= 0
-                ? seq->walk_flag
-                : (seq->interleave_count > 0 ? 2 : 0);
-            seq->forced_priority = 5;
-            seq->max_loops = 99;
-            seq->reply_mode = -1;
-            seq->stretches = 0;
-        }
-
-        seq->frames = (AnimSequenceFrame*)calloc(seq->frame_count, sizeof(AnimSequenceFrame));
-        if (!seq->frames) {
-            free(buf);
-            anim_cache_free(cache);
-            return NULL;
-        }
-        for (int fi = 0; fi < seq->frame_count; fi++) {
-            AnimSequenceFrame* sf = &seq->frames[fi];
-            if (!anim_read_u16(&cur, &sf->delay, "sequence frame delay") ||
-                !anim_read_u16(&cur, &sf->frame.framebase_id, "sequence framebase id") ||
-                !anim_read_u8(&cur, &sf->frame.transform_count, "sequence transform count")) {
-                free(buf);
-                anim_cache_free(cache);
-                return NULL;
-            }
-
-            if (sf->frame.transform_count > 0) {
-                sf->frame.transforms = (AnimTransform*)malloc(
-                    sf->frame.transform_count * sizeof(AnimTransform));
-                if (!sf->frame.transforms) {
-                    free(buf);
-                    anim_cache_free(cache);
-                    return NULL;
-                }
-                for (int t = 0; t < sf->frame.transform_count; t++) {
-                    if (!anim_read_u8(&cur, &sf->frame.transforms[t].slot_index,
-                                      "sequence transform slot") ||
-                        !anim_read_i16(&cur, &sf->frame.transforms[t].dx,
-                                       "sequence transform dx") ||
-                        !anim_read_i16(&cur, &sf->frame.transforms[t].dy,
-                                       "sequence transform dy") ||
-                        !anim_read_i16(&cur, &sf->frame.transforms[t].dz,
-                                       "sequence transform dz")) {
-                        free(buf);
-                        anim_cache_free(cache);
-                        return NULL;
-                    }
-                }
-            }
-        }
-    }
-
-    free(buf);
     anim_init_trig();
 
     fprintf(stderr, "anim_cache_load: loaded %d framebases, %d sequences from %s\n",
@@ -1821,275 +1670,141 @@ void models_free(ModelSet *set) {
     free(set);
 }
 
+/* Reads the rest of one model record (its id is already read); end is where
+ * the next record starts. Textured files may follow the base data with a MUV1
+ * block holding each face's UV projection, used to re-texture posed vertices.
+ * Arrays go straight into the entry so models_free releases them on failure. */
+static void model_entry_read(FcReader *r, ModelEntry *entry, uint32_t id,
+                             int has_textures, size_t end,
+                             Texture2D atlas_texture) {
+    int vertex_count = fc_read_u16(r);
+    int face_count = fc_read_u16(r);
+    int base_count = fc_read_u16(r);
+    Mesh mesh = {.vertexCount = vertex_count, .triangleCount = face_count};
+    mesh.vertices = fc_read_array(r, (size_t)vertex_count * 3, sizeof(float));
+    mesh.colors = fc_read_array(r, (size_t)vertex_count * 4, 1);
+    if (has_textures)
+        mesh.texcoords = fc_read_array(r, (size_t)vertex_count * 2,
+                                       sizeof(float));
+    entry->base_verts = fc_read_array(r, (size_t)base_count * 3,
+                                      sizeof(int16_t));
+    entry->vertex_skins = fc_read_array(r, base_count, 1);
+    entry->face_indices = fc_read_array(r, (size_t)face_count * 3,
+                                        sizeof(uint16_t));
+    entry->face_priorities = fc_read_array(r, face_count, 1);
+    if (r->ok && has_textures && end >= r->pos + 8) {
+        uint32_t uv_magic = fc_read_u32(r);
+        uint32_t uv_count = fc_read_u32(r);
+        if (uv_magic == MUV1_MAGIC && uv_count == (uint32_t)face_count)
+            entry->face_uvs = fc_alloc_array(r, face_count,
+                                             sizeof(ModelFaceUvInfo));
+        for (int i = 0; entry->face_uvs && i < face_count; i++) {
+            ModelFaceUvInfo *uv = &entry->face_uvs[i];
+            uv->textured = fc_read_u8(r) != 0;
+            fc_reader_skip(r, 3);
+            uv->tex_a = fc_read_u16(r);
+            uv->tex_b = fc_read_u16(r);
+            uv->tex_c = fc_read_u16(r);
+            uv->u_base = fc_read_f32(r);
+            uv->v_base = fc_read_f32(r);
+            uv->u_scale = fc_read_f32(r);
+            uv->v_scale = fc_read_f32(r);
+            uv->repeat_v_margin = fc_read_f32(r);
+        }
+    }
+    entry->rest_verts = fc_alloc_array(r, (size_t)vertex_count * 3,
+                                       sizeof(float));
+    mesh.normals = fc_alloc_array(r, (size_t)vertex_count * 3, sizeof(float));
+    if (!r->ok) {
+        free(mesh.vertices);
+        free(mesh.colors);
+        free(mesh.texcoords);
+        free(mesh.normals);
+        return;
+    }
+
+    // OSRS units -> tile units, flip Z for Raylib
+    float *verts = mesh.vertices;
+    for (int i = 0; i < vertex_count; i++) {
+        verts[i*3]   /=  128.0f;
+        verts[i*3+1] /=  128.0f;
+        verts[i*3+2] /= -128.0f;
+    }
+    memcpy(entry->rest_verts, verts, (size_t)vertex_count * 3 * sizeof(float));
+
+    for (int i = 0; i < face_count; i++) {
+        int i0 = i*3, i1 = i*3+1, i2 = i*3+2;
+        float ax = verts[i1*3]-verts[i0*3], ay = verts[i1*3+1]-verts[i0*3+1], az = verts[i1*3+2]-verts[i0*3+2];
+        float bx = verts[i2*3]-verts[i0*3], by = verts[i2*3+1]-verts[i0*3+1], bz = verts[i2*3+2]-verts[i0*3+2];
+        float nx = ay*bz-az*by, ny = az*bx-ax*bz, nz = ax*by-ay*bx;
+        float len = sqrtf(nx*nx+ny*ny+nz*nz);
+        if (len > 1e-4f) { nx/=len; ny/=len; nz/=len; }
+        for (int j = 0; j < 3; j++) {
+            mesh.normals[(i*3+j)*3] = nx; mesh.normals[(i*3+j)*3+1] = ny; mesh.normals[(i*3+j)*3+2] = nz;
+        }
+    }
+    UploadMesh(&mesh, false);
+
+    entry->model_id = id;
+    entry->model = LoadModelFromMesh(mesh);
+    if (has_textures)
+        entry->model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture =
+            atlas_texture;
+    entry->loaded = 1;
+    entry->rest_texcoords = mesh.texcoords && vertex_count > 0
+        ? malloc((size_t)vertex_count * 2 * sizeof(float)) : NULL;
+    if (entry->rest_texcoords)
+        memcpy(entry->rest_texcoords, mesh.texcoords,
+               (size_t)vertex_count * 2 * sizeof(float));
+    entry->base_vert_count = base_count;
+    entry->face_count = face_count;
+    fprintf(stderr, "  model %u: %d tris, %d base verts\n", id, face_count,
+            base_count);
+}
+
 static ModelSet *models_load_filtered(const char *path, const uint32_t *ids,
                                       int id_count, Texture2D atlas_texture) {
-    FILE *f = fc_asset_fopen(path, "rb");
-    if (!f) { fprintf(stderr, "models: can't open %s\n", path); return NULL; }
-
-    uint32_t magic, count;
-    if (!fc_read_exact(f, &magic, sizeof(magic), 1, path, "model magic")
-            || (magic != MDL2_MAGIC && magic != MDL3_MAGIC)) {
-        fprintf(stderr, "models: bad magic\n");
-        fc_asset_close(f);
-        return NULL;
-    }
-    int has_tex = (magic == MDL3_MAGIC);
-    if (!fc_read_exact(f, &count, sizeof(count), 1, path, "model count")) {
-        fc_asset_close(f);
-        return NULL;
-    }
-    uint32_t *offsets = malloc(count * 4);
-    if (!offsets
-            || !fc_read_exact(f, offsets, sizeof(offsets[0]), count, path, "model offsets")) {
-        free(offsets);
-        fc_asset_close(f);
-        return NULL;
-    }
-
     ModelSet *set = calloc(1, sizeof(ModelSet));
-    if (!set) {
-        free(offsets);
-        fc_asset_close(f);
-        return NULL;
-    }
-    set->entries = calloc(count, sizeof(ModelEntry));
-    set->index_limit = MODEL_ID_INDEX_MAX;
-    set->index_by_id = malloc(sizeof(int) * set->index_limit);
-    if (!set->entries || !set->index_by_id) {
-        free(offsets);
-        fc_asset_close(f);
-        models_free(set);
-        return NULL;
-    }
-    for (int i = 0; i < set->index_limit; i++) set->index_by_id[i] = -1;
-    set->count = (int)count;
-    set->has_textures = has_tex;
-
-    if (has_tex && atlas_texture.id == 0) {
-        fprintf(stderr, "models: shared atlas unavailable for %s\n", path);
-        free(offsets);
-        fc_asset_close(f);
-        models_free(set);
+    FcReader r;
+    if (!set || !fc_reader_open(&r, path)) {
+        free(set);
         return NULL;
     }
 
-    long model_file_end = 0;
-    long model_file_pos = ftell(f);
-    if (model_file_pos >= 0 && fseek(f, 0, SEEK_END) == 0) {
-        model_file_end = ftell(f);
-        fseek(f, model_file_pos, SEEK_SET);
+    uint32_t magic = fc_read_u32(&r);
+    uint32_t count = fc_read_u32(&r);
+    fc_reader_require(&r, magic == MDL2_MAGIC || magic == MDL3_MAGIC,
+                      "not a model file");
+    set->has_textures = magic == MDL3_MAGIC;
+    fc_reader_require(&r, !set->has_textures || atlas_texture.id != 0,
+                      "textured models need the shared atlas");
+    uint32_t *offsets = fc_read_array(&r, count, sizeof(uint32_t));
+    set->entries = fc_alloc_array(&r, count, sizeof(ModelEntry));
+    set->index_by_id = fc_alloc_array(&r, MODEL_ID_INDEX_MAX, sizeof(int));
+    if (r.ok) {
+        set->count = (int)count;
+        set->index_limit = MODEL_ID_INDEX_MAX;
+        for (int i = 0; i < set->index_limit; i++) set->index_by_id[i] = -1;
     }
 
     int loaded_count = 0;
-    for (uint32_t m = 0; m < count; m++) {
-        if (!fc_seek(f, offsets[m], SEEK_SET, path, "model offset table")) {
-            free(offsets);
-            fc_asset_close(f);
-            models_free(set);
-            return NULL;
-        }
-        uint32_t mid; uint16_t evc, fc, bvc;
-        if (!fc_read_exact(f, &mid, sizeof(mid), 1, path, "model id")
-                || !fc_read_exact(f, &evc, sizeof(evc), 1, path, "model expanded vertex count")
-                || !fc_read_exact(f, &fc, sizeof(fc), 1, path, "model face count")
-                || !fc_read_exact(f, &bvc, sizeof(bvc), 1, path, "model base vertex count")) {
-            free(offsets);
-            fc_asset_close(f);
-            models_free(set);
-            return NULL;
-        }
-        if (!model_id_filter_contains(ids, id_count, mid)) continue;
-
-        int vc = (int)evc, tc = (int)fc;
-        float *verts = malloc(vc * 3 * sizeof(float));
-        if (!verts
-                || !fc_read_exact(f, verts, sizeof(float), vc * 3, path, "model vertices")) {
-            free(verts);
-            free(offsets);
-            fc_asset_close(f);
-            models_free(set);
-            return NULL;
-        }
-        unsigned char *colors = malloc(vc * 4);
-        if (!colors
-                || !fc_read_exact(f, colors, sizeof(unsigned char), vc * 4, path, "model colors")) {
-            free(verts);
-            free(colors);
-            free(offsets);
-            fc_asset_close(f);
-            models_free(set);
-            return NULL;
-        }
-        float *texcoords = NULL;
-        if (has_tex) {
-            texcoords = malloc(vc * 2 * sizeof(float));
-            if (!texcoords
-                    || !fc_read_exact(f, texcoords, sizeof(float), vc * 2, path, "model texcoords")) {
-                free(verts);
-                free(colors);
-                free(texcoords);
-                free(offsets);
-                fc_asset_close(f);
-                models_free(set);
-                return NULL;
-            }
-        }
-
-        // OSRS units -> tile units, flip Z for Raylib
-        for (int i = 0; i < vc; i++) {
-            verts[i*3]   /=  128.0f;
-            verts[i*3+1] /=  128.0f;
-            verts[i*3+2] /= -128.0f;
-        }
-        float *rest_verts = malloc(vc * 3 * sizeof(float));
-        if (!rest_verts) {
-            free(verts);
-            free(colors);
-            free(offsets);
-            fc_asset_close(f);
-            models_free(set);
-            return NULL;
-        }
-        memcpy(rest_verts, verts, vc * 3 * sizeof(float));
-
-        Mesh mesh = {0};
-        mesh.vertexCount = vc;
-        mesh.triangleCount = tc;
-        mesh.vertices = verts;
-        mesh.colors = colors;
-        mesh.texcoords = texcoords;
-        mesh.normals = calloc(vc * 3, sizeof(float));
-        for (int i = 0; i < tc; i++) {
-            int i0 = i*3, i1 = i*3+1, i2 = i*3+2;
-            float ax = verts[i1*3]-verts[i0*3], ay = verts[i1*3+1]-verts[i0*3+1], az = verts[i1*3+2]-verts[i0*3+2];
-            float bx = verts[i2*3]-verts[i0*3], by = verts[i2*3+1]-verts[i0*3+1], bz = verts[i2*3+2]-verts[i0*3+2];
-            float nx = ay*bz-az*by, ny = az*bx-ax*bz, nz = ax*by-ay*bx;
-            float len = sqrtf(nx*nx+ny*ny+nz*nz);
-            if (len > 1e-4f) { nx/=len; ny/=len; nz/=len; }
-            for (int j = 0; j < 3; j++) {
-                mesh.normals[(i*3+j)*3] = nx; mesh.normals[(i*3+j)*3+1] = ny; mesh.normals[(i*3+j)*3+2] = nz;
-            }
-        }
-        UploadMesh(&mesh, false);
-
-        // Animation data
-        int16_t *bv = malloc(bvc * 3 * sizeof(int16_t));
-        if (!bv
-                || !fc_read_exact(f, bv, sizeof(int16_t), bvc * 3, path, "model base vertices")) {
-            free(offsets);
-            fc_asset_close(f);
-            models_free(set);
-            return NULL;
-        }
-        uint8_t *skins = malloc(bvc);
-        if (!skins
-                || !fc_read_exact(f, skins, sizeof(uint8_t), bvc, path, "model vertex skins")) {
-            free(offsets);
-            fc_asset_close(f);
-            models_free(set);
-            return NULL;
-        }
-        uint16_t *fi = malloc(tc * 3 * sizeof(uint16_t));
-        if (!fi
-                || !fc_read_exact(f, fi, sizeof(uint16_t), tc * 3, path, "model face indices")) {
-            free(offsets);
-            fc_asset_close(f);
-            models_free(set);
-            return NULL;
-        }
-        uint8_t *pri = malloc(tc);
-        if (!pri
-                || !fc_read_exact(f, pri, sizeof(uint8_t), tc, path, "model priorities")) {
-            free(offsets);
-            fc_asset_close(f);
-            models_free(set);
-            return NULL;
-        }
-
-        ModelFaceUvInfo *face_uvs = NULL;
-        long next_off = (m + 1 < count) ? (long)offsets[m + 1] : model_file_end;
-        long opt_pos = ftell(f);
-        if (has_tex && opt_pos >= 0 && next_off >= opt_pos + 8) {
-            uint32_t uv_magic = 0;
-            uint32_t uv_count = 0;
-            if (fc_read_exact(f, &uv_magic, sizeof(uv_magic), 1, path,
-                              "model uv magic")
-                    && fc_read_exact(f, &uv_count, sizeof(uv_count), 1, path,
-                                     "model uv count")
-                    && uv_magic == MUV1_MAGIC && uv_count == (uint32_t)tc) {
-                face_uvs = calloc(tc, sizeof(*face_uvs));
-                if (!face_uvs) {
-                    free(offsets);
-                    fc_asset_close(f);
-                    models_free(set);
-                    return NULL;
-                }
-                for (int i = 0; i < tc; i++) {
-                    uint8_t textured = 0, pad[3];
-                    if (!fc_read_exact(f, &textured, sizeof(textured), 1,
-                                       path, "model uv textured")
-                            || !fc_read_exact(f, pad, sizeof(pad), 1,
-                                              path, "model uv pad")
-                            || !fc_read_exact(f, &face_uvs[i].tex_a,
-                                              sizeof(face_uvs[i].tex_a), 1,
-                                              path, "model uv tex a")
-                            || !fc_read_exact(f, &face_uvs[i].tex_b,
-                                              sizeof(face_uvs[i].tex_b), 1,
-                                              path, "model uv tex b")
-                            || !fc_read_exact(f, &face_uvs[i].tex_c,
-                                              sizeof(face_uvs[i].tex_c), 1,
-                                              path, "model uv tex c")
-                            || !fc_read_exact(f, &face_uvs[i].u_base,
-                                              sizeof(face_uvs[i].u_base), 1,
-                                              path, "model uv u base")
-                            || !fc_read_exact(f, &face_uvs[i].v_base,
-                                              sizeof(face_uvs[i].v_base), 1,
-                                              path, "model uv v base")
-                            || !fc_read_exact(f, &face_uvs[i].u_scale,
-                                              sizeof(face_uvs[i].u_scale), 1,
-                                              path, "model uv u scale")
-                            || !fc_read_exact(f, &face_uvs[i].v_scale,
-                                              sizeof(face_uvs[i].v_scale), 1,
-                                              path, "model uv v scale")
-                            || !fc_read_exact(f,
-                                              &face_uvs[i].repeat_v_margin,
-                                              sizeof(face_uvs[i].repeat_v_margin),
-                                              1, path, "model uv repeat v")) {
-                        free(face_uvs);
-                        free(offsets);
-                        fc_asset_close(f);
-                        models_free(set);
-                        return NULL;
-                    }
-                    face_uvs[i].textured = textured != 0;
-                }
-            } else {
-                fseek(f, opt_pos, SEEK_SET);
-            }
-        }
-
-        Model ray_model = LoadModelFromMesh(mesh);
-        if (has_tex)
-            ray_model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture =
-                atlas_texture;
-
-        set->entries[m] = (ModelEntry){
-            .model_id = mid, .model = ray_model, .loaded = 1,
-            .rest_verts = rest_verts,
-            .rest_texcoords = texcoords && vc > 0
-                ? malloc((size_t)vc * 2 * sizeof(float)) : NULL,
-            .base_verts = bv, .vertex_skins = skins, .face_indices = fi,
-            .face_priorities = pri, .face_uvs = face_uvs,
-            .base_vert_count = (int)bvc, .face_count = tc,
-        };
-        if (texcoords && set->entries[m].rest_texcoords)
-            memcpy(set->entries[m].rest_texcoords, texcoords,
-                   (size_t)vc * 2 * sizeof(float));
-        if (mid < (uint32_t)set->index_limit) set->index_by_id[mid] = (int)m;
+    for (int m = 0; r.ok && m < set->count; m++) {
+        fc_reader_seek(&r, offsets[m]);
+        size_t end = m + 1 < set->count ? offsets[m + 1] : r.size;
+        uint32_t id = fc_read_u32(&r);
+        if (!model_id_filter_contains(ids, id_count, id)) continue;
+        model_entry_read(&r, &set->entries[m], id, set->has_textures, end,
+                         atlas_texture);
+        if (!r.ok) break;
+        if (id < (uint32_t)set->index_limit) set->index_by_id[id] = m;
         loaded_count++;
-        fprintf(stderr, "  model %u: %d tris, %d base verts\n", mid, tc, (int)bvc);
     }
-    free(offsets); fc_asset_close(f);
+    free(offsets);
+    fc_reader_close(&r);
+    if (!r.ok) {
+        models_free(set);
+        return NULL;
+    }
     set->loaded = 1;
     fprintf(stderr, "models: loaded %d from %s\n", loaded_count, path);
     return set;
@@ -2269,89 +1984,46 @@ typedef struct {
 #define OANM_MAGIC 0x4D4E414F  /* "OANM" animated object placements */
 #define OANM_VERSION 1
 ObjectMesh* objects_load(const char* path) {
-    FILE* f = fc_asset_fopen(path, "rb");
-    if (!f) {
-        fprintf(stderr, "objects_load: could not open %s\n", path);
+    ObjectMesh* om = (ObjectMesh*)calloc(1, sizeof(ObjectMesh));
+    FcReader r;
+    if (!om || !fc_reader_open(&r, path)) {
+        free(om);
         return NULL;
     }
 
-    uint32_t magic, placement_count, total_verts;
-    int32_t min_wx, min_wy;
-    if (!fc_read_exact(f, &magic, sizeof(magic), 1, path, "object magic")) {
-        fc_asset_close(f);
-        return NULL;
-    }
+    uint32_t magic = fc_read_u32(&r);
+    fc_reader_require(&r, magic == OBJ2_MAGIC || magic == OBJS_MAGIC,
+                      "not an objects file");
+    int has_textures = magic == OBJ2_MAGIC;
+    uint32_t placement_count = fc_read_u32(&r);
+    int32_t min_wx = fc_read_i32(&r);
+    int32_t min_wy = fc_read_i32(&r);
+    uint32_t total_verts = fc_read_u32(&r);
 
-    int has_textures = 0;
-    if (magic == OBJ2_MAGIC) {
-        has_textures = 1;
-    } else if (magic != OBJS_MAGIC) {
-        fprintf(stderr, "objects_load: bad magic %08x\n", magic);
-        fc_asset_close(f);
-        return NULL;
-    }
-
-    if (!fc_read_exact(f, &placement_count, sizeof(placement_count), 1, path, "object placement count") ||
-        !fc_read_exact(f, &min_wx, sizeof(min_wx), 1, path, "object min world x") ||
-        !fc_read_exact(f, &min_wy, sizeof(min_wy), 1, path, "object min world y") ||
-        !fc_read_exact(f, &total_verts, sizeof(total_verts), 1, path, "object vertex count")) {
-        fc_asset_close(f);
-        return NULL;
-    }
-
-    fprintf(stderr, "objects_load: %u placements, %u verts, format=%s\n",
-            placement_count, total_verts, has_textures ? "OBJ2" : "OBJS");
-
-    /* read vertices */
-    float* raw_verts = (float*)malloc(total_verts * 3 * sizeof(float));
-    if (!raw_verts ||
-        !fc_read_exact(f, raw_verts, sizeof(float), total_verts * 3, path, "object vertices")) {
-        free(raw_verts);
-        fc_asset_close(f);
-        return NULL;
-    }
-
-    /* read colors */
-    unsigned char* raw_colors = (unsigned char*)malloc(total_verts * 4);
-    if (!raw_colors ||
-        !fc_read_exact(f, raw_colors, 1, total_verts * 4, path, "object colors")) {
-        free(raw_verts);
-        free(raw_colors);
-        fc_asset_close(f);
-        return NULL;
-    }
-    /* read texture coordinates (v2 only) */
-    float* raw_texcoords = NULL;
-    if (has_textures) {
-        raw_texcoords = (float*)malloc(total_verts * 2 * sizeof(float));
-        if (!raw_texcoords ||
-            !fc_read_exact(f, raw_texcoords, sizeof(float), total_verts * 2,
-                           path, "object texcoords")) {
-            free(raw_verts);
-            free(raw_colors);
-            free(raw_texcoords);
-            fc_asset_close(f);
-            return NULL;
-        }
-    }
-    fc_asset_close(f);
-
-    /* build raylib mesh */
     Mesh mesh = { 0 };
     mesh.vertexCount = (int)total_verts;
     mesh.triangleCount = (int)(total_verts / 3);
-    mesh.vertices = raw_verts;
-    mesh.colors = raw_colors;
-    mesh.texcoords = raw_texcoords;
-
-    /* compute normals */
-    mesh.normals = (float*)calloc(total_verts * 3, sizeof(float));
-    if (!mesh.normals) {
-        free(raw_verts);
-        free(raw_colors);
-        free(raw_texcoords);
+    mesh.vertices = fc_read_array(&r, (size_t)total_verts * 3, sizeof(float));
+    mesh.colors = fc_read_array(&r, (size_t)total_verts * 4, 1);
+    /* texture coordinates (v2 only) */
+    if (has_textures)
+        mesh.texcoords = fc_read_array(&r, (size_t)total_verts * 2,
+                                       sizeof(float));
+    mesh.normals = fc_alloc_array(&r, (size_t)total_verts * 3, sizeof(float));
+    fc_reader_close(&r);
+    if (!r.ok) {
+        free(mesh.vertices);
+        free(mesh.colors);
+        free(mesh.texcoords);
+        free(mesh.normals);
+        free(om);
         return NULL;
     }
+    fprintf(stderr, "objects_load: %u placements, %u verts, format=%s\n",
+            placement_count, total_verts, has_textures ? "OBJ2" : "OBJS");
+
+    /* compute normals */
+    float* raw_verts = mesh.vertices;
     for (int i = 0; i < mesh.triangleCount; i++) {
         int base = i * 9;
         float ax = raw_verts[base + 0], ay = raw_verts[base + 1], az = raw_verts[base + 2];
@@ -2375,7 +2047,6 @@ ObjectMesh* objects_load(const char* path) {
 
     UploadMesh(&mesh, false);
 
-    ObjectMesh* om = (ObjectMesh*)calloc(1, sizeof(ObjectMesh));
     om->model = LoadModelFromMesh(mesh);
     om->placement_count = (int)placement_count;
     om->total_vertex_count = (int)total_verts;
@@ -2407,57 +2078,35 @@ ObjectMesh* objects_load(const char* path) {
     return om;
 }
 
+_Static_assert(sizeof(ObjectAnimPlacement) == 40,
+               "OANM rows must retain their 40-byte file layout");
+
+void object_anims_free(ObjectAnimSet* set) {
+    if (!set) return;
+    free(set->rows);
+    free(set);
+}
+
 ObjectAnimSet* object_anims_load(const char* path) {
-    FILE* f = fc_asset_fopen(path, "rb");
-    if (!f) {
-        fprintf(stderr, "object_anims_load: could not open %s\n", path);
-        return NULL;
-    }
-
-    uint32_t magic = 0, version = 0, count = 0;
-    if (!fc_read_exact(f, &magic, sizeof(magic), 1, path, "oanim magic") ||
-        !fc_read_exact(f, &version, sizeof(version), 1, path, "oanim version") ||
-        !fc_read_exact(f, &count, sizeof(count), 1, path, "oanim count") ||
-        magic != OANM_MAGIC || version != OANM_VERSION) {
-        fc_asset_close(f);
-        return NULL;
-    }
-
     ObjectAnimSet* set = (ObjectAnimSet*)calloc(1, sizeof(*set));
-    if (!set) {
-        fc_asset_close(f);
-        return NULL;
-    }
-    set->rows = (ObjectAnimPlacement*)calloc(count, sizeof(*set->rows));
-    if (count > 0 && !set->rows) {
-        fc_asset_close(f);
+    FcReader r;
+    if (!set || !fc_reader_open(&r, path)) {
         free(set);
         return NULL;
     }
-    set->count = (int)count;
 
-    for (uint32_t i = 0; i < count; i++) {
-        ObjectAnimPlacement* row = &set->rows[i];
-        if (!fc_read_exact(f, &row->model_id, sizeof(row->model_id), 1, path, "oanim model id") ||
-            !fc_read_exact(f, &row->obj_id, sizeof(row->obj_id), 1, path, "oanim object id") ||
-            !fc_read_exact(f, &row->animation_id, sizeof(row->animation_id), 1, path, "oanim animation id") ||
-            !fc_read_exact(f, &row->world_x, sizeof(row->world_x), 1, path, "oanim world x") ||
-            !fc_read_exact(f, &row->world_y, sizeof(row->world_y), 1, path, "oanim world y") ||
-            !fc_read_exact(f, &row->plane, sizeof(row->plane), 1, path, "oanim plane") ||
-            !fc_read_exact(f, &row->obj_type, sizeof(row->obj_type), 1, path, "oanim obj type") ||
-            !fc_read_exact(f, &row->rotation, sizeof(row->rotation), 1, path, "oanim rotation") ||
-            !fc_read_exact(f, &row->flags, sizeof(row->flags), 1, path, "oanim flags") ||
-            !fc_read_exact(f, &row->pos_x, sizeof(row->pos_x), 1, path, "oanim pos x") ||
-            !fc_read_exact(f, &row->pos_y, sizeof(row->pos_y), 1, path, "oanim pos y") ||
-            !fc_read_exact(f, &row->pos_z, sizeof(row->pos_z), 1, path, "oanim pos z") ||
-            !fc_read_exact(f, &row->phase_ticks, sizeof(row->phase_ticks), 1, path, "oanim phase")) {
-            fc_asset_close(f);
-            free(set->rows);
-            free(set);
-            return NULL;
-        }
+    uint32_t magic = fc_read_u32(&r);
+    uint32_t version = fc_read_u32(&r);
+    uint32_t count = fc_read_u32(&r);
+    fc_reader_require(&r, magic == OANM_MAGIC && version == OANM_VERSION,
+                      "unsupported object animation format");
+    set->rows = fc_read_array(&r, count, sizeof(*set->rows));
+    set->count = (int)count;
+    fc_reader_close(&r);
+    if (!r.ok) {
+        object_anims_free(set);
+        return NULL;
     }
-    fc_asset_close(f);
     set->loaded = 1;
     fprintf(stderr, "object_anims_load: loaded %d animated placements from %s\n",
             set->count, path);
@@ -2497,12 +2146,6 @@ void objects_free(ObjectMesh* om) {
     fc_animated_atlas_unload(&om->atlas);
     if (om->loaded) UnloadModel(om->model);
     free(om);
-}
-
-void object_anims_free(ObjectAnimSet* set) {
-    if (!set) return;
-    free(set->rows);
-    free(set);
 }
 
 /* Terrain Loader */
@@ -2545,67 +2188,53 @@ void terrain_free(TerrainMesh* tm) {
 }
 
 TerrainMesh* terrain_load(const char* path) {
-    FILE* f = fc_asset_fopen(path, "rb");
-    if (!f) {
-        fprintf(stderr, "terrain_load: could not open %s\n", path);
+    TerrainMesh* tm = (TerrainMesh*)calloc(1, sizeof(TerrainMesh));
+    FcReader r;
+    if (!tm || !fc_reader_open(&r, path)) {
+        free(tm);
         return NULL;
     }
 
-    uint32_t magic, vert_count, region_count;
-    int32_t min_wx, min_wy;
-    if (!fc_read_exact(f, &magic, sizeof(magic), 1, path, "terrain magic")) {
-        fc_asset_close(f);
-        return NULL;
-    }
-    if (magic != TERR_MAGIC) {
-        fprintf(stderr, "terrain_load: bad magic %08x\n", magic);
-        fc_asset_close(f);
-        return NULL;
-    }
-    if (!fc_read_exact(f, &vert_count, sizeof(vert_count), 1, path, "terrain vertex count") ||
-        !fc_read_exact(f, &region_count, sizeof(region_count), 1, path, "terrain region count") ||
-        !fc_read_exact(f, &min_wx, sizeof(min_wx), 1, path, "terrain min world x") ||
-        !fc_read_exact(f, &min_wy, sizeof(min_wy), 1, path, "terrain min world y")) {
-        fc_asset_close(f);
-        return NULL;
-    }
+    uint32_t magic = fc_read_u32(&r);
+    fc_reader_require(&r, magic == TERR_MAGIC, "not a terrain file");
+    uint32_t vert_count = fc_read_u32(&r);
+    uint32_t region_count = fc_read_u32(&r);
+    int32_t min_wx = fc_read_i32(&r);
+    int32_t min_wy = fc_read_i32(&r);
 
-    fprintf(stderr, "terrain_load: %u verts, %u regions, origin (%d, %d)\n",
-            vert_count, region_count, min_wx, min_wy);
-
-    /* read vertices */
-    float* raw_verts = (float*)malloc(vert_count * 3 * sizeof(float));
-    if (!raw_verts ||
-        !fc_read_exact(f, raw_verts, sizeof(float), vert_count * 3, path, "terrain vertices")) {
-        free(raw_verts);
-        fc_asset_close(f);
-        return NULL;
-    }
-
-    /* read colors */
-    unsigned char* raw_colors = (unsigned char*)malloc(vert_count * 4);
-    if (!raw_colors ||
-        !fc_read_exact(f, raw_colors, 1, vert_count * 4, path, "terrain colors")) {
-        free(raw_verts);
-        free(raw_colors);
-        fc_asset_close(f);
-        return NULL;
-    }
-    /* build raylib mesh */
     Mesh mesh = { 0 };
     mesh.vertexCount = (int)vert_count;
     mesh.triangleCount = (int)(vert_count / 3);
-    mesh.vertices = raw_verts;
-    mesh.colors = raw_colors;
+    mesh.vertices = fc_read_array(&r, (size_t)vert_count * 3, sizeof(float));
+    mesh.colors = fc_read_array(&r, (size_t)vert_count * 4, 1);
+    mesh.normals = fc_alloc_array(&r, (size_t)vert_count * 3, sizeof(float));
 
-    /* compute normals for proper lighting */
-    mesh.normals = (float*)calloc(vert_count * 3, sizeof(float));
-    if (!mesh.normals) {
-        free(raw_verts);
-        free(raw_colors);
-        fc_asset_close(f);
+    /* optional heightmap appended after the colors */
+    if (r.ok && r.pos < r.size) {
+        tm->hm_min_x = fc_read_i32(&r);
+        tm->hm_min_y = fc_read_i32(&r);
+        uint32_t hm_w = fc_read_u32(&r);
+        uint32_t hm_h = fc_read_u32(&r);
+        fc_reader_require(&r, hm_w > 0 && hm_h > 0 && hm_w <= 4096
+                              && hm_h <= 4096,
+                          "invalid terrain heightmap dimensions");
+        tm->hm_width = (int)hm_w;
+        tm->hm_height = (int)hm_h;
+        tm->heightmap = fc_read_array(&r, (size_t)hm_w * hm_h, sizeof(float));
+    }
+    fc_reader_close(&r);
+    if (!r.ok) {
+        free(mesh.vertices);
+        free(mesh.colors);
+        free(mesh.normals);
+        terrain_free(tm);
         return NULL;
     }
+    fprintf(stderr, "terrain_load: %u verts, %u regions, origin (%d, %d)\n",
+            vert_count, region_count, min_wx, min_wy);
+
+    /* compute normals for proper lighting */
+    float* raw_verts = mesh.vertices;
     for (int i = 0; i < mesh.triangleCount; i++) {
         int base = i * 9;
         float ax = raw_verts[base + 0], ay = raw_verts[base + 1], az = raw_verts[base + 2];
@@ -2629,52 +2258,15 @@ TerrainMesh* terrain_load(const char* path) {
 
     UploadMesh(&mesh, false);
 
-    TerrainMesh* tm = (TerrainMesh*)calloc(1, sizeof(TerrainMesh));
     tm->model = LoadModelFromMesh(mesh);
     tm->vertex_count = (int)vert_count;
     tm->region_count = (int)region_count;
     tm->min_world_x = min_wx;
     tm->min_world_y = min_wy;
     tm->loaded = 1;
-
-    /* read heightmap (appended after colors in the binary) */
-    int32_t hm_min_x, hm_min_y;
-    uint32_t hm_w, hm_h;
-    int next = fgetc(f);
-    if (next != EOF) {
-        ungetc(next, f);
-        if (!fc_read_exact(f, &hm_min_x, sizeof(hm_min_x), 1, path, "terrain heightmap min x") ||
-            !fc_read_exact(f, &hm_min_y, sizeof(hm_min_y), 1, path, "terrain heightmap min y") ||
-            !fc_read_exact(f, &hm_w, sizeof(hm_w), 1, path, "terrain heightmap width") ||
-            !fc_read_exact(f, &hm_h, sizeof(hm_h), 1, path, "terrain heightmap height")) {
-            fc_asset_close(f);
-            terrain_free(tm);
-            return NULL;
-        }
-        if (!(hm_w > 0 && hm_h > 0 && hm_w <= 4096 && hm_h <= 4096)) {
-            fprintf(stderr, "%s: invalid terrain heightmap dimensions %ux%u\n",
-                    path, hm_w, hm_h);
-            fc_asset_close(f);
-            terrain_free(tm);
-            return NULL;
-        }
-        tm->hm_min_x = hm_min_x;
-        tm->hm_min_y = hm_min_y;
-        tm->hm_width = (int)hm_w;
-        tm->hm_height = (int)hm_h;
-        tm->heightmap = (float*)malloc(hm_w * hm_h * sizeof(float));
-        if (!tm->heightmap ||
-            !fc_read_exact(f, tm->heightmap, sizeof(float), hm_w * hm_h,
-                           path, "terrain heightmap values")) {
-            fc_asset_close(f);
-            terrain_free(tm);
-            return NULL;
-        }
+    if (tm->heightmap)
         fprintf(stderr, "terrain heightmap: %dx%d, origin (%d, %d)\n",
                 tm->hm_width, tm->hm_height, tm->hm_min_x, tm->hm_min_y);
-    }
-
-    fc_asset_close(f);
     return tm;
 }
 
@@ -2739,45 +2331,29 @@ void spotanims_free(SpotAnimSet *set) {
     free(set);
 }
 
+_Static_assert(sizeof(SpotAnimDef) == 32,
+               "spot animation rows must retain their 32-byte file layout");
+
 SpotAnimSet *spotanims_load(const char *path) {
-    FILE *f = fc_asset_fopen(path, "rb");
-    if (!f) {
-        fprintf(stderr, "spotanims: can't open %s\n", path);
-        return NULL;
-    }
-
-    uint32_t magic, version, count;
-    if (!fc_read_exact(f, &magic, sizeof(magic), 1, path, "spotanim magic")
-            || !fc_read_exact(f, &version, sizeof(version), 1, path,
-                              "spotanim version")
-            || !fc_read_exact(f, &count, sizeof(count), 1, path,
-                              "spotanim count")
-            || magic != SPOTANIM_MAGIC || version != SPOTANIM_VERSION) {
-        fc_asset_close(f);
-        return NULL;
-    }
-
     SpotAnimSet *set = (SpotAnimSet *)calloc(1, sizeof(*set));
-    if (!set) {
-        fc_asset_close(f);
+    FcReader r;
+    if (!set || !fc_reader_open(&r, path)) {
+        free(set);
         return NULL;
     }
-    set->defs = (SpotAnimDef *)calloc(count, sizeof(*set->defs));
-    if (count > 0 && !set->defs) {
-        fc_asset_close(f);
+
+    uint32_t magic = fc_read_u32(&r);
+    uint32_t version = fc_read_u32(&r);
+    uint32_t count = fc_read_u32(&r);
+    fc_reader_require(&r, magic == SPOTANIM_MAGIC && version == SPOTANIM_VERSION,
+                      "unsupported spot animation format");
+    set->defs = fc_read_array(&r, count, sizeof(*set->defs));
+    set->count = (int)count;
+    fc_reader_close(&r);
+    if (!r.ok) {
         spotanims_free(set);
         return NULL;
     }
-    set->count = (int)count;
-    for (uint32_t i = 0; i < count; i++) {
-        if (!fc_read_exact(f, &set->defs[i], sizeof(set->defs[i]), 1, path,
-                           "spotanim row")) {
-            fc_asset_close(f);
-            spotanims_free(set);
-            return NULL;
-        }
-    }
-    fc_asset_close(f);
     set->loaded = 1;
     fprintf(stderr, "spotanims: loaded %d from %s\n", set->count, path);
     return set;
@@ -2804,24 +2380,25 @@ typedef struct {
 int fc_player_appearance_load(FcPlayerAppearance *appearance) {
     memset(appearance, 0, sizeof(*appearance));
     const char *path = "fc_player.parts";
-    FILE *file = fc_asset_fopen(path, "rb");
-    if (!file) return 0;
-    uint32_t header[2];
-    int ok = fc_read_exact(file, header, sizeof(uint32_t), 2, path, "header") &&
-        header[0] == 0x31504346 && header[1] > 0 && header[1] <= 64;
-    if (ok) {
-        appearance->record_count = (int)header[1];
-        for (int i = 0; i < appearance->record_count; i++) {
-            uint32_t row[2];
-            if (!fc_read_exact(file, row, sizeof(uint32_t), 2, path, "item mapping") ||
-                !fc_item_definition((int)row[0]) || row[1] > 127) { ok = 0; break; }
-            appearance->records[i].item_id = row[0];
-            appearance->records[i].hide_mask = row[1];
-        }
-        if (fgetc(file) != EOF) ok = 0;
+    FcReader r;
+    if (!fc_reader_open(&r, path)) return 0;
+    uint32_t magic = fc_read_u32(&r);
+    uint32_t count = fc_read_u32(&r);
+    fc_reader_require(&r, magic == 0x31504346 && count > 0 && count <= 64,
+                      "bad header");
+    for (uint32_t i = 0; r.ok && i < count; i++) {
+        uint32_t item_id = fc_read_u32(&r);
+        uint32_t hide_mask = fc_read_u32(&r);
+        fc_reader_require(&r, fc_item_definition((int)item_id) != NULL
+                              && hide_mask <= 127,
+                          "unknown item or bad hide mask");
+        appearance->records[i].item_id = item_id;
+        appearance->records[i].hide_mask = hide_mask;
     }
-    fc_asset_close(file);
-    if (!ok) { fprintf(stderr, "Invalid player appearance map: %s\n", path); return 0; }
+    fc_reader_require(&r, r.pos == r.size, "unexpected data after the last item");
+    fc_reader_close(&r);
+    if (!r.ok) { fprintf(stderr, "Invalid player appearance map: %s\n", path); return 0; }
+    appearance->record_count = (int)count;
     appearance->parts = models_load("fc_player.models", (Texture2D){0});
     if (!appearance->parts || appearance->parts->has_textures) return 0;
     for (int i = 0; i < 7; i++)
