@@ -17,7 +17,6 @@
  *   F           — eat shark                 P          — drink prayer potion
  *   X           — toggle run                R          — reset episode
  *   4/5         — camera presets            F9         — toggle god mode
- *   F1-F8       — spawn NPC type 1-8 near the player
  *
  * Policy replay (./puffer eval, ./fight_caves eval) adds:
  *   1/2/4/0     — 1x/2x/4x/10x speed        Up/Down    — faster/slower
@@ -7913,35 +7912,6 @@ static void process_human_keys(ViewerState* v) {
     /* --- Debug toggles (testing only) --- */
     /* F9: toggle godmode (player can't die) */
     if (IsKeyPressed(KEY_F9)) toggle_godmode(v);
-    /* F1-F8: spawn NPC type 1-8 near the player */
-    for (int fk = 0; fk < 8; fk++) {
-        if (IsKeyPressed(KEY_F1 + fk)) {
-            int npc_type = fk + 1;
-            /* Find free NPC slot */
-            for (int si = 0; si < FC_MAX_NPCS; si++) {
-                if (!v->state.npcs[si].active) {
-                    int sx = p->x + 5, sy = p->y;
-                    const FcNpcStats* stats = fc_npc_get_stats(npc_type);
-                    /* Find nearby walkable tile */
-                    for (int r = 0; r < 10; r++) {
-                        for (int dx = -r; dx <= r; dx++) {
-                            int ty = p->y + r, tx = p->x + dx + 3;
-                            if (tx >= 0 && tx < FC_ARENA_WIDTH && ty >= 0 && ty < FC_ARENA_HEIGHT &&
-                                fc_footprint_walkable(tx, ty, stats->size, v->state.walkable)) {
-                                sx = tx; sy = ty; r = 99; break;
-                            }
-                        }
-                    }
-                    fc_npc_spawn(&v->state.npcs[si], npc_type, sx, sy,
-                                 v->state.next_spawn_index++);
-                    /* Don't increment npcs_remaining — debug spawns shouldn't
-                     * affect wave progression. Wave clear checks npcs_remaining. */
-                    fprintf(stderr, "DEBUG SPAWN: NPC type %d at (%d,%d)\n", npc_type, sx, sy);
-                    break;
-                }
-            }
-        }
-    }
 }
 
 /* Called on TICK frames: build action array from buffered inputs. */
