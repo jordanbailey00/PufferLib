@@ -183,7 +183,8 @@ python3 ocean/fight_caves/tools.py setup --all --verify-only
 The installed asset directories are ignored by Git. For an explicit reinstall,
 use `python3 ocean/fight_caves/tools.py setup --all --force`.
 Development overrides are `FC_COLLISION_PATH`, `FC_MOVEMENT_PATH`, `FC_LOS_PATH`,
-`FC_ASSET_ROOT`, and `FC_REPO_ROOT`; standard commands run from the repository root.
+and `FC_ASSET_ROOT` (the viewer asset directory). Run commands from the repository
+root: assets and `config/fight_caves.ini` are found relative to it.
 
 OSRS assets are distributed separately and are not covered by PufferLib's
 software license; see `resources/fight_caves/ASSET_NOTICE.md`.
