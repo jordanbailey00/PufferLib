@@ -1836,7 +1836,7 @@ void fc_player_appearance_free(FcPlayerAppearance *appearance) {
 
 /*
  * OSRS UI reference constants copied from the osrs-dumps interface
- * definitions (toplevel_osrs_stretch, orbs, stats, inventory,
+ * definitions (toplevel_osrs_stretch, orbs, inventory,
  * combat_interface and wornitems). These mirror what Void/RSMod open
  * server-side; the viewer should use these as layout authority instead of
  * hand-tuned gameframe coordinates.
@@ -1898,55 +1898,20 @@ typedef struct RuneCUiStoneRef {
 
 static const RuneCUiStoneRef RUNEC_OSRS_SIDE_STONES[] = {
     {0, "side_stone_highlights_0", "side_icon_combat",    {0,   0, 38, 36}, {4,   0, 33, 36}},
-    {1, "side_stone_highlights_4", "side_icon_stats",     {38,  0, 33, 36}, {38,  0, 33, 36}},
-    {2, "side_stone_highlights_4", "side_icon_quests",    {71,  0, 38, 36}, {71,  0, 33, 36}},
-    {3, "side_stone_highlights_4", "side_icon_inventory", {104, 0, 33, 36}, {104, 0, 33, 36}},
-    {4, "side_stone_highlights_4", "side_icon_equipment", {137, 0, 33, 36}, {137, 0, 33, 36}},
-    {5, "side_stone_highlights_4", "side_icon_prayer",    {170, 0, 33, 36}, {170, 0, 33, 36}},
+    {-1, "side_stone_highlights_4", "side_icon_stats",    {38,  0, 33, 36}, {38,  0, 33, 36}},
+    {1, "side_stone_highlights_4", "side_icon_quests",    {71,  0, 38, 36}, {71,  0, 33, 36}},
+    {2, "side_stone_highlights_4", "side_icon_inventory", {104, 0, 33, 36}, {104, 0, 33, 36}},
+    {3, "side_stone_highlights_4", "side_icon_equipment", {137, 0, 33, 36}, {137, 0, 33, 36}},
+    {4, "side_stone_highlights_4", "side_icon_prayer",    {170, 0, 33, 36}, {170, 0, 33, 36}},
     {-1, "side_stone_highlights_1", "side_icon_magic",    {203, 0, 38, 36}, {204, 0, 33, 36}},
-    {7, "side_stone_highlights_2", "side_icon_clan",     {0,   0, 38, 36}, {4,   0, 33, 36}},
-    {8, "side_stone_highlights_4", "side_icon_friends",  {38,  0, 33, 36}, {38,  0, 33, 36}},
+    {6, "side_stone_highlights_2", "side_icon_clan",     {0,   0, 38, 36}, {4,   0, 33, 36}},
+    {7, "side_stone_highlights_4", "side_icon_friends",  {38,  0, 33, 36}, {38,  0, 33, 36}},
     {-1, "side_stone_highlights_4", "side_icon_grouping", {71,  0, 33, 36}, {71,  0, 33, 36}},
     {-1, "side_stone_highlights_4", "side_icon_logout",   {104, 0, 33, 36}, {104, 0, 33, 36}},
-    {6, "side_stone_highlights_4", "side_icon_options",   {137, 0, 33, 36}, {137, 0, 33, 36}},
+    {5, "side_stone_highlights_4", "side_icon_options",   {137, 0, 33, 36}, {137, 0, 33, 36}},
     {-1, "side_stone_highlights_4", "side_icon_emotes",   {170, 0, 33, 36}, {170, 0, 33, 36}},
     {-1, "side_stone_highlights_3", "side_icon_music",    {203, 0, 38, 36}, {204, 0, 33, 36}},
 };
-
-typedef struct RuneCUiSkillRef {
-    const char *name;
-    int icon_index;
-    Rectangle rect;
-} RuneCUiSkillRef;
-
-static const RuneCUiSkillRef RUNEC_OSRS_SKILLS[] = {
-    {"Attack",       0,  {1,   1,   62, 30}},
-    {"Strength",     1,  {1,   31,  62, 30}},
-    {"Defence",      2,  {1,   61,  62, 30}},
-    {"Ranged",       3,  {1,   91,  62, 30}},
-    {"Prayer",       4,  {1,   121, 62, 30}},
-    {"Magic",        5,  {1,   151, 62, 30}},
-    {"Runecraft",    18, {1,   181, 62, 30}},
-    {"Construction", 22, {1,   211, 62, 32}},
-    {"Hitpoints",    6,  {64,  1,   62, 30}},
-    {"Agility",      7,  {64,  31,  62, 30}},
-    {"Herblore",     8,  {64,  61,  62, 30}},
-    {"Thieving",     9,  {64,  91,  62, 30}},
-    {"Crafting",     10, {64,  121, 62, 30}},
-    {"Fletching",    11, {64,  151, 62, 30}},
-    {"Slayer",       19, {64,  181, 62, 30}},
-    {"Hunter",       21, {64,  211, 62, 32}},
-    {"Mining",       12, {127, 1,   62, 30}},
-    {"Smithing",     13, {127, 31,  62, 30}},
-    {"Fishing",      14, {127, 61,  62, 30}},
-    {"Cooking",      15, {127, 91,  62, 30}},
-    {"Firemaking",   16, {127, 121, 62, 30}},
-    {"Woodcutting",  17, {127, 151, 62, 30}},
-    {"Farming",      20, {127, 181, 62, 30}},
-    {"Sailing",      23, {127, 211, 62, 32}},
-};
-
-static const Rectangle RUNEC_OSRS_STATS_TOTAL = {0, 241, 190, 19};
 
 /* Button, icon and label rectangles of the visible combat styles, in order. */
 typedef struct RuneCUiCombatStyleRef {
@@ -2061,30 +2026,6 @@ static const char *const g_ui_asset_names[] = {
     "combaticons2_15",
     "combaticons2_16",
     "combaticons2_17",
-    "skill_icon_0",
-    "skill_icon_1",
-    "skill_icon_2",
-    "skill_icon_3",
-    "skill_icon_4",
-    "skill_icon_5",
-    "skill_icon_6",
-    "skill_icon_7",
-    "skill_icon_8",
-    "skill_icon_9",
-    "skill_icon_10",
-    "skill_icon_11",
-    "skill_icon_12",
-    "skill_icon_13",
-    "skill_icon_14",
-    "skill_icon_15",
-    "skill_icon_16",
-    "skill_icon_17",
-    "skill_icon_18",
-    "skill_icon_19",
-    "skill_icon_20",
-    "skill_icon_21",
-    "skill_icon_22",
-    "skill_icon_23",
 };
 
 #define RUNEC_UI_ASSET_COUNT \
@@ -2677,13 +2618,11 @@ int fc_menu_action_at(FcMenuLayout menu, int rows, int x, int y) {
 #define RUNEC_UI_CONTEXT_ACTIONS 5
 #define RUNEC_UI_MINIMAP_DOTS 256
 #define RUNEC_UI_ITEM_ICON_CACHE 512
-#define RUNEC_UI_SKILL_COUNT 24
 #define RUNEC_UI_COMBAT_STYLE_COUNT 4
 
 typedef enum RuneCUiTab {
     RUNEC_UI_TAB_NONE = -1,
     RUNEC_UI_TAB_COMBAT = 0,
-    RUNEC_UI_TAB_SKILLS,
     RUNEC_UI_TAB_QUESTS,
     RUNEC_UI_TAB_INVENTORY,
     RUNEC_UI_TAB_EQUIPMENT,
@@ -2701,7 +2640,6 @@ typedef enum RuneCUiIntentKind {
     RUNEC_UI_INTENT_EQUIPMENT_SLOT,
     RUNEC_UI_INTENT_PRAYER_SLOT,
     RUNEC_UI_INTENT_QUICK_PRAYER_TOGGLE,
-    RUNEC_UI_INTENT_SKILL_SLOT,
     RUNEC_UI_INTENT_MINIMAP_CLICK,
     RUNEC_UI_INTENT_RUN_TOGGLE,
     RUNEC_UI_INTENT_COMBAT_STYLE,
@@ -2791,9 +2729,6 @@ typedef struct RuneCUiState {
     int run_energy;
     int run_enabled;
     int combat_level;
-    int skill_current[RUNEC_UI_SKILL_COUNT];
-    int skill_base[RUNEC_UI_SKILL_COUNT];
-    int skill_total;
 
     int context_open;
     Vector2 context_pos;
@@ -3002,7 +2937,6 @@ static float fmin2(float a, float b) {
 const char *runec_ui_tab_name(RuneCUiTab tab) {
     switch (tab) {
     case RUNEC_UI_TAB_COMBAT: return "Combat";
-    case RUNEC_UI_TAB_SKILLS: return "Skills";
     case RUNEC_UI_TAB_QUESTS: return "Quests";
     case RUNEC_UI_TAB_INVENTORY: return "Inventory";
     case RUNEC_UI_TAB_EQUIPMENT: return "Equipment";
@@ -3170,7 +3104,7 @@ static FcMenuLayout context_layout(const RuneCUiState *ui) {
 
 void runec_ui_init(RuneCUiState *ui) {
     memset(ui, 0, sizeof(*ui));
-    ui->active_tab = RUNEC_UI_TAB_SKILLS;
+    ui->active_tab = RUNEC_UI_TAB_INVENTORY;
     ui->context_source_slot = -1;
     ui->drag.source_slot = -1;
     const char *start_tab = getenv("RUNEC_UI_START_TAB");
@@ -3341,23 +3275,6 @@ static int equipment_slot_at(const RuneCUiLayout *layout, Vector2 mouse) {
         if (r.width > 0 && CheckCollisionPointRec(mouse, r))
             return i;
     }
-    return -1;
-}
-
-static Rectangle skill_slot_rect(const RuneCUiLayout *layout, int slot) {
-    if (slot < 0 || slot >= (int)(sizeof(RUNEC_OSRS_SKILLS) / sizeof(RUNEC_OSRS_SKILLS[0])))
-        return (Rectangle){0, 0, 0, 0};
-    return side_ref_rect(layout, RUNEC_OSRS_SKILLS[slot].rect);
-}
-
-static int skill_slot_at(const RuneCUiLayout *layout, Vector2 mouse) {
-    int count = (int)(sizeof(RUNEC_OSRS_SKILLS) / sizeof(RUNEC_OSRS_SKILLS[0]));
-    for (int i = 0; i < count; i++) {
-        if (CheckCollisionPointRec(mouse, skill_slot_rect(layout, i)))
-            return i;
-    }
-    if (CheckCollisionPointRec(mouse, side_ref_rect(layout, RUNEC_OSRS_STATS_TOTAL)))
-        return count;
     return -1;
 }
 
@@ -3533,20 +3450,6 @@ static int handle_equipment_click(RuneCUiState *ui,
     return 1;
 }
 
-static int handle_skills_click(RuneCUiState *ui,
-                               const RuneCUiLayout *layout,
-                               Vector2 mouse) {
-    int slot = skill_slot_at(layout, mouse);
-    if (slot < 0)
-        return 0;
-    set_intent(ui, RUNEC_UI_INTENT_SKILL_SLOT, slot, 0, mouse);
-    copy_text(ui->last_intent.text, sizeof(ui->last_intent.text),
-              slot < (int)(sizeof(RUNEC_OSRS_SKILLS) /
-                           sizeof(RUNEC_OSRS_SKILLS[0]))
-                ? RUNEC_OSRS_SKILLS[slot].name : "Total level");
-    return 1;
-}
-
 static int handle_active_tab_click(RuneCUiState *ui,
                                    const RuneCUiLayout *layout,
                                    Vector2 mouse) {
@@ -3557,8 +3460,6 @@ static int handle_active_tab_click(RuneCUiState *ui,
         return handle_inventory_click(ui, layout, mouse);
     case RUNEC_UI_TAB_EQUIPMENT:
         return handle_equipment_click(ui, layout, mouse);
-    case RUNEC_UI_TAB_SKILLS:
-        return handle_skills_click(ui, layout, mouse);
     default:
         return 0;
     }
@@ -3990,47 +3891,6 @@ static void draw_equipment(const RuneCUiState *ui, const RuneCUiLayout *layout) 
     }
 }
 
-static void draw_skills(const RuneCUiState *ui, const RuneCUiLayout *layout) {
-    int count = (int)(sizeof(RUNEC_OSRS_SKILLS) / sizeof(RUNEC_OSRS_SKILLS[0]));
-    for (int i = 0; i < count; i++) {
-        Rectangle r = skill_slot_rect(layout, i);
-        DrawRectangleRec(r, (Color){72, 70, 60, 232});
-        DrawLineEx((Vector2){r.x, r.y}, (Vector2){r.x + r.width - 1, r.y}, 1,
-                   (Color){139, 130, 104, 255});
-        DrawLineEx((Vector2){r.x, r.y}, (Vector2){r.x, r.y + r.height - 1}, 1,
-                   (Color){139, 130, 104, 255});
-        DrawLineEx((Vector2){r.x, r.y + r.height - 1},
-                   (Vector2){r.x + r.width - 1, r.y + r.height - 1}, 1,
-                   (Color){28, 25, 21, 255});
-        DrawLineEx((Vector2){r.x + r.width - 1, r.y},
-                   (Vector2){r.x + r.width - 1, r.y + r.height - 1}, 1,
-                   (Color){28, 25, 21, 255});
-        char icon[32];
-        snprintf(icon, sizeof(icon), "skill_icon_%d", RUNEC_OSRS_SKILLS[i].icon_index);
-        draw_asset_centered(ui, icon, (Rectangle){r.x + 3, r.y + 3, 24, 24}, 24, 24, WHITE);
-        int current_level = i < RUNEC_UI_SKILL_COUNT && ui->skill_current[i] > 0
-                          ? ui->skill_current[i] : 1;
-        int base_level = i < RUNEC_UI_SKILL_COUNT && ui->skill_base[i] > 0
-                       ? ui->skill_base[i] : current_level;
-        char cur[16];
-        char base[16];
-        snprintf(cur, sizeof(cur), "%d", current_level);
-        snprintf(base, sizeof(base), "%d", base_level);
-        Color cur_color = current_level < base_level ? (Color){220, 45, 31, 255}
-                        : current_level > base_level ? OSRS_GREEN : OSRS_YELLOW;
-        draw_text_shadow(ui, cur, r.x + 39, r.y + 2, 10, cur_color);
-        draw_text_shadow(ui, base, r.x + 39, r.y + 17, 9, OSRS_GREEN);
-    }
-
-    Rectangle total = side_ref_rect(layout, RUNEC_OSRS_STATS_TOTAL);
-    DrawRectangleRec(total, (Color){7, 7, 7, 238});
-    DrawRectangleLinesEx(total, 1, (Color){99, 91, 68, 255});
-    char total_text[32];
-    snprintf(total_text, sizeof(total_text), "Total level: %d",
-             ui->skill_total > 0 ? ui->skill_total : 0);
-    draw_centered_text(ui, total_text, total, 10, OSRS_YELLOW);
-}
-
 static void draw_combat_box(const RuneCUiState *ui, Rectangle r, int selected) {
     const char *asset = selected ? "combatboxes_1" : "combatboxes_0";
     runec_ui_draw_asset(&ui->assets, asset, r, WHITE);
@@ -4119,9 +3979,6 @@ static void draw_side(RuneCUiState *ui, const RuneCUiLayout *layout) {
         break;
     case RUNEC_UI_TAB_PRAYER:
         /* The viewer draws its protection-prayer tab over the content. */
-        break;
-    case RUNEC_UI_TAB_SKILLS:
-        draw_skills(ui, layout);
         break;
     case RUNEC_UI_TAB_COMBAT:
         draw_combat(ui, layout);
@@ -7071,22 +6928,6 @@ static void sync_fc_ui_status(ViewerState* v) {
     runec_ui_set_combat_weapon_name(&v->ui, weapon ? weapon->name : "Unarmed");
     runec_ui_set_combat_style_profile(&v->ui,
         weapon ? FC_LOADOUT.combat_style_profile : 0);
-
-    for (int i = 0; i < RUNEC_UI_SKILL_COUNT; i++) {
-        v->ui.skill_current[i] = 1;
-        v->ui.skill_base[i] = 1;
-    }
-    v->ui.skill_current[0] = v->ui.skill_base[0] = p->attack_level;
-    v->ui.skill_current[1] = v->ui.skill_base[1] = p->strength_level;
-    v->ui.skill_current[2] = v->ui.skill_base[2] = p->defence_level;
-    v->ui.skill_current[3] = v->ui.skill_base[3] = p->ranged_level;
-    v->ui.skill_current[4] = v->ui.skill_base[4] = p->prayer_level;
-    v->ui.skill_current[5] = v->ui.skill_base[5] = p->magic_level;
-    v->ui.skill_current[8] = v->ui.skill_base[8] = p->max_hp / 10;
-    int total = 0;
-    for (int i = 0; i < RUNEC_UI_SKILL_COUNT; i++)
-        total += v->ui.skill_base[i];
-    v->ui.skill_total = total;
 }
 
 /* Where the minimap centres the player: the drawn position, or the tile
