@@ -2135,114 +2135,16 @@ void runec_ui_draw_text_shadow(const RuneCUiAssets *assets, const char *text,
 /* Osrs Text */
 
 #define FC_OSRS_MENU_FONT_SIZE 16.0f
-#define FC_OSRS_FONT_ASSET "data/fonts/p11_full.png"
 #define FC_OSRS_MENU_FONT_ASSET "data/fonts/runescape_bold.ttf"
-#define FC_OSRS_FONT_CELL_SIZE 20
-#define FC_OSRS_FONT_COLUMNS 16
-#define FC_OSRS_FONT_GLYPHS 256
 
-typedef struct {
-    Rectangle source;
-    int offset_x;
-    int offset_y;
-    int advance;
-    int drawable;
-} FcOsrsGlyph;
-
-static Texture2D g_font_texture;
 static Font g_menu_font;
-static FcOsrsGlyph g_glyphs[FC_OSRS_FONT_GLYPHS];
-static int g_font_height;
-static int g_font_ready;
-
-static int is_magenta(Color color) {
-    return color.r == 255 && color.g == 0 && color.b == 255;
-}
-
-static int glyph_pixel_set(const Color* pixels, int image_width,
-                           int cell_x, int cell_y, int x, int y) {
-    return !is_magenta(
-        pixels[(cell_y + y) * image_width + cell_x + x]);
-}
-
-static void build_glyph_metrics(const Color* pixels, int image_width,
-                                int codepoint) {
-    FcOsrsGlyph* glyph = &g_glyphs[codepoint];
-    int cell_x = (codepoint % FC_OSRS_FONT_COLUMNS) *
-        FC_OSRS_FONT_CELL_SIZE;
-    int cell_y = (codepoint / FC_OSRS_FONT_COLUMNS) *
-        FC_OSRS_FONT_CELL_SIZE;
-    int left = FC_OSRS_FONT_CELL_SIZE;
-    int top = FC_OSRS_FONT_CELL_SIZE;
-    int right = -1;
-    int bottom = -1;
-
-    for (int y = 0; y < FC_OSRS_FONT_CELL_SIZE; y++) {
-        for (int x = 0; x < FC_OSRS_FONT_CELL_SIZE; x++) {
-            if (!glyph_pixel_set(pixels, image_width,
-                                 cell_x, cell_y, x, y)) {
-                continue;
-            }
-            if (x < left) left = x;
-            if (x > right) right = x;
-            if (y < top) top = y;
-            if (y > bottom) bottom = y;
-        }
-    }
-
-    if (right < left || bottom < top) {
-        glyph->advance = 0;
-        return;
-    }
-
-    int width = right - left + 1;
-    int height = bottom - top + 1;
-    glyph->source = (Rectangle){
-        (float)(cell_x + left), (float)(cell_y + top),
-        (float)width, (float)height,
-    };
-    glyph->offset_x = 1;
-    glyph->offset_y = top;
-    glyph->advance = width + 2;
-    glyph->drawable = codepoint >= 33 && codepoint != 127;
-
-    /* Exact cache-client PixFont advance calculation. */
-    int edge_start = height / 7;
-    int edge_threshold = height / 7;
-    int edge_pixels = 0;
-    for (int y = edge_start; y < height; y++) {
-        edge_pixels += glyph_pixel_set(
-            pixels, image_width, cell_x, cell_y,
-            left, top + y);
-    }
-    if (edge_pixels <= edge_threshold) {
-        glyph->advance--;
-        glyph->offset_x = 0;
-    }
-
-    edge_pixels = 0;
-    for (int y = edge_start; y < height; y++) {
-        edge_pixels += glyph_pixel_set(
-            pixels, image_width, cell_x, cell_y,
-            right, top + y);
-    }
-    if (edge_pixels <= edge_threshold)
-        glyph->advance--;
-
-    if (codepoint < 128 && height > g_font_height)
-        g_font_height = height;
-}
+static Font g_text_font;    /* the UI's small font, owned by RuneCUiAssets */
 
 void fc_osrs_text_shutdown(void) {
     if (g_menu_font.texture.id != 0)
         UnloadFont(g_menu_font);
     g_menu_font = (Font){0};
-    if (g_font_texture.id != 0)
-        UnloadTexture(g_font_texture);
-    g_font_texture = (Texture2D){0};
-    memset(g_glyphs, 0, sizeof(g_glyphs));
-    g_font_height = 0;
-    g_font_ready = 0;
+    g_text_font = (Font){0};
 }
 
 static int init_menu_font(void) {
@@ -2270,7 +2172,9 @@ Font fc_osrs_menu_font(void) {
     return g_menu_font;
 }
 
-int fc_osrs_text_init(void) {
+/* Loads the menu font. Console, debug and toast text is drawn in text_font
+ * at the size it was loaded at. */
+int fc_osrs_text_init(Font text_font) {
     fc_osrs_text_shutdown();
     if (!init_menu_font()) {
         fprintf(stderr, "error: failed to load required menu font %s\n",
@@ -2278,118 +2182,17 @@ int fc_osrs_text_init(void) {
         fc_osrs_text_shutdown();
         return 0;
     }
-
-    Image image = fc_load_image_asset(FC_OSRS_FONT_ASSET);
-    if (!image.data || image.width != 320 || image.height != 320) {
-        if (image.data)
-            UnloadImage(image);
-        fc_osrs_text_shutdown();
-        return 0;
-    }
-    ImageFormat(&image, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-    Color* pixels = (Color*)image.data;
-
-    for (int codepoint = 0;
-         codepoint < FC_OSRS_FONT_GLYPHS; codepoint++) {
-        build_glyph_metrics(pixels, image.width, codepoint);
-    }
-    if (g_font_height <= 0) {
-        UnloadImage(image);
-        fc_osrs_text_shutdown();
-        return 0;
-    }
-    /* Native chat uses lowercase-i width for spaces and never blits the
-     * placeholder sprite stored in the source sheet. */
-    g_glyphs[' '].advance = g_glyphs['i'].advance;
-    g_glyphs[' '].drawable = 0;
-
-    for (int i = 0; i < image.width * image.height; i++) {
-        if (is_magenta(pixels[i]))
-            pixels[i] = BLANK;
-        else
-            pixels[i] = WHITE;
-    }
-
-    g_font_texture = LoadTextureFromImage(image);
-    UnloadImage(image);
-    if (g_font_texture.id == 0) {
-        fc_osrs_text_shutdown();
-        return 0;
-    }
-    SetTextureFilter(g_font_texture, TEXTURE_FILTER_POINT);
-    g_font_ready = 1;
+    g_text_font = text_font;
     return 1;
 }
 
-static unsigned char next_osrs_character(const unsigned char* text,
-                                         size_t remaining,
-                                         size_t* consumed) {
-    *consumed = 1;
-    if (text[0] < 0x80)
-        return text[0];
-
-    /* Cache fonts are 8-bit. Normalize the Unicode punctuation used by the
-     * viewer diagnostics to the client's supported character repertoire. */
-    if (remaining >= 3 && text[0] == 0xe2 && text[1] == 0x80 &&
-        (text[2] == 0x93 || text[2] == 0x94)) {
-        *consumed = 3;
-        return '-';
-    }
-    if (remaining >= 3 && text[0] == 0xe2 && text[1] == 0x86 &&
-        text[2] == 0x92) {
-        *consumed = 3;
-        return '>';
-    }
-
-    if ((text[0] & 0xe0) == 0xc0 && remaining >= 2)
-        *consumed = 2;
-    else if ((text[0] & 0xf0) == 0xe0 && remaining >= 3)
-        *consumed = 3;
-    else if ((text[0] & 0xf8) == 0xf0 && remaining >= 4)
-        *consumed = 4;
-    return '?';
+void fc_osrs_draw_text(const char* text, int x, int y, Color color) {
+    DrawTextEx(g_text_font, text, (Vector2){(float)x, (float)y},
+               (float)g_text_font.baseSize, 0.0f, color);
 }
 
-void fc_osrs_draw_text(const char* text, int x, int y, int font_size,
-                       Color color) {
-    if (!text || !text[0] || font_size <= 0 || !g_font_ready)
-        return;
-
-    const unsigned char* bytes = (const unsigned char*)text;
-    size_t remaining = strlen(text);
-    while (remaining > 0) {
-        size_t consumed = 1;
-        unsigned char codepoint = next_osrs_character(
-            bytes, remaining, &consumed);
-        const FcOsrsGlyph* glyph = &g_glyphs[codepoint];
-        if (glyph->drawable) {
-            DrawTextureRec(g_font_texture, glyph->source,
-                           (Vector2){(float)(x + glyph->offset_x),
-                                     (float)(y + glyph->offset_y)},
-                           color);
-        }
-        x += glyph->advance;
-        bytes += consumed;
-        remaining -= consumed;
-    }
-}
-
-int fc_osrs_measure_text(const char* text, int font_size) {
-    if (!text || !text[0] || font_size <= 0 || !g_font_ready)
-        return 0;
-
-    int width = 0;
-    const unsigned char* bytes = (const unsigned char*)text;
-    size_t remaining = strlen(text);
-    while (remaining > 0) {
-        size_t consumed = 1;
-        unsigned char codepoint = next_osrs_character(
-            bytes, remaining, &consumed);
-        width += g_glyphs[codepoint].advance;
-        bytes += consumed;
-        remaining -= consumed;
-    }
-    return width;
+Vector2 fc_osrs_measure_text(const char* text) {
+    return MeasureTextEx(g_text_font, text, (float)g_text_font.baseSize, 0.0f);
 }
 
 /* Minimap */
@@ -6043,7 +5846,7 @@ void dbg_log_tick(const FcState* state) {
     /* Wave events */
     if (state->wave_just_cleared) {
         dbg_log_event(t, CLITERAL(Color){100,255,255,255},
-                      "Wave %d CLEARED — advancing", state->current_wave - 1);
+                      "Wave %d CLEARED - advancing", state->current_wave - 1);
     }
 
     /* Jad killed */
@@ -6058,7 +5861,7 @@ void dbg_log_tick(const FcState* state) {
 
     /* Cave complete */
     if (state->terminal == TERMINAL_CAVE_COMPLETE) {
-        dbg_log_event(t, CLITERAL(Color){0,255,0,255}, "*** CAVE COMPLETE — FIRE CAPE ***");
+        dbg_log_event(t, CLITERAL(Color){0,255,0,255}, "*** CAVE COMPLETE - FIRE CAPE ***");
     }
 }
 
@@ -6214,14 +6017,14 @@ void dbg_draw_prayer_window_indicator(Vector3 world_anchor, Camera3D cam) {
 
 /* Draws one formatted line of debug text at (x, *y) and moves *y down by
  * advance. */
-static void dbg_print_line(int x, int* y, int advance, int size, Color color,
+static void dbg_print_line(int x, int* y, int advance, Color color,
                            const char* fmt, ...) {
     char text[256];
     va_list args;
     va_start(args, fmt);
     vsnprintf(text, sizeof(text), fmt, args);
     va_end(args);
-    fc_osrs_draw_text(text, x, *y, size, color);
+    fc_osrs_draw_text(text, x, *y, color);
     *y += advance;
 }
 
@@ -6256,23 +6059,23 @@ int dbg_draw_panel_tabs(const FcState* state,
         const FcPlayer* p = &state->player;
         static const char* pray_str[] = { "OFF", "Melee", "Range", "Magic" };
 
-        dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL, "Pos:(%d,%d) Face:%.0f",
+        dbg_print_line(x, &by, lh, DBG_COL_LABEL, "Pos:(%d,%d) Face:%.0f",
                        p->x, p->y, p->facing_angle);
-        dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL, "HP:%d/%d Pray:%d/%d",
+        dbg_print_line(x, &by, lh, DBG_COL_LABEL, "HP:%d/%d Pray:%d/%d",
                        p->current_hp/10, p->max_hp/10,
                        p->current_prayer/10, p->max_prayer/10);
-        dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL, "Tmr atk:%d fd:%d pot:%d",
+        dbg_print_line(x, &by, lh, DBG_COL_LABEL, "Tmr atk:%d fd:%d pot:%d",
                        p->attack_timer, p->food_timer, p->potion_timer);
-        dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL,
+        dbg_print_line(x, &by, lh, DBG_COL_LABEL,
                        "Prayer:%s Drain:%d Bonus:+%d", pray_str[p->prayer],
                        p->prayer_drain_counter, p->prayer_bonus);
-        dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL, "Shark:%d Dose:%d Ammo:%d",
+        dbg_print_line(x, &by, lh, DBG_COL_LABEL, "Shark:%d Dose:%d Ammo:%d",
                        p->sharks_remaining, p->prayer_doses_remaining,
                        p->ammo_count);
-        dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL,
+        dbg_print_line(x, &by, lh, DBG_COL_LABEL,
                        "Tgt:%d Appr:%d Route:%d/%d", p->attack_target_idx,
                        p->approach_target, p->route_idx, p->route_len);
-        dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL, "Hits:%d Run:%d Regen:%d",
+        dbg_print_line(x, &by, lh, DBG_COL_LABEL, "Hits:%d Run:%d Regen:%d",
                        p->num_pending_hits, p->is_running, p->hp_regen_counter);
 
         /* Active NPCs compact list */
@@ -6283,7 +6086,7 @@ int dbg_draw_panel_tabs(const FcState* state,
             if (!n->active) continue;
             const char* nm = n->npc_type > NPC_NONE && n->npc_type < NPC_TYPE_COUNT
                 ? npc_names[n->npc_type] : "?";
-            dbg_print_line(x, &by, lh - 2, 7,
+            dbg_print_line(x, &by, lh - 2,
                            n->is_dead ? DBG_COL_BAD : DBG_COL_DIM,
                            "[%d]%s hp:%d atk:%d/%d", i, nm, n->current_hp/10,
                            n->attack_timer, n->attack_speed);
@@ -6295,34 +6098,34 @@ int dbg_draw_panel_tabs(const FcState* state,
         fc_write_obs(state, obs);
         int mbase = FC_OBS_META_START;
 
-        dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL,
+        dbg_print_line(x, &by, lh, DBG_COL_LABEL,
                        "HP:%.2f Pray:%.2f X:%.2f Y:%.2f",
                        obs[FC_OBS_PLAYER_HP], obs[FC_OBS_PLAYER_PRAYER],
                        obs[FC_OBS_PLAYER_X], obs[FC_OBS_PLAYER_Y]);
-        dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL,
+        dbg_print_line(x, &by, lh, DBG_COL_LABEL,
                        "Atk:%.2f Run:%.2f Sharks:%.2f Dose:%.2f",
                        obs[FC_OBS_PLAYER_ATK_TIMER],
                        obs[FC_OBS_PLAYER_RUN_ENERGY],
                        obs[FC_OBS_PLAYER_SHARKS],
                        obs[FC_OBS_PLAYER_DOSES]);
-        dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL, "Pray M%.0f R%.0f G%.0f T%.2f",
+        dbg_print_line(x, &by, lh, DBG_COL_LABEL, "Pray M%.0f R%.0f G%.0f T%.2f",
                        obs[FC_OBS_PLAYER_PRAY_MEL],
                        obs[FC_OBS_PLAYER_PRAY_RNG],
                        obs[FC_OBS_PLAYER_PRAY_MAG],
                        obs[FC_OBS_PLAYER_TARGET]);
-        dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL, "PrayDDL M%.2f R%.2f G%.2f",
+        dbg_print_line(x, &by, lh, DBG_COL_LABEL, "PrayDDL M%.2f R%.2f G%.2f",
                        obs[FC_OBS_PLAYER_PRAY_DDL_MEL],
                        obs[FC_OBS_PLAYER_PRAY_DDL_RNG],
                        obs[FC_OBS_PLAYER_PRAY_DDL_MAG]);
-        dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL, "Meta W%.2f Rot%.2f Rem%.2f",
+        dbg_print_line(x, &by, lh, DBG_COL_LABEL, "Meta W%.2f Rot%.2f Rem%.2f",
                        obs[mbase + FC_OBS_META_WAVE],
                        obs[mbase + FC_OBS_META_ROTATION],
                        obs[mbase + FC_OBS_META_REMAINING]);
-        dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL, "Drain:%.2f Dmg:%.2f Clear:%.0f",
+        dbg_print_line(x, &by, lh, DBG_COL_LABEL, "Drain:%.2f Dmg:%.2f Clear:%.0f",
                        obs[mbase + FC_OBS_META_PRAY_DRAIN],
                        obs[mbase + FC_OBS_META_DMG_T_TICK],
                        obs[mbase + FC_OBS_META_WAVE_CLR]);
-        dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL,
+        dbg_print_line(x, &by, lh, DBG_COL_LABEL,
                        "Prog C%.2f W%.2f Rem%.2f NoP%.2f",
                        obs[mbase + FC_OBS_META_CAVE_PROG],
                        obs[mbase + FC_OBS_META_WAVE_PROG],
@@ -6330,7 +6133,7 @@ int dbg_draw_panel_tabs(const FcState* state,
                        obs[mbase + FC_OBS_META_NO_PROG]);
 
         by += 2;
-        dbg_print_line(x, &by, lh - 1, 7, DBG_COL_DIM, "NPC slots:");
+        dbg_print_line(x, &by, lh - 1, DBG_COL_DIM, "NPC slots:");
         for (int s = 0; s < FC_OBS_NPC_SLOTS; s++) {
             int base = FC_OBS_NPC_START + s * FC_OBS_NPC_STRIDE;
             if (obs[base + FC_NPC_VALID] < 0.5f) continue;
@@ -6338,7 +6141,7 @@ int dbg_draw_panel_tabs(const FcState* state,
             if (obs[base + FC_NPC_TELE_MELEE]  > 0.5f) tele = 'M';
             else if (obs[base + FC_NPC_TELE_RANGED] > 0.5f) tele = 'R';
             else if (obs[base + FC_NPC_TELE_MAGIC]  > 0.5f) tele = 'A';
-            dbg_print_line(x, &by, lh - 2, 7, DBG_COL_LABEL,
+            dbg_print_line(x, &by, lh - 2, DBG_COL_LABEL,
                            "[%d] hp:%.2f d:%.2f tele:%c los:%.0f pd:%.2f ddl:%.0f/%.2f",
                            s,
                            obs[base + FC_NPC_HP],
@@ -6360,28 +6163,28 @@ int dbg_draw_panel_tabs(const FcState* state,
         fc_write_mask(state, mask);
 
         for (int head = 0; head < 3; head++) {
-            fc_osrs_draw_text(labels[head], x, by, 8, DBG_COL_DIM);
+            fc_osrs_draw_text(labels[head], x, by, DBG_COL_DIM);
             dbg_mask_bits(mask, head, bits);
-            dbg_print_line(x + 30, &by, lh, 8, DBG_COL_LABEL, " %s", bits);
+            dbg_print_line(x + 30, &by, lh, DBG_COL_LABEL, " %s", bits);
         }
         dbg_mask_bits(mask, 3, bits);
         dbg_mask_bits(mask, 4, drink_bits);
-        dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL, "EAT:%s  DRINK:%s",
+        dbg_print_line(x, &by, lh, DBG_COL_LABEL, "EAT:%s  DRINK:%s",
                        bits, drink_bits);
         int valid_x = dbg_mask_bits(mask, 5, bits);
         int valid_y = dbg_mask_bits(mask, 6, bits);
-        dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL, "TGT_X:%d/%d TGT_Y:%d/%d",
+        dbg_print_line(x, &by, lh, DBG_COL_LABEL, "TGT_X:%d/%d TGT_Y:%d/%d",
                        valid_x, FC_ACTION_DIMS[5], valid_y, FC_ACTION_DIMS[6]);
 
     } else if (dbg_tab == 3) {
         const FcRewardBreakdown* b = reward_breakdown;
         const char* cfg_name = dbg_basename(reward_config_path);
 
-        dbg_print_line(x, &by, lh + 2, 8, DBG_COL_VALUE,
+        dbg_print_line(x, &by, lh + 2, DBG_COL_VALUE,
                        "Training reward parity");
-        dbg_print_line(x, &by, lh, 8, DBG_COL_LABEL, "cfg:%s%s", cfg_name,
+        dbg_print_line(x, &by, lh, DBG_COL_LABEL, "cfg:%s%s", cfg_name,
                        reward_config_loaded ? "" : " (defaults)");
-        dbg_print_line(x, &by, lh + 2, 8, dbg_reward_color(b->total),
+        dbg_print_line(x, &by, lh + 2, dbg_reward_color(b->total),
                        "total:%+.4f noatk_t:%d", b->total,
                        reward_runtime->ticks_since_attack);
 
@@ -6404,17 +6207,17 @@ int dbg_draw_panel_tabs(const FcState* state,
             int term_count = (int)(sizeof(terms) / sizeof(terms[0]));
 
             for (int i = 0; i < term_count; i++) {
-                dbg_print_line(x, &by, lh, 7, dbg_reward_color(terms[i].value),
+                dbg_print_line(x, &by, lh, dbg_reward_color(terms[i].value),
                                "%-12s %+.4f", terms[i].name, terms[i].value);
             }
         }
     } else if (dbg_tab == 4) {
         /* Event log, most recent at top */
         if (g_dbg_log.count == 0)
-            dbg_print_line(x, &by, lh, 8, DBG_COL_DIM, "No events yet");
+            dbg_print_line(x, &by, lh, DBG_COL_DIM, "No events yet");
         for (int i = 0; i < g_dbg_log.count; i++) {
             int idx = (g_dbg_log.head - 1 - i + DBG_LOG_MAX_ENTRIES * 2) % DBG_LOG_MAX_ENTRIES;
-            dbg_print_line(x, &by, lh - 2, 7, g_dbg_log.color[idx],
+            dbg_print_line(x, &by, lh - 2, g_dbg_log.color[idx],
                            "t%d %s", g_dbg_log.tick[idx],
                            g_dbg_log.entries[idx]);
         }
@@ -6843,9 +6646,9 @@ static void handle_runec_ui_intent(ViewerState* v) {
     }
 }
 
-static void text_s(const char* t, int x, int y, int sz, Color c) {
-    fc_osrs_draw_text(t, x+1, y+1, sz, COL_TEXT_SHADOW);
-    fc_osrs_draw_text(t, x, y, sz, c);
+static void text_s(const char* t, int x, int y, Color c) {
+    fc_osrs_draw_text(t, x+1, y+1, COL_TEXT_SHADOW);
+    fc_osrs_draw_text(t, x, y, c);
 }
 
 static int float_near(float a, float b) {
@@ -7567,22 +7370,18 @@ static void draw_runec_console_button(Rectangle rect, const char* label,
     Color text = selected ? COL_TEXT_YELLOW : COL_TEXT_WHITE;
     DrawRectangleRec(rect, background);
     DrawRectangleLinesEx(rect, 1, COL_PANEL_BORDER);
-    int font_size = 8;
-    fc_osrs_draw_text(label,
-             (int)(rect.x + (rect.width - fc_osrs_measure_text(label, font_size)) * 0.5f),
-             (int)(rect.y + (rect.height - font_size) * 0.5f),
-             font_size, text);
+    Vector2 size = fc_osrs_measure_text(label);
+    fc_osrs_draw_text(label, (int)(rect.x + (rect.width - size.x) * 0.5f),
+                      (int)(rect.y + (rect.height - size.y) * 0.5f), text);
 }
 
 static void draw_runec_console_wave_grid(ViewerState* v, Rectangle body) {
     Vector2 mouse = GetMousePosition();
     DrawRectangleRec(body, CLITERAL(Color){18, 16, 13, 252});
     DrawRectangleLinesEx(body, 1, COL_PANEL_BORDER);
-    fc_osrs_draw_text("Select Wave", (int)body.x + 4, (int)body.y + 3,
-             9, COL_TEXT_YELLOW);
+    fc_osrs_draw_text("Select Wave", (int)body.x + 4, (int)body.y + 3, COL_TEXT_YELLOW);
     fc_osrs_draw_text("click current selection to close",
-             (int)(body.x + body.width) - 155, (int)body.y + 4,
-             7, COL_TEXT_DIM);
+                      (int)(body.x + body.width) - 155, (int)body.y + 4, COL_TEXT_DIM);
     for (int wave = 1; wave <= FC_NUM_WAVES; wave++) {
         Rectangle cell = runec_console_wave_cell_rect(body, wave);
         int current = wave == v->state.current_wave;
@@ -7595,9 +7394,8 @@ static void draw_runec_console_wave_grid(ViewerState* v, Rectangle body) {
         char label[8];
         snprintf(label, sizeof(label), "%d", wave);
         fc_osrs_draw_text(label,
-                 (int)(cell.x + (cell.width - fc_osrs_measure_text(label, 8)) * 0.5f),
-                 (int)cell.y + 3, 8,
-                 current ? COL_TEXT_YELLOW : COL_TEXT_WHITE);
+                          (int)(cell.x + (cell.width - fc_osrs_measure_text(label).x) * 0.5f),
+                          (int)cell.y + 3, current ? COL_TEXT_YELLOW : COL_TEXT_WHITE);
     }
 }
 
@@ -7627,7 +7425,7 @@ static void draw_runec_console_controls(ViewerState* v, Rectangle body) {
     int x = (int)body.x + 4;
     char text[128];
 
-    fc_osrs_draw_text("NPC Targets", x, (int)body.y + 3, 9, COL_TEXT_YELLOW);
+    fc_osrs_draw_text("NPC Targets", x, (int)body.y + 3, COL_TEXT_YELLOW);
     int slots[RUNEC_CONSOLE_NPC_ROWS];
     int shown = console_target_slots(&v->state, slots);
     for (int i = 0; i < shown; i++) {
@@ -7645,8 +7443,8 @@ static void draw_runec_console_controls(ViewerState* v, Rectangle body) {
                  selected ? ">" : " ", npc_short_name(npc->npc_type), ni,
                  fc_distance_to_npc(v->state.player.x,
                                     v->state.player.y, npc));
-        fc_osrs_draw_text(text, (int)row.x + 2, (int)row.y + 3, 8,
-                 selected ? COL_TEXT_YELLOW : COL_TEXT_WHITE);
+        fc_osrs_draw_text(text, (int)row.x + 2, (int)row.y + 3,
+                          selected ? COL_TEXT_YELLOW : COL_TEXT_WHITE);
 
         int bar_x = (int)row.x + 116;
         int bar_w = 116;
@@ -7658,19 +7456,16 @@ static void draw_runec_console_controls(ViewerState* v, Rectangle body) {
         DrawRectangle(bar_x, (int)row.y + 3,
                       (int)((float)bar_w * hp), 7, COL_HP_GREEN);
         snprintf(text, sizeof(text), "%d", npc->current_hp / 10);
-        fc_osrs_draw_text(text, bar_x + bar_w + 4, (int)row.y + 2,
-                 8, COL_TEXT_DIM);
+        fc_osrs_draw_text(text, bar_x + bar_w + 4, (int)row.y + 2, COL_TEXT_DIM);
     }
     if (shown == 0)
-        fc_osrs_draw_text("No NPCs alive", x + 2, (int)body.y + 20,
-                 8, COL_TEXT_DIM);
+        fc_osrs_draw_text("No NPCs alive", x + 2, (int)body.y + 20, COL_TEXT_DIM);
 
     int right_x = (int)body.x + 286;
     DrawLine(right_x - 5, (int)body.y + 2,
              right_x - 5, (int)(body.y + body.height) - 2,
              COL_PANEL_BORDER);
-    fc_osrs_draw_text("Viewer Controls", right_x, (int)body.y + 3,
-             9, COL_TEXT_YELLOW);
+    fc_osrs_draw_text("Viewer Controls", right_x, (int)body.y + 3, COL_TEXT_YELLOW);
 
     char debug_label[24];
     snprintf(debug_label, sizeof(debug_label), "Debug: %s",
@@ -7689,7 +7484,7 @@ static void draw_runec_console_controls(ViewerState* v, Rectangle body) {
     draw_runec_console_button(wave, text, 0);
 
     fc_osrs_draw_text(v->policy_replay ? "Replay TPS" : "TPS Presets",
-             right_x, (int)body.y + 62, 8, COL_TEXT_DIM);
+                      right_x, (int)body.y + 62, COL_TEXT_DIM);
     for (int i = 0; i < NUM_MANUAL_TPS_PRESETS; i++) {
         draw_runec_console_button(runec_console_tps_button_rect(body, i),
                                   MANUAL_TPS_LABELS[i],
@@ -7766,10 +7561,8 @@ static void draw_runec_console(ViewerState* v) {
                      (int)(rect.y + rect.height) - 2,
                      COL_TEXT_YELLOW);
         fc_osrs_draw_text(labels[tab],
-                 (int)(rect.x +
-                     (rect.width - fc_osrs_measure_text(labels[tab], 8)) * 0.5f),
-                 (int)rect.y + 7, 8,
-                 selected ? COL_TEXT_YELLOW : COL_TEXT_WHITE);
+                          (int)(rect.x + (rect.width - fc_osrs_measure_text(labels[tab]).x) * 0.5f),
+                          (int)rect.y + 7, selected ? COL_TEXT_YELLOW : COL_TEXT_WHITE);
     }
 }
 
@@ -7898,15 +7691,15 @@ static void draw_runec_prayer_tab(ViewerState* v, Rectangle content) {
 
     snprintf(b, sizeof(b), "Prayer: %d / %d",
              p->current_prayer / 10, p->max_prayer / 10);
-    text_s(b, x, by, 10, COL_PRAY_BLUE);
+    text_s(b, x, by, COL_PRAY_BLUE);
     by += 16;
 
     if (rendered_prayer != PRAYER_NONE) {
         int resistance = 60 + 2 * p->prayer_bonus;
         snprintf(b, sizeof(b), "Drain rate: 12 / %d resist", resistance);
-        text_s(b, x, by, 8, COL_TEXT_DIM);
+        text_s(b, x, by, COL_TEXT_DIM);
     } else {
-        text_s("No prayer active", x, by, 8, COL_TEXT_DIM);
+        text_s("No prayer active", x, by, COL_TEXT_DIM);
     }
     by += 14;
 
@@ -7944,20 +7737,20 @@ static void draw_runec_prayer_tab(ViewerState* v, Rectangle content) {
 
         Color tc = no_points ? COL_TEXT_DIM
             : (is_active ? COL_TEXT_WHITE : row->color);
-        text_s(row->label, (int)br.x + 38, (int)br.y + 7, 10, tc);
+        text_s(row->label, (int)br.x + 38, (int)br.y + 7, tc);
 
         snprintf(b, sizeof(b), "[%d]", i + 1);
-        text_s(b, (int)br.x + 38, (int)br.y + 21, 8, COL_TEXT_DIM);
+        text_s(b, (int)br.x + 38, (int)br.y + 21, COL_TEXT_DIM);
         if (is_active) {
             text_s("ACTIVE", (int)(br.x + br.width) - 44,
-                   (int)br.y + 21, 8, COL_TEXT_WHITE);
+                   (int)br.y + 21, COL_TEXT_WHITE);
         }
     }
 
     by = (int)runec_prayer_button_rect(
         content, FC_PROTECTION_PRAYER_COUNT - 1).y + 34 + 9;
     snprintf(b, sizeof(b), "Prayer bonus: +%d", p->prayer_bonus);
-    text_s(b, x, by, 8, COL_TEXT_DIM);
+    text_s(b, x, by, COL_TEXT_DIM);
 
     EndScissorMode();
 }
@@ -8076,7 +7869,7 @@ static ViewerState* fc_viewer_create(int replay) {
     }
     fc_init(&v->state);
     runec_ui_init(&v->ui);
-    if (!fc_osrs_text_init()) {
+    if (!fc_osrs_text_init(v->ui.assets.small_font)) {
         fprintf(stderr,
                 "error: required OSRS viewer fonts failed to load\n");
         fc_viewer_destroy(v);
@@ -8457,7 +8250,7 @@ static int fc_viewer_frame(ViewerState* v) {
     draw_click_cross(v);
     if (v->item_message_seconds > 0) {
         DrawRectangle(8, GetScreenHeight() - 34, 490, 26, (Color){20, 16, 12, 240});
-        text_s(v->item_message, 16, GetScreenHeight() - 29, 16, YELLOW);
+        text_s(v->item_message, 16, GetScreenHeight() - 29, YELLOW);
     }
     /* Menus must cover the console and prayer overrides, not sit behind them. */
     runec_ui_draw_context(&v->ui);
