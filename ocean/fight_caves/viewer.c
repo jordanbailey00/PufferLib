@@ -4918,7 +4918,6 @@ typedef struct {
     float x;
     float y;
     float yaw_degrees;
-    int moving;
     FcVisualLocomotion locomotion;
 } FcVisualPose;
 
@@ -5213,7 +5212,6 @@ FcVisualPose fc_visual_actor_pose(const FcVisualScene* scene,
     pose.x = local_x / FC_VISUAL_LOCAL_UNITS;
     pose.y = local_y / FC_VISUAL_LOCAL_UNITS;
     pose.yaw_degrees = actor->yaw_degrees;
-    pose.moving = actor->moving;
     pose.locomotion = actor->locomotion;
     return pose;
 }
@@ -6187,13 +6185,14 @@ struct FcCombatPresentation {
     Texture2D overlay_sprites[OVERLAY_SPRITE_COUNT];
 };
 
-static float ground_height(const FcCombatPresentationContext *context,
-                           int tile_x, int tile_y) {
-    return context && context->terrain
-        ? terrain_height_at(context->terrain, tile_x, tile_y) + 0.1f : 0.0f;
+/* Actor ground height: slightly above the terrain, so actors stand on the
+ * flattened cracks. */
+static float ground_height(TerrainMesh *terrain, int tile_x, int tile_y) {
+    return terrain ? terrain_height_at(terrain, tile_x, tile_y) + 0.1f : 0.0f;
 }
 
-static float smooth_ground_height(const FcCombatPresentationContext *context,
+/* Ground height between tile centres, interpolated bilinearly. */
+static float smooth_ground_height(TerrainMesh *terrain,
                                   float tile_x, float tile_y) {
     int x0 = (int)floorf(tile_x);
     int y0 = (int)floorf(tile_y);
@@ -6205,10 +6204,10 @@ static float smooth_ground_height(const FcCombatPresentationContext *context,
     int y1 = y0 + 1 < FC_ARENA_HEIGHT ? y0 + 1 : y0;
     float tx = tile_x - floorf(tile_x);
     float ty = tile_y - floorf(tile_y);
-    float h00 = ground_height(context, x0, y0);
-    float h10 = ground_height(context, x1, y0);
-    float h01 = ground_height(context, x0, y1);
-    float h11 = ground_height(context, x1, y1);
+    float h00 = ground_height(terrain, x0, y0);
+    float h10 = ground_height(terrain, x1, y0);
+    float h01 = ground_height(terrain, x0, y1);
+    float h11 = ground_height(terrain, x1, y1);
     float h0 = h00 + (h10 - h00) * tx;
     float h1 = h01 + (h11 - h01) * tx;
     return h0 + (h1 - h0) * ty;
@@ -6312,7 +6311,7 @@ static int actor_world_point(const FcCombatPresentationContext *context,
     }
     *x = pose.x;
     *z = -pose.y;
-    *y = smooth_ground_height(context, pose.x, pose.y) + height;
+    *y = smooth_ground_height(context->terrain, pose.x, pose.y) + height;
     return 1;
 }
 
@@ -6417,11 +6416,11 @@ static void launch_projectile(FcCombatPresentation *presentation,
     projectile->total_time = projectile->launch_delay + flight;
 
     projectile->src_x = (float)source_x + 0.5f;
-    projectile->src_y = ground_height(context, source_x, source_y) +
+    projectile->src_y = ground_height(context->terrain, source_x, source_y) +
                         profile->start_height / 128.0f;
     projectile->src_z = -((float)source_y + 0.5f);
     projectile->dst_x = (float)target_x + (float)target_size * 0.5f;
-    projectile->dst_y = ground_height(context, target_x, target_y) +
+    projectile->dst_y = ground_height(context->terrain, target_x, target_y) +
                         profile->end_height / 128.0f;
     projectile->dst_z = -((float)target_y + (float)target_size * 0.5f);
     float x;
@@ -6664,7 +6663,7 @@ void fc_combat_presentation_ingest_tick(
     if (!presentation || !context || !context->state || !context->events ||
         !context->player_profile) return;
     const FcState *state = context->state;
-    float player_ground = ground_height(context,
+    float player_ground = ground_height(context->terrain,
         clamp_int(state->player.x, 0, FC_ARENA_WIDTH - 1),
         clamp_int(state->player.y, 0, FC_ARENA_HEIGHT - 1));
     float player_world_x = (float)state->player.x + 0.5f;
@@ -6690,7 +6689,7 @@ void fc_combat_presentation_ingest_tick(
                    hit->target_npc_slot >= 0 &&
                    hit->target_npc_slot < FC_MAX_NPCS) {
             const FcNpc *target = &state->npcs[hit->target_npc_slot];
-            float ground = ground_height(context, target->x, target->y);
+            float ground = ground_height(context->terrain, target->x, target->y);
             float x = (float)target->x + (float)target->size * 0.5f;
             float z = -((float)target->y + (float)target->size * 0.5f);
             float y = ground + 1.0f + (float)target->size * 0.5f;
@@ -6704,7 +6703,7 @@ void fc_combat_presentation_ingest_tick(
     for (int i = 0; i < FC_MAX_NPCS; i++) {
         const FcNpc *npc = &state->npcs[i];
         if (npc->healing_received_this_tick > 0) {
-            float ground = ground_height(context, npc->x, npc->y);
+            float ground = ground_height(context->terrain, npc->x, npc->y);
             float x = (float)npc->x + (float)npc->size * 0.5f;
             float z = -((float)npc->y + (float)npc->size * 0.5f);
             float y = ground + 1.4f + (float)npc->size * 0.5f;
@@ -6989,7 +6988,7 @@ static Vector3 overlay_anchor(const FcCombatPresentationDrawContext *context,
     FcVisualPose pose = entity_pose(context, entity);
     return (Vector3){
         pose.x,
-        smooth_ground_height(&context->presentation, pose.x, pose.y) +
+        smooth_ground_height(context->presentation.terrain, pose.x, pose.y) +
             entity_model_top(context, entity) * height_fraction + extra_height,
         -pose.y,
     };
@@ -8558,9 +8557,6 @@ static void viewer_jump_to_wave(ViewerState* v, int wave) {
     fc_click_feedback_reset(&v->click_feedback);
     dbg_log_clear();
 }
-/* Forward declaration */
-static float ground_y(ViewerState* v, int tile_x, int tile_y);
-static float ground_y_smooth(ViewerState* v, float tile_x, float tile_y);
 
 /* ======================================================================== */
 /* Human input → action heads                                                */
@@ -8569,8 +8565,8 @@ static float ground_y_smooth(ViewerState* v, float tile_x, float tile_y);
 /* Raycast from mouse position to find the tile coordinate on the ground plane */
 static int raycast_to_tile(ViewerState* v, int* out_x, int* out_y) {
     Ray ray = GetScreenToWorldRay(GetMousePosition(), v->camera);
-    /* Intersect with Y = ground_y plane */
-    float gy = ground_y(v, 32, 32);
+    /* Intersect with the ground plane at the arena centre's height */
+    float gy = ground_height(v->terrain, 32, 32);
     if (fabsf(ray.direction.y) < 0.001f) return 0;  /* ray parallel to ground */
     float t = (gy - ray.position.y) / ray.direction.y;
     if (t < 0) return 0;  /* behind camera */
@@ -8598,7 +8594,8 @@ static int find_clicked_npc_idx(ViewerState* v) {
         const FcNpc *n = &v->state.npcs[slot];
         if (!n->active || n->is_dead) continue;
         FcVisualPose pose = fc_visual_scene_npc_pose(&v->actor_animation.scene, slot);
-        Vector3 position = {pose.x, ground_y_smooth(v, pose.x, pose.y), -pose.y};
+        Vector3 position = {
+            pose.x, smooth_ground_height(v->terrain, pose.x, pose.y), -pose.y};
         const ModelEntry *model = npc_model_find(v->npc_models,
                                                  entity->npc_type);
         const AnimModelState *animation = v->actor_animation.npcs[slot].state;
@@ -8729,40 +8726,10 @@ static void build_human_actions(ViewerState* v) {
     v->pending_tile_y = -1;
 }
 
-/* Entity ground Y — slightly above terrain so entities stand on the flattened cracks */
-static float ground_y(ViewerState* v, int tile_x, int tile_y) {
-    if (v->terrain) {
-        return terrain_height_at(v->terrain, tile_x, tile_y) + 0.1f;
-    }
-    return 0.0f;
-}
-
-static float ground_y_smooth(ViewerState* v, float tile_x, float tile_y) {
-    int x0 = (int)floorf(tile_x);
-    int y0 = (int)floorf(tile_y);
-    if (x0 < 0) x0 = 0;
-    if (y0 < 0) y0 = 0;
-    if (x0 >= FC_ARENA_WIDTH) x0 = FC_ARENA_WIDTH - 1;
-    if (y0 >= FC_ARENA_HEIGHT) y0 = FC_ARENA_HEIGHT - 1;
-    int x1 = x0 + 1 < FC_ARENA_WIDTH ? x0 + 1 : x0;
-    int y1 = y0 + 1 < FC_ARENA_HEIGHT ? y0 + 1 : y0;
-    float tx = tile_x - floorf(tile_x);
-    float ty = tile_y - floorf(tile_y);
-    float h00 = ground_y(v, x0, y0);
-    float h10 = ground_y(v, x1, y0);
-    float h01 = ground_y(v, x0, y1);
-    float h11 = ground_y(v, x1, y1);
-    float h0 = h00 + (h10 - h00) * tx;
-    float h1 = h01 + (h11 - h01) * tx;
-    return h0 + (h1 - h0) * ty;
-}
-
 typedef struct {
     float x;
     float y;
     float face_angle;
-    int moving;
-    FcVisualLocomotion locomotion;
 } EntityRenderPose;
 
 static EntityRenderPose entity_render_pose(const ViewerState* v,
@@ -8775,8 +8742,6 @@ static EntityRenderPose entity_render_pose(const ViewerState* v,
     pose.x = visual.x;
     pose.y = visual.y;
     pose.face_angle = visual.yaw_degrees;
-    pose.moving = visual.moving;
-    pose.locomotion = visual.locomotion;
     return pose;
 }
 
@@ -8784,7 +8749,7 @@ static Vector2 click_route_point_to_screen(ViewerState* v,
                                            float tile_x, float tile_y) {
     Vector3 world = {
         tile_x,
-        ground_y_smooth(v, tile_x, tile_y) + 0.08f,
+        smooth_ground_height(v->terrain, tile_x, tile_y) + 0.08f,
         -tile_y,
     };
     return GetWorldToScreen(world, v->camera);
@@ -8799,7 +8764,7 @@ static void draw_click_destination_3d(ViewerState* v) {
         return;
     }
 
-    float y = ground_y(v, tx, ty) + 0.025f;
+    float y = ground_height(v->terrain, tx, ty) + 0.025f;
     Vector3 center = {(float)tx + 0.5f, y, -((float)ty + 0.5f)};
     Color fill = {255, 215, 0, 70};
     Color edge = {255, 235, 70, 230};
@@ -8875,7 +8840,7 @@ static void draw_npc_prayer_window_indicators(ViewerState* v) {
         EntityRenderPose pose = entity_render_pose(v, entity);
         Vector3 anchor = {
             pose.x,
-            ground_y_smooth(v, pose.x, pose.y) +
+            smooth_ground_height(v->terrain, pose.x, pose.y) +
                 2.2f + (float)entity->size * 0.8f,
             -pose.y
         };
@@ -8940,11 +8905,12 @@ static void draw_actor_footprint(ViewerState* v,
     const Color outline = is_player
         ? CLITERAL(Color){80, 255, 130, 225}
         : CLITERAL(Color){80, 180, 255, 210};
+    TerrainMesh* terrain = v->terrain;
     for (int offset_x = 0; offset_x < entity->size; offset_x++) {
         for (int offset_y = 0; offset_y < entity->size; offset_y++) {
             float tile_x = (float)(entity->x + offset_x) + 0.5f;
             float tile_y = (float)(entity->y + offset_y) + 0.5f;
-            float height = ground_y_smooth(v, tile_x, tile_y) + 0.035f;
+            float height = smooth_ground_height(terrain, tile_x, tile_y) + 0.035f;
             Vector3 center = {tile_x, height, -tile_y};
             DrawCube(center, 0.94f, 0.02f, 0.94f, fill);
         }
@@ -8955,13 +8921,13 @@ static void draw_actor_footprint(ViewerState* v,
     float min_y = (float)entity->y + 0.03f;
     float max_y = (float)(entity->y + entity->size) - 0.03f;
     Vector3 northwest = {
-        min_x, ground_y_smooth(v, min_x, min_y) + 0.055f, -min_y};
+        min_x, smooth_ground_height(terrain, min_x, min_y) + 0.055f, -min_y};
     Vector3 northeast = {
-        max_x, ground_y_smooth(v, max_x, min_y) + 0.055f, -min_y};
+        max_x, smooth_ground_height(terrain, max_x, min_y) + 0.055f, -min_y};
     Vector3 southeast = {
-        max_x, ground_y_smooth(v, max_x, max_y) + 0.055f, -max_y};
+        max_x, smooth_ground_height(terrain, max_x, max_y) + 0.055f, -max_y};
     Vector3 southwest = {
-        min_x, ground_y_smooth(v, min_x, max_y) + 0.055f, -max_y};
+        min_x, smooth_ground_height(terrain, min_x, max_y) + 0.055f, -max_y};
     DrawLine3D(northwest, northeast, outline);
     DrawLine3D(northeast, southeast, outline);
     DrawLine3D(southeast, southwest, outline);
@@ -9022,7 +8988,7 @@ static void draw_scene(ViewerState* v) {
         float ey = -pose.y;
 
         /* Sample terrain continuously along the interpolated movement path. */
-        float gy = ground_y_smooth(v, pose.x, pose.y);
+        float gy = smooth_ground_height(v->terrain, pose.x, pose.y);
 
         draw_actor_footprint(v, e);
         /* sync_player_appearance composes the player model every frame and
@@ -9097,7 +9063,7 @@ static void draw_scene(ViewerState* v) {
         &v->actor_animation, &v->state));
     if (v->entity_count > 0 && prayer_row >= 0) {
         EntityRenderPose pose = entity_render_pose(v, &v->entities[0]);
-        float p_gy = ground_y_smooth(v, pose.x, pose.y);
+        float p_gy = smooth_ground_height(v->terrain, pose.x, pose.y);
         Vector3 head_pos = {pose.x, p_gy + 3.0f, -pose.y};
         Vector2 scr = GetWorldToScreen(head_pos, v->camera);
         int px = (int)scr.x, py = (int)scr.y;
