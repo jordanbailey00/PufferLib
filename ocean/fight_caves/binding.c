@@ -1,7 +1,7 @@
 /*
- * binding.c — PufferLib 5.0 initialization and logging for Fight Caves.
- *
- * Implements puf_init/puf_log using Puffer's native configuration dictionary.
+ * binding.c — PufferLib 5.0 adapter for Fight Caves: puf_init, puf_reset,
+ * puf_step, puf_render, puf_close and puf_log. It is the one C translation
+ * unit that compiles the core implementation and the viewer.
  */
 
 /* This translation unit is the sole implementation owner in native builds. */
@@ -99,15 +99,9 @@ void puf_reset(Env* env) {
     env->seed_counter++;
     fc_reset(&env->state,
              fc_puffer_mix_reset_seed((uint32_t)env->rng, env->seed_counter));
-    if (env->initial_sharks < 0) env->initial_sharks = 0;
-    if (env->initial_sharks > FC_MAX_SHARKS) env->initial_sharks = FC_MAX_SHARKS;
-    if (env->initial_prayer_doses < 0) env->initial_prayer_doses = 0;
-    if (env->initial_prayer_doses > FC_MAX_PRAYER_DOSES)
-        env->initial_prayer_doses = FC_MAX_PRAYER_DOSES;
+    /* fc_set_initial_supplies clamps the configured supply counts. */
     fc_set_initial_supplies(&env->state, env->initial_sharks,
                             env->initial_prayer_doses);
-
-    env->ep_length = 0;
     fc_reward_runtime_begin_episode(&env->reward_runtime, &env->state);
     /* Compute initial observations */
     fc_puffer_write_obs(env);
@@ -116,27 +110,22 @@ void puf_reset(Env* env) {
 
 void puf_step(Env* env) {
     Agent* agent = &env->agents[0];
-    agent->rewards[0] = 0.0f;
     agent->terminals[0] = 0.0f;
 
     /* Convert float actions from network to int action heads.
      * PufferLib sends actions as floats in a flat array.
      * Puffer-facing no-supplies policy uses only move/attack/prayer.
      * Core heads 3-6 are left as zero: no eat, no drink, no walk-to-tile. */
-    int actions[FC_NUM_ACTION_HEADS];
-    memset(actions, 0, sizeof(actions));
+    int actions[FC_NUM_ACTION_HEADS] = {0};
     for (int h = 0; h < FC_PUFFER_NUM_ATNS; h++) {
         actions[h] = (int)agent->actions[h];
     }
-    /* Heads 5+6 (walk-to-tile) always 0 — not used in v1 */
 
     /* Step the game simulation */
     fc_step(&env->state, actions);
 
     /* Compute reward */
-    float reward = fc_puffer_compute_reward(env);
-    agent->rewards[0] = reward;
-    env->ep_length++;
+    agent->rewards[0] = fc_puffer_compute_reward(env);
 
     /* Write the current tick's observation. On terminal steps, puf_reset()
      * below replaces it with the next episode's initial observation. */
@@ -155,7 +144,7 @@ void puf_step(Env* env) {
     if (fc_is_terminal(&env->state)) {
         FcEpisodeSummary summary;
         fc_episode_summary_build(&env->state, &env->reward_runtime,
-                                 env->ep_length, &summary);
+                                 env->state.tick, &summary);
         agent->terminals[0] = 1.0f;
         fc_puffer_accumulate_episode_summary(&env->log, &summary);
         env->log.n += 1.0f;
@@ -280,11 +269,8 @@ void puf_init(Env* env, Dict* kwargs) {
     item = dict_find(kwargs, "obs_ablate_npc_valid");
     env->obs_ablate_npc_valid = item ? (int)item->value : 0;
 
-    /* Puffer may initialize and close a probe before wiring any buffers. */
-    env->agents[0].policy = 0;
-    env->tag = 0;
-    env->boundary_reached = 0;
-    env->seed_counter = 0;
+    /* Callers pass a zeroed Env (Puffer callocs its envs and zeroes its
+     * bufferless probe), so the other fields need no initialization. */
     fc_init(&env->state);
 }
 

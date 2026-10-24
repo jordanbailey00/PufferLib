@@ -27,7 +27,7 @@ static const size_t layout[] = {
     offsetof(Env, initial_sharks), offsetof(Env, initial_prayer_doses),
     offsetof(Env, reward_runtime), offsetof(Env, obs_ablate_npc_distance),
     offsetof(Env, obs_ablate_incoming_aggregates), offsetof(Env, obs_ablate_npc_valid),
-    offsetof(Env, ep_length), offsetof(Env, seed_counter),
+    offsetof(Env, seed_counter),
     sizeof(Agent), FC_TEST_ALIGNOF(Agent), offsetof(Agent, observations),
     offsetof(Agent, actions), offsetof(Agent, rewards), offsetof(Agent, terminals),
     offsetof(Agent, action_mask), offsetof(Agent, policy),

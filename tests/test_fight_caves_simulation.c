@@ -852,7 +852,7 @@ static void checked_step(FightCaves* env) {
     if (terminal) {
         assert(env->seed_counter == prior_seed_counter + 1);
         assert(env->state.tick == 0 && !fc_is_terminal(&env->state));
-        assert(env->ep_length == 0 && env->state.player.current_hp > 0);
+        assert(env->state.player.current_hp > 0);
     } else {
         assert(fc_state_hash(&expected) == fc_state_hash(&env->state));
         assert(env->seed_counter == prior_seed_counter);

@@ -8183,15 +8183,6 @@ static int float_near(float a, float b) {
     return fabsf(a - b) < 0.0001f;
 }
 
-static void apply_initial_supplies(ViewerState* v) {
-    if (v->initial_sharks < 0) v->initial_sharks = 0;
-    if (v->initial_sharks > FC_MAX_SHARKS) v->initial_sharks = FC_MAX_SHARKS;
-    if (v->initial_prayer_doses < 0) v->initial_prayer_doses = 0;
-    if (v->initial_prayer_doses > FC_MAX_PRAYER_DOSES)
-        v->initial_prayer_doses = FC_MAX_PRAYER_DOSES;
-    fc_set_initial_supplies(&v->state, v->initial_sharks, v->initial_prayer_doses);
-}
-
 /* Manual play reads the [env] section of config/fight_caves.ini the way
  * puf_init does, or keeps the defaults when there is no config file. */
 static void load_reward_params(ViewerState* v) {
@@ -8374,7 +8365,7 @@ static void reset_ep(ViewerState* v) {
     fc_reset(&v->state, (uint32_t)GetRandomValue(1, 999999));
     if (v->start_wave > 1 && v->start_wave <= FC_NUM_WAVES)
         restart_at_wave(&v->state, v->start_wave);
-    apply_initial_supplies(v);
+    fc_set_initial_supplies(&v->state, v->initial_sharks, v->initial_prayer_doses);
     reset_reward_tracking(v);
     fc_viewer_reset_presentation(v);
 }

@@ -50,15 +50,11 @@ struct Env {
     int initial_prayer_doses;
     FcRewardRuntime reward_runtime;
 
-    /* Obs ablation flags (experimental — see fc_apply_obs_ablation in core.h).
-     * When non-zero, the corresponding obs slots are zeroed AFTER fc_write_obs.
-     * Used by the OBS Sweep / Ablation experiment to test which features the
-     * policy actually relies on vs. which the GRU could re-derive from the rest. */
+    /* Observation ablation flags from [env]: when non-zero, fc_apply_obs_ablation
+     * zeroes those observation slots after fc_write_obs. */
     int obs_ablate_npc_distance;
     int obs_ablate_incoming_aggregates;
     int obs_ablate_npc_valid;
-
-    int ep_length;
 
     /* RNG seed counter (increments each episode for variety) */
     uint32_t seed_counter;
