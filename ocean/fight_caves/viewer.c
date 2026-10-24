@@ -1,0 +1,13087 @@
+/*
+ * viewer.c — Fight Caves viewer: asset loading, the game interface, 3D rendering
+ * and debug overlays, and the playable window and replay loop.
+ *
+ * Controls:
+ *   WASD        — move (N/W/S/E)            Space    — pause/resume
+ *   1/2/3       — protect melee/range/magic  Right    — single-step tick
+ *   F           — eat shark                  Console  — targets/wave/TPS
+ *   P           — drink prayer potion        R        — reset episode
+ *   Tab         — cycle attack target        A        — toggle auto/manual
+ *   O or D*     — toggle debug overlay       G        — grid  C — collision
+ *   4/5         — camera presets             L        — toggle camera lock
+ *   Scroll      — zoom                       Right-drag — orbit camera
+ *   Right click — context menu (dragging dismisses it and orbits)
+ *
+ *   * D only toggles the overlay when not being used for east movement.
+ *   Policy replay mode (`./puffer eval`) also adds 1/2/4/0 playback presets.
+ *   In replay mode, use Shift+4 / 5 for camera presets.
+ */
+
+#include "raylib.h"
+#include "rlgl.h"
+#ifndef FC_VIEWER_EMBEDDED
+#define FC_CORE_IMPLEMENTATION
+#endif
+#include "core.h"
+#undef FC_CORE_IMPLEMENTATION
+
+/* ===================== Asset loading ===================== */
+
+/* Io */
+
+#include <stdbool.h>
+#include <stdio.h>
+
+static inline bool fc_read_exact(FILE* f, void* dst, size_t elem_size,
+                                 size_t elem_count, const char* path,
+                                 const char* what) {
+    if (fread(dst, elem_size, elem_count, f) != elem_count) {
+        fprintf(stderr, "%s: short read while loading %s\n", path, what);
+        return false;
+    }
+    return true;
+}
+
+static inline bool fc_seek(FILE* f, long offset, int origin,
+                           const char* path, const char* what) {
+    if (fseek(f, offset, origin) != 0) {
+        fprintf(stderr, "%s: seek failed while loading %s\n", path, what);
+        return false;
+    }
+    return true;
+}
+
+
+/* Assets */
+
+#include <stddef.h>
+#include <stdio.h>
+
+#define FC_ASSET_PATH_MAX 1024
+
+const char* fc_asset_root(void);
+const char* fc_repo_root(void);
+
+int fc_asset_resolve_path(const char* logical_path, char* out, size_t cap);
+int fc_repo_resolve_path(const char* logical_path, char* out, size_t cap);
+int fc_asset_exists(const char* logical_path);
+
+FILE* fc_asset_fopen(const char* logical_path, const char* mode);
+int fc_asset_close(FILE* f);
+unsigned char* fc_asset_read_all(const char* logical_path, size_t* out_size);
+
+
+/* Asset Raylib */
+
+#include "raylib.h"
+
+Texture2D fc_load_texture_asset(const char* path);
+Image fc_load_image_asset(const char* path);
+Font fc_load_font_asset(const char* path, int font_size);
+
+
+/* Animated Atlas */
+
+#include "raylib.h"
+
+#include <stdint.h>
+
+typedef struct {
+    uint32_t texture_id;
+    uint16_t x;
+    uint16_t y;
+    uint16_t w;
+    uint16_t h;
+    uint8_t direction;
+    uint8_t speed;
+    uint16_t pad;
+} FcTextureAnimRow;
+
+typedef struct {
+    Texture2D texture;
+    unsigned char* base_pixels;
+    unsigned char* pixels;
+    FcTextureAnimRow* anims;
+    int width;
+    int height;
+    int anim_count;
+    float anim_ticks;
+} FcAnimatedAtlas;
+
+int fc_animated_atlas_load(FcAnimatedAtlas* atlas, const char* atlas_path,
+                           int enable_animation);
+void fc_animated_atlas_update(FcAnimatedAtlas* atlas, float dt);
+void fc_animated_atlas_unload(FcAnimatedAtlas* atlas);
+
+
+/* Anim Loader */
+
+#include <stdint.h>
+
+#define ANIM_MAX_LABELS 256
+
+typedef struct {
+    uint16_t base_id;
+    uint8_t slot_count;
+    uint8_t *types;
+    uint8_t *map_lengths;
+    uint8_t **frame_maps;
+} AnimFrameBase;
+
+typedef struct {
+    uint8_t slot_index;
+    int16_t dx;
+    int16_t dy;
+    int16_t dz;
+} AnimTransform;
+
+typedef struct {
+    uint16_t framebase_id;
+    uint8_t transform_count;
+    AnimTransform *transforms;
+} AnimFrameData;
+
+typedef struct {
+    uint16_t delay;
+    AnimFrameData frame;
+} AnimSequenceFrame;
+
+typedef struct {
+    uint16_t seq_id;
+    uint16_t frame_count;
+    uint8_t interleave_count;
+    uint8_t *interleave_order;
+    int16_t frame_step;
+    int8_t preanim_move;
+    int8_t postanim_move;
+    uint8_t forced_priority;
+    uint8_t max_loops;
+    int8_t reply_mode;
+    uint8_t stretches;
+    int8_t walk_flag;
+    AnimSequenceFrame *frames;
+} AnimSequence;
+
+typedef struct {
+    AnimFrameBase *bases;
+    int base_count;
+    uint16_t *base_ids;
+    AnimSequence *sequences;
+    int seq_count;
+} AnimCache;
+
+typedef struct {
+    int16_t *verts;
+    int vert_count;
+    int **groups;
+    int *group_counts;
+} AnimModelState;
+
+AnimCache *anim_cache_load(const char *path);
+AnimSequence *anim_get_sequence(AnimCache *cache, uint16_t seq_id);
+AnimFrameBase *anim_get_framebase(AnimCache *cache, uint16_t base_id);
+AnimModelState *anim_model_state_create(const uint8_t *vertex_skins,
+                                        int base_vert_count);
+void anim_model_state_free(AnimModelState *state);
+void anim_apply_frame(AnimModelState *state, const int16_t *base_verts_src,
+                      const AnimFrameData *frame, const AnimFrameBase *fb);
+int anim_mix_pose_action(AnimCache *cache, AnimModelState *state,
+                         const int16_t *base_verts, AnimSequence *pose,
+                         int pose_frame_index, AnimSequence *action,
+                         int action_frame_index);
+void anim_update_mesh(float *mesh_vertices, const AnimModelState *state,
+                      const uint16_t *face_indices, int face_count);
+void anim_cache_free(AnimCache *cache);
+
+
+/* Models */
+
+#include "raylib.h"
+#include <stdint.h>
+
+typedef struct {
+    uint8_t textured;
+    uint16_t tex_a;
+    uint16_t tex_b;
+    uint16_t tex_c;
+    float u_base;
+    float v_base;
+    float u_scale;
+    float v_scale;
+    float repeat_v_margin;
+} ModelFaceUvInfo;
+
+typedef struct {
+    uint32_t model_id;
+    Model model;
+    int loaded;
+    float *rest_verts;
+    float *rest_texcoords;
+    int16_t *base_verts;
+    uint8_t *vertex_skins;
+    uint16_t *face_indices;
+    uint8_t *face_priorities;
+    ModelFaceUvInfo *face_uvs;
+    int base_vert_count;
+    int face_count;
+} ModelEntry;
+
+typedef struct {
+    ModelEntry *entries;
+    int *index_by_id;
+    int count;
+    int index_limit;
+    int has_textures;
+    int loaded;
+} ModelSet;
+
+ModelSet *models_load(const char *path, Texture2D atlas_texture);
+ModelEntry *model_find(ModelSet *set, uint32_t id);
+/* Screen-space face picking at the drawn pose, with the client's 5px tolerance.
+ * Returns camera depth for overlap ordering, or -1 for a miss. posed_vertices
+ * uses animation/cache coordinates; NULL selects the asset's rest mesh. */
+float models_pick_depth(const ModelEntry *entry, const int16_t *posed_vertices,
+                         Vector3 position, float yaw_degrees, Camera3D camera,
+                         Vector2 mouse, int screen_width, int screen_height);
+void models_recompute_texture_uvs_from_vertices(ModelEntry *entry,
+                                                const int16_t *verts);
+void models_free(ModelSet *set);
+
+
+/* Npc Models */
+
+#define FC_B237_TZ_KIH 3116u
+#define FC_B237_TZ_KEK 3118u
+#define FC_B237_TZ_KEK_SM 3120u
+#define FC_B237_TOK_XIL 3121u
+#define FC_B237_YT_MEJKOT 3123u
+#define FC_B237_KET_ZEK 3125u
+#define FC_B237_TZTOK_JAD 3127u
+#define FC_B237_YT_HURKOT 3128u
+
+typedef ModelEntry NpcModelEntry;
+typedef ModelSet NpcModelSet;
+
+uint32_t fc_npc_type_to_model_id(int npc_type);
+NpcModelEntry *fc_npc_model_find(NpcModelSet *set, uint32_t model_id);
+NpcModelSet *fc_npc_models_load(const char *path, Texture2D atlas_texture);
+void fc_npc_models_unload(NpcModelSet *set);
+
+
+/* Model Animation */
+
+void fc_model_animation_upload(NpcModelEntry *entry, AnimModelState *state);
+void fc_model_animation_update(NpcModelEntry *entry,
+                               AnimCache *cache,
+                               AnimModelState **state,
+                               uint16_t *current_sequence,
+                               int *frame_index,
+                               float *frame_timer,
+                               int animation_id,
+                               float dt,
+                               float phase_ticks);
+
+
+/* Objects Loader */
+
+#include "raylib.h"
+#include <stdint.h>
+
+#define OANM_FLAG_DYNAMIC_BASE 1u
+#define OANM_FLAG_DYNAMIC_REPLACEMENT 2u
+
+typedef struct {
+    Model model;
+    FcAnimatedAtlas atlas;
+    int placement_count;
+    int total_vertex_count;
+    int min_world_x;
+    int min_world_y;
+    int has_textures;
+    int loaded;
+} ObjectMesh;
+
+typedef struct {
+    uint32_t model_id;
+    uint32_t obj_id;
+    int32_t animation_id;
+    int32_t world_x;
+    int32_t world_y;
+    uint8_t plane;
+    uint8_t obj_type;
+    uint8_t rotation;
+    uint8_t flags;
+    float pos_x;
+    float pos_y;
+    float pos_z;
+    float phase_ticks;
+} ObjectAnimPlacement;
+
+typedef struct {
+    ObjectAnimPlacement *rows;
+    int count;
+    int loaded;
+} ObjectAnimSet;
+
+ObjectMesh *objects_load(const char *path);
+ObjectAnimSet *object_anims_load(const char *path);
+void object_anims_offset(ObjectAnimSet *set, int wx, int wy);
+void objects_offset(ObjectMesh *om, int wx, int wy);
+void objects_free(ObjectMesh *om);
+void object_anims_free(ObjectAnimSet *set);
+
+
+/* Terrain Loader */
+
+#include "raylib.h"
+
+typedef struct {
+    Model model;
+    int vertex_count;
+    int region_count;
+    int min_world_x;
+    int min_world_y;
+    int loaded;
+    float *heightmap;
+    int hm_min_x;
+    int hm_min_y;
+    int hm_width;
+    int hm_height;
+} TerrainMesh;
+
+TerrainMesh *terrain_load(const char *path);
+void terrain_offset(TerrainMesh *tm, int wx, int wy);
+float terrain_height_at(TerrainMesh *tm, int world_x, int world_y);
+void terrain_free(TerrainMesh *tm);
+
+
+/* Spotanims */
+
+#include <stdint.h>
+
+typedef struct {
+    uint32_t id;
+    int32_t model_id;
+    int32_t animation_id;
+    uint32_t resize_xy;
+    uint32_t resize_z;
+    uint32_t rotation;
+    int32_t brightness;
+    int32_t shadow;
+} SpotAnimDef;
+
+typedef struct {
+    SpotAnimDef *defs;
+    int count;
+    int loaded;
+} SpotAnimSet;
+
+SpotAnimSet *spotanims_load(const char *path);
+const SpotAnimDef *spotanim_find(const SpotAnimSet *set, int id);
+void spotanims_free(SpotAnimSet *set);
+
+
+/* Player Appearance */
+typedef struct {
+    ModelSet *parts;
+    ModelSet *model;
+    struct { uint32_t item_id, hide_mask; } records[64];
+    int record_count;
+    int worn_ids[FC_EQUIPMENT_SLOTS];
+} FcPlayerAppearance;
+
+int fc_player_appearance_load(FcPlayerAppearance *appearance);
+/* 1 = rebuilt, 0 = unchanged, -1 = missing/invalid asset or allocation failure. */
+int fc_player_appearance_sync(FcPlayerAppearance *appearance,
+                               const FcPlayer *player, uint32_t model_id);
+void fc_player_appearance_free(FcPlayerAppearance *appearance);
+
+/* Assets */
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+
+static int fc_has_prefix(const char* s, const char* prefix) {
+    size_t n;
+    if (!s || !prefix) return 0;
+    n = strlen(prefix);
+    return strncmp(s, prefix, n) == 0;
+}
+
+static int fc_path_is_absolute(const char* path) {
+    return path && path[0] == '/';
+}
+
+static int fc_file_exists_path(const char* path) {
+    struct stat st;
+    return path && stat(path, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+static int fc_dir_exists_path(const char* path) {
+    struct stat st;
+    return path && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+static int fc_join_path(char* out, size_t cap, const char* a, const char* b) {
+    int n;
+    if (!out || cap == 0 || !a || !b) return 0;
+    if (a[0] == '\0') {
+        n = snprintf(out, cap, "%s", b);
+    } else if (a[strlen(a) - 1] == '/') {
+        n = snprintf(out, cap, "%s%s", a, b);
+    } else {
+        n = snprintf(out, cap, "%s/%s", a, b);
+    }
+    return n > 0 && (size_t)n < cap;
+}
+
+static void fc_copy_path(char* dst, size_t cap, const char* src) {
+    if (!dst || cap == 0) return;
+    if (!src) src = "";
+    snprintf(dst, cap, "%s", src);
+}
+
+static void fc_trim_trailing_slash(char* path) {
+    size_t n;
+    if (!path) return;
+    n = strlen(path);
+    while (n > 1 && path[n - 1] == '/') {
+        path[n - 1] = '\0';
+        n--;
+    }
+}
+
+static const char* fc_asset_logical_path(const char* path) {
+    const char* marker;
+    if (!path) return "";
+    while (fc_has_prefix(path, "./")) path += 2;
+    marker = strstr(path, "/resources/fight_caves/viewer/");
+    if (marker) return marker + strlen("/resources/fight_caves/viewer/");
+    if (fc_has_prefix(path, "resources/fight_caves/viewer/"))
+        return path + strlen("resources/fight_caves/viewer/");
+    if (fc_has_prefix(path, "assets/"))
+        return path + strlen("assets/");
+    return path;
+}
+
+static int fc_derive_asset_root(char* out, size_t cap) {
+    const char* marker = strstr(__FILE__, "ocean/fight_caves/");
+    size_t prefix_len;
+    int n;
+    if (!marker) return 0;
+    prefix_len = (size_t)(marker - __FILE__);
+    n = snprintf(out, cap, "%.*sresources/fight_caves/viewer",
+                 (int)prefix_len, __FILE__);
+    return n > 0 && (size_t)n < cap;
+}
+
+static int fc_derive_repo_root(char* out, size_t cap) {
+    const char* marker = strstr(__FILE__, "ocean/fight_caves/");
+    size_t prefix_len;
+    int n;
+    if (!marker) return 0;
+    prefix_len = (size_t)(marker - __FILE__);
+    n = snprintf(out, cap, "%.*s", (int)prefix_len, __FILE__);
+    if (!(n > 0 && (size_t)n < cap)) return 0;
+    fc_trim_trailing_slash(out);
+    return out[0] != '\0';
+}
+
+static int fc_derive_repo_root_from_asset_root(char* out, size_t cap,
+                                               const char* asset_root) {
+    const char* marker;
+    size_t prefix_len;
+    int n;
+    if (!asset_root || !asset_root[0]) return 0;
+    marker = strstr(asset_root, "/resources/fight_caves/viewer");
+    if (!marker
+            && fc_has_prefix(asset_root, "resources/fight_caves/viewer"))
+        return snprintf(out, cap, ".") > 0;
+    if (!marker) return 0;
+    prefix_len = (size_t)(marker - asset_root);
+    n = snprintf(out, cap, "%.*s", (int)prefix_len, asset_root);
+    if (!(n > 0 && (size_t)n < cap)) return 0;
+    fc_trim_trailing_slash(out);
+    return out[0] != '\0';
+}
+
+static int fc_repo_candidate_valid(const char* root) {
+    char path[FC_ASSET_PATH_MAX];
+    if (!root || !root[0]) return 0;
+    return fc_join_path(path, sizeof(path), root, "ocean/fight_caves")
+        && fc_dir_exists_path(path);
+}
+
+const char* fc_asset_root(void) {
+    static char root[FC_ASSET_PATH_MAX];
+    static int initialized;
+    const char* env;
+    const char* candidates[] = {
+        "resources/fight_caves/viewer",
+        "../resources/fight_caves/viewer",
+        "../../resources/fight_caves/viewer",
+        NULL
+    };
+
+    env = getenv("FC_ASSET_ROOT");
+    if (!env || !env[0]) env = getenv("FC_ASSETS_PATH");
+    if (env && env[0]) return env;
+    if (initialized) return root;
+    initialized = 1;
+
+    if (fc_derive_asset_root(root, sizeof(root)) && fc_dir_exists_path(root))
+        return root;
+    for (int i = 0; candidates[i]; i++) {
+        if (fc_dir_exists_path(candidates[i])) {
+            fc_copy_path(root, sizeof(root), candidates[i]);
+            return root;
+        }
+    }
+    fc_copy_path(root, sizeof(root), "resources/fight_caves/viewer");
+    return root;
+}
+
+const char* fc_repo_root(void) {
+    static char root[FC_ASSET_PATH_MAX];
+    static int initialized;
+    const char* env;
+    const char* asset_root;
+    const char* candidates[] = { ".", "runescape-rl", "..", "../..", NULL };
+
+    env = getenv("FC_REPO_ROOT");
+    if (env && env[0]) return env;
+    if (initialized) return root;
+    initialized = 1;
+
+    if (fc_derive_repo_root(root, sizeof(root)) && fc_repo_candidate_valid(root))
+        return root;
+    asset_root = fc_asset_root();
+    if (fc_derive_repo_root_from_asset_root(root, sizeof(root), asset_root)
+            && fc_repo_candidate_valid(root))
+        return root;
+    for (int i = 0; candidates[i]; i++) {
+        if (fc_repo_candidate_valid(candidates[i])) {
+            fc_copy_path(root, sizeof(root), candidates[i]);
+            return root;
+        }
+    }
+    fc_copy_path(root, sizeof(root), ".");
+    return root;
+}
+
+int fc_asset_resolve_path(const char* logical_path, char* out, size_t cap) {
+    const char* logical = fc_asset_logical_path(logical_path);
+    const char* root;
+    char joined[FC_ASSET_PATH_MAX];
+    if (!out || cap == 0 || !logical_path || !logical[0]) return 0;
+    if (fc_path_is_absolute(logical_path) && fc_file_exists_path(logical_path)) {
+        fc_copy_path(out, cap, logical_path);
+        return 1;
+    }
+    root = fc_asset_root();
+    if (fc_join_path(joined, sizeof(joined), root, logical)
+            && fc_file_exists_path(joined)) {
+        fc_copy_path(out, cap, joined);
+        return 1;
+    }
+    if (fc_file_exists_path(logical_path)) {
+        fc_copy_path(out, cap, logical_path);
+        return 1;
+    }
+    if (fc_join_path(joined, sizeof(joined), root, logical))
+        fc_copy_path(out, cap, joined);
+    else
+        fc_copy_path(out, cap, logical);
+    return 0;
+}
+
+int fc_repo_resolve_path(const char* logical_path, char* out, size_t cap) {
+    char joined[FC_ASSET_PATH_MAX];
+    if (!out || cap == 0 || !logical_path || !logical_path[0]) return 0;
+    if (fc_path_is_absolute(logical_path) && fc_file_exists_path(logical_path)) {
+        fc_copy_path(out, cap, logical_path);
+        return 1;
+    }
+    if (fc_join_path(joined, sizeof(joined), fc_repo_root(), logical_path)
+            && fc_file_exists_path(joined)) {
+        fc_copy_path(out, cap, joined);
+        return 1;
+    }
+    if (fc_file_exists_path(logical_path)) {
+        fc_copy_path(out, cap, logical_path);
+        return 1;
+    }
+    if (fc_join_path(joined, sizeof(joined), fc_repo_root(), logical_path))
+        fc_copy_path(out, cap, joined);
+    else
+        fc_copy_path(out, cap, logical_path);
+    return 0;
+}
+
+int fc_asset_exists(const char* logical_path) {
+    char resolved[FC_ASSET_PATH_MAX];
+    return fc_asset_resolve_path(logical_path, resolved, sizeof(resolved));
+}
+
+FILE* fc_asset_fopen(const char* logical_path, const char* mode) {
+    char resolved[FC_ASSET_PATH_MAX];
+    FILE* f;
+    if (!fc_asset_resolve_path(logical_path, resolved, sizeof(resolved))) {
+        fprintf(stderr, "fc_asset_fopen: missing %s (looked for %s)\n",
+                logical_path ? logical_path : "(null)", resolved);
+        return NULL;
+    }
+    f = fopen(resolved, mode);
+    if (!f)
+        fprintf(stderr, "fc_asset_fopen: cannot open %s: %s\n",
+                resolved, strerror(errno));
+    return f;
+}
+
+int fc_asset_close(FILE* f) {
+    return f ? fclose(f) : 0;
+}
+
+unsigned char* fc_asset_read_all(const char* logical_path, size_t* out_size) {
+    FILE* f = fc_asset_fopen(logical_path, "rb");
+    long size;
+    unsigned char* data;
+    size_t got;
+
+    if (out_size) *out_size = 0;
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fprintf(stderr, "%s: seek failed while reading asset\n", logical_path);
+        fc_asset_close(f);
+        return NULL;
+    }
+    size = ftell(f);
+    if (size <= 0) {
+        fprintf(stderr, "%s: empty or unreadable asset\n", logical_path);
+        fc_asset_close(f);
+        return NULL;
+    }
+    if (fseek(f, 0, SEEK_SET) != 0) {
+        fprintf(stderr, "%s: seek failed while reading asset\n", logical_path);
+        fc_asset_close(f);
+        return NULL;
+    }
+    data = malloc((size_t)size);
+    if (!data) {
+        fprintf(stderr, "%s: out of memory while reading asset\n", logical_path);
+        fc_asset_close(f);
+        return NULL;
+    }
+    got = fread(data, 1, (size_t)size, f);
+    fc_asset_close(f);
+    if (got != (size_t)size) {
+        fprintf(stderr, "%s: short read while reading asset\n", logical_path);
+        free(data);
+        return NULL;
+    }
+    if (out_size) *out_size = (size_t)size;
+    return data;
+}
+
+
+/* Asset Raylib */
+#include <stdlib.h>
+#include <string.h>
+
+static const char* fc_asset_extension(const char* path, const char* fallback) {
+    const char* dot = path ? strrchr(path, '.') : NULL;
+    return dot && dot[0] ? dot : fallback;
+}
+
+Image fc_load_image_asset(const char* path) {
+    Image empty = {0};
+    size_t size = 0;
+    unsigned char* bytes = fc_asset_read_all(path, &size);
+    Image image;
+
+    if (!bytes || size == 0) return empty;
+    image = LoadImageFromMemory(fc_asset_extension(path, ".png"), bytes,
+                                (int)size);
+    free(bytes);
+    return image;
+}
+
+Texture2D fc_load_texture_asset(const char* path) {
+    Texture2D empty = {0};
+    Image image = fc_load_image_asset(path);
+    Texture2D texture;
+
+    if (!image.data) return empty;
+    texture = LoadTextureFromImage(image);
+    UnloadImage(image);
+    return texture;
+}
+
+Font fc_load_font_asset(const char* path, int font_size) {
+    Font empty = {0};
+    size_t size = 0;
+    unsigned char* bytes = fc_asset_read_all(path, &size);
+    Font font;
+
+    if (!bytes || size == 0) return empty;
+    font = LoadFontFromMemory(fc_asset_extension(path, ".ttf"), bytes,
+                              (int)size, font_size, NULL, 95);
+    free(bytes);
+    return font.texture.id != 0 ? font : empty;
+}
+
+
+/* Animated Atlas */
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define FC_ATLAS_MAGIC 0x41544C53u
+#define FC_TEXTURE_ANIM_MAGIC 0x4D4E4154u
+#define FC_TEXTURE_ANIM_VERSION 1u
+
+_Static_assert(sizeof(FcTextureAnimRow) == 16,
+               "TANM rows must retain their 16-byte file layout");
+
+static int fc_companion_path(char* out, size_t cap, const char* path,
+                             const char* extension) {
+    char* dot;
+    int written;
+    size_t offset;
+    size_t remaining;
+    if (!out || cap == 0 || !path || !extension) return 0;
+    written = snprintf(out, cap, "%s", path);
+    if (written < 0 || (size_t)written >= cap) return 0;
+    dot = strrchr(out, '.');
+    if (dot) {
+        offset = (size_t)(dot - out);
+    } else {
+        offset = strlen(out);
+    }
+    remaining = cap - offset;
+    written = snprintf(out + offset, remaining, "%s", extension);
+    return written >= 0 && (size_t)written < remaining;
+}
+
+static void fc_animated_atlas_load_anims(FcAnimatedAtlas* atlas,
+                                         const char* atlas_path) {
+    char path[FC_ASSET_PATH_MAX];
+    FILE* file;
+    uint32_t magic = 0;
+    uint32_t version = 0;
+    uint32_t count = 0;
+    FcTextureAnimRow* rows;
+
+    if (!atlas || !atlas->base_pixels || !atlas->pixels
+            || !fc_companion_path(path, sizeof(path), atlas_path, ".tanim")
+            || !fc_asset_exists(path))
+        return;
+    file = fc_asset_fopen(path, "rb");
+    if (!file) return;
+    if (!fc_read_exact(file, &magic, sizeof(magic), 1, path, "tanim magic")
+            || !fc_read_exact(file, &version, sizeof(version), 1, path,
+                              "tanim version")
+            || !fc_read_exact(file, &count, sizeof(count), 1, path,
+                              "tanim count")
+            || magic != FC_TEXTURE_ANIM_MAGIC
+            || version != FC_TEXTURE_ANIM_VERSION) {
+        fc_asset_close(file);
+        return;
+    }
+    rows = count > 0 ? calloc(count, sizeof(*rows)) : NULL;
+    if (count > 0 && !rows) {
+        fc_asset_close(file);
+        return;
+    }
+    for (uint32_t i = 0; i < count; i++) {
+        if (!fc_read_exact(file, &rows[i], sizeof(rows[i]), 1, path,
+                           "tanim row")) {
+            free(rows);
+            fc_asset_close(file);
+            return;
+        }
+    }
+    fc_asset_close(file);
+    atlas->anims = rows;
+    atlas->anim_count = (int)count;
+    fprintf(stderr, "animated atlas: %d cells loaded from %s\n",
+            atlas->anim_count, path);
+}
+
+int fc_animated_atlas_load(FcAnimatedAtlas* atlas, const char* atlas_path,
+                           int enable_animation) {
+    FcAnimatedAtlas loaded = {0};
+    FILE* file;
+    uint32_t magic = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    size_t pixel_count;
+    size_t pixel_size;
+    unsigned char* source_pixels;
+    Image image;
+
+    if (!atlas || !atlas_path || atlas->texture.id > 0) return 0;
+    file = fc_asset_fopen(atlas_path, "rb");
+    if (!file) return 0;
+    if (!fc_read_exact(file, &magic, sizeof(magic), 1, atlas_path,
+                       "atlas magic")
+            || !fc_read_exact(file, &width, sizeof(width), 1, atlas_path,
+                              "atlas width")
+            || !fc_read_exact(file, &height, sizeof(height), 1, atlas_path,
+                              "atlas height")
+            || magic != FC_ATLAS_MAGIC || width == 0 || height == 0
+            || (size_t)width > SIZE_MAX / (size_t)height) {
+        fc_asset_close(file);
+        return 0;
+    }
+    pixel_count = (size_t)width * (size_t)height;
+    if (pixel_count > SIZE_MAX / 4) {
+        fc_asset_close(file);
+        return 0;
+    }
+    pixel_size = pixel_count * 4;
+    source_pixels = malloc(pixel_size);
+    if (!source_pixels
+            || !fc_read_exact(file, source_pixels, 1, pixel_size, atlas_path,
+                              "atlas pixels")) {
+        free(source_pixels);
+        fc_asset_close(file);
+        return 0;
+    }
+    fc_asset_close(file);
+
+    image = (Image) {
+        .data = source_pixels,
+        .width = (int)width,
+        .height = (int)height,
+        .mipmaps = 1,
+        .format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8,
+    };
+    loaded.texture = LoadTextureFromImage(image);
+    if (loaded.texture.id == 0) {
+        free(source_pixels);
+        return 0;
+    }
+    SetTextureFilter(loaded.texture, TEXTURE_FILTER_POINT);
+    loaded.width = (int)width;
+    loaded.height = (int)height;
+    if (enable_animation) {
+        loaded.base_pixels = malloc(pixel_size);
+        loaded.pixels = malloc(pixel_size);
+        if (loaded.base_pixels && loaded.pixels) {
+            memcpy(loaded.base_pixels, source_pixels, pixel_size);
+            memcpy(loaded.pixels, source_pixels, pixel_size);
+        } else {
+            free(loaded.base_pixels);
+            free(loaded.pixels);
+            loaded.base_pixels = NULL;
+            loaded.pixels = NULL;
+        }
+    }
+    free(source_pixels);
+    if (enable_animation)
+        fc_animated_atlas_load_anims(&loaded, atlas_path);
+    *atlas = loaded;
+    fprintf(stderr, "animated atlas: %ux%u loaded from %s\n",
+            width, height, atlas_path);
+    return 1;
+}
+
+void fc_animated_atlas_update(FcAnimatedAtlas* atlas, float dt) {
+    size_t total;
+    if (!atlas || !atlas->pixels || !atlas->base_pixels
+            || atlas->texture.id == 0 || atlas->anim_count <= 0)
+        return;
+
+    atlas->anim_ticks += dt * 50.0f;
+    total = (size_t)atlas->width * (size_t)atlas->height * 4;
+    memcpy(atlas->pixels, atlas->base_pixels, total);
+    for (int r = 0; r < atlas->anim_count; r++) {
+        FcTextureAnimRow* row = &atlas->anims[r];
+        int shift;
+        if (row->w == 0 || row->h == 0
+                || row->x + row->w > atlas->width
+                || row->y + row->h > atlas->height
+                || row->speed == 0)
+            continue;
+        shift = (int)(atlas->anim_ticks * (float)row->speed);
+        if (row->direction == 1 || row->direction == 3) {
+            int pad = row->pad;
+            int center_h;
+            if (pad * 2 >= row->h) pad = 0;
+            center_h = row->h - pad * 2;
+            shift %= center_h;
+            if (row->direction == 1) shift = -shift;
+            for (int y = 0; y < row->h; y++) {
+                int sy = (y - pad + shift) % center_h;
+                if (sy < 0) sy += center_h;
+                sy += pad;
+                for (int x = 0; x < row->w; x++) {
+                    size_t dst = ((size_t)(row->y + y) * atlas->width
+                                  + row->x + x) * 4;
+                    size_t src = ((size_t)(row->y + sy) * atlas->width
+                                  + row->x + x) * 4;
+                    memcpy(&atlas->pixels[dst], &atlas->base_pixels[src], 4);
+                }
+            }
+        } else if (row->direction == 2 || row->direction == 4) {
+            shift %= row->w;
+            if (row->direction == 2) shift = -shift;
+            for (int y = 0; y < row->h; y++) {
+                for (int x = 0; x < row->w; x++) {
+                    int sx = (x + shift) % row->w;
+                    size_t dst;
+                    size_t src;
+                    if (sx < 0) sx += row->w;
+                    dst = ((size_t)(row->y + y) * atlas->width
+                           + row->x + x) * 4;
+                    src = ((size_t)(row->y + y) * atlas->width
+                           + row->x + sx) * 4;
+                    memcpy(&atlas->pixels[dst], &atlas->base_pixels[src], 4);
+                }
+            }
+        }
+    }
+    UpdateTexture(atlas->texture, atlas->pixels);
+}
+
+void fc_animated_atlas_unload(FcAnimatedAtlas* atlas) {
+    if (!atlas) return;
+    if (atlas->texture.id > 0) UnloadTexture(atlas->texture);
+    free(atlas->base_pixels);
+    free(atlas->pixels);
+    free(atlas->anims);
+    *atlas = (FcAnimatedAtlas) {0};
+}
+
+#undef FC_ATLAS_MAGIC
+#undef FC_TEXTURE_ANIM_MAGIC
+#undef FC_TEXTURE_ANIM_VERSION
+
+/* Anim Loader */
+/**
+ * @fileoverview OSRS animation runtime — loads .anims binary, applies vertex-group
+ * transforms to model base geometry, re-expands into raylib mesh for rendering.
+ *
+ * OSRS animations use vertex-group-based transforms (not bones). Each vertex has a
+ * skin label (group index). FrameBase defines transform slots with types + label arrays.
+ * Each frame provides per-slot {dx,dy,dz} values. Transform types:
+ *   0 = origin (compute centroid of referenced vertex groups → set pivot)
+ *   1 = translate (add dx/dy/dz to all vertices in referenced groups)
+ *   2 = rotate (euler Z-X-Y around pivot, raw*8 → 2048-entry sine table)
+ *   3 = scale (relative to pivot, 128 = 1.0x identity)
+ *   5 = alpha (face transparency, not used in our viewer)
+ *
+ * Binary format (.anims) produced by tools/cache_pipeline/export_animations.py:
+ *   legacy header: uint32 magic ("MINA"), uint16 framebase_count,
+ *                  uint16 sequence_count
+ *   current header: char[4] magic ("ANM2"), uint16 version,
+ *                   uint16 header_size, uint32 framebase_count,
+ *                   uint32 sequence_count, uint32 sequence_frame_count,
+ *                   uint32 flags
+ *   framebases section, sequences section with inlined frame data.
+ */
+
+#include <math.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define ANIM_MAGIC 0x414E494D  /* legacy bytes "MINA" when read little-endian */
+#define ANIM2_MAGIC 0x324D4E41 /* bytes "ANM2" when read little-endian */
+#define ANIM2_MIN_VERSION 2
+#define ANIM2_VERSION 3
+#define ANIM2_HEADER_SIZE 24
+#define ANIM_MAX_SLOTS 256
+#define ANIM_SINE_COUNT 2048
+
+/* ======================================================================== */
+/* sine/cosine table (matches OSRS Rasterizer3D, fixed-point scale 65536)     */
+/* ======================================================================== */
+
+static int anim_sine[ANIM_SINE_COUNT];
+static int anim_cosine[ANIM_SINE_COUNT];
+static int anim_trig_initialized = 0;
+
+static void anim_init_trig(void) {
+    if (anim_trig_initialized) return;
+    for (int i = 0; i < ANIM_SINE_COUNT; i++) {
+        double angle = (double)i * (2.0 * 3.14159265358979323846 / ANIM_SINE_COUNT);
+        anim_sine[i] = (int)(65536.0 * sin(angle));
+        anim_cosine[i] = (int)(65536.0 * cos(angle));
+    }
+    anim_trig_initialized = 1;
+}
+
+/* ======================================================================== */
+/* loading                                                                    */
+/* ======================================================================== */
+
+typedef struct {
+    const uint8_t* p;
+    size_t remaining;
+    const char* path;
+} AnimCursor;
+
+static int anim_take(AnimCursor* c, void* dst, size_t size, const char* what) {
+    if (!c || c->remaining < size) {
+        fprintf(stderr, "%s: short read while loading %s\n",
+                c && c->path ? c->path : "(anim)", what);
+        return 0;
+    }
+    if (dst) memcpy(dst, c->p, size);
+    c->p += size;
+    c->remaining -= size;
+    return 1;
+}
+
+static int anim_read_u8(AnimCursor* c, uint8_t* out, const char* what) {
+    return anim_take(c, out, 1, what);
+}
+
+static int anim_read_u16(AnimCursor* c, uint16_t* out, const char* what) {
+    uint8_t b[2];
+    if (!anim_take(c, b, sizeof(b), what)) return 0;
+    *out = (uint16_t)b[0] | ((uint16_t)b[1] << 8);
+    return 1;
+}
+
+static int anim_read_i16(AnimCursor* c, int16_t* out, const char* what) {
+    uint16_t u = 0;
+    if (!anim_read_u16(c, &u, what)) return 0;
+    *out = (int16_t)u;
+    return 1;
+}
+
+static int anim_read_i8(AnimCursor* c, int8_t* out, const char* what) {
+    uint8_t u = 0;
+    if (!anim_read_u8(c, &u, what)) return 0;
+    *out = (int8_t)u;
+    return 1;
+}
+
+static int anim_read_u32(AnimCursor* c, uint32_t* out, const char* what) {
+    uint8_t b[4];
+    if (!anim_take(c, b, sizeof(b), what)) return 0;
+    *out = (uint32_t)b[0]
+         | ((uint32_t)b[1] << 8)
+         | ((uint32_t)b[2] << 16)
+         | ((uint32_t)b[3] << 24);
+    return 1;
+}
+
+AnimCache* anim_cache_load(const char* path) {
+    size_t size = 0;
+    uint8_t* buf = fc_asset_read_all(path, &size);
+    AnimCursor cur;
+    uint32_t magic = 0;
+    uint32_t base_count = 0;
+    uint32_t seq_count = 0;
+    uint16_t format_version = 1;
+    AnimCache* cache;
+
+    if (!buf) return NULL;
+    cur.p = buf;
+    cur.remaining = size;
+    cur.path = path;
+
+    if (!anim_read_u32(&cur, &magic, "anim magic")) {
+        free(buf);
+        return NULL;
+    }
+    if (magic == ANIM_MAGIC) {
+        uint16_t legacy_base_count = 0;
+        uint16_t legacy_seq_count = 0;
+        if (!anim_read_u16(&cur, &legacy_base_count, "framebase count") ||
+            !anim_read_u16(&cur, &legacy_seq_count, "sequence count")) {
+            free(buf);
+            return NULL;
+        }
+        base_count = legacy_base_count;
+        seq_count = legacy_seq_count;
+    } else if (magic == ANIM2_MAGIC) {
+        uint16_t version = 0;
+        uint16_t header_size = 0;
+        uint32_t sequence_frame_count = 0;
+        uint32_t flags = 0;
+        (void)sequence_frame_count;
+        (void)flags;
+        if (!anim_read_u16(&cur, &version, "anim version") ||
+            !anim_read_u16(&cur, &header_size, "anim header size") ||
+            !anim_read_u32(&cur, &base_count, "framebase count") ||
+            !anim_read_u32(&cur, &seq_count, "sequence count") ||
+            !anim_read_u32(&cur, &sequence_frame_count, "sequence frame count") ||
+            !anim_read_u32(&cur, &flags, "anim flags")) {
+            free(buf);
+            return NULL;
+        }
+        if (version < ANIM2_MIN_VERSION || version > ANIM2_VERSION ||
+            header_size < ANIM2_HEADER_SIZE) {
+            fprintf(stderr, "anim_cache_load: unsupported ANM2 v%u header %u\n",
+                    version, header_size);
+            free(buf);
+            return NULL;
+        }
+        format_version = version;
+        if (header_size > ANIM2_HEADER_SIZE &&
+            !anim_take(&cur, NULL, header_size - ANIM2_HEADER_SIZE,
+                       "anim header extension")) {
+            free(buf);
+            return NULL;
+        }
+    } else {
+        fprintf(stderr, "anim_cache_load: bad magic 0x%08X\n", magic);
+        free(buf);
+        return NULL;
+    }
+
+    if (base_count > 65535u || seq_count > 65535u) {
+        fprintf(stderr, "anim_cache_load: unreasonable counts %u/%u\n",
+                base_count, seq_count);
+        free(buf);
+        return NULL;
+    }
+
+    cache = (AnimCache*)calloc(1, sizeof(AnimCache));
+    if (!cache) {
+        free(buf);
+        return NULL;
+    }
+    cache->base_count = (int)base_count;
+    cache->seq_count = (int)seq_count;
+
+    /* load framebases */
+    cache->bases = (AnimFrameBase*)calloc(cache->base_count, sizeof(AnimFrameBase));
+    cache->base_ids = (uint16_t*)malloc(cache->base_count * sizeof(uint16_t));
+    if (!cache->bases || !cache->base_ids) {
+        free(buf);
+        anim_cache_free(cache);
+        return NULL;
+    }
+
+    for (int i = 0; i < cache->base_count; i++) {
+        AnimFrameBase* fb = &cache->bases[i];
+        if (!anim_read_u16(&cur, &fb->base_id, "framebase id")) {
+            free(buf);
+            anim_cache_free(cache);
+            return NULL;
+        }
+        cache->base_ids[i] = fb->base_id;
+        if (!anim_read_u8(&cur, &fb->slot_count, "framebase slot count")) {
+            free(buf);
+            anim_cache_free(cache);
+            return NULL;
+        }
+
+        fb->types = (uint8_t*)malloc(fb->slot_count);
+        for (int s = 0; s < fb->slot_count; s++) {
+            if (!fb->types ||
+                !anim_read_u8(&cur, &fb->types[s], "framebase slot type")) {
+                free(buf);
+                anim_cache_free(cache);
+                return NULL;
+            }
+        }
+
+        fb->map_lengths = (uint8_t*)malloc(fb->slot_count);
+        fb->frame_maps = (uint8_t**)malloc(fb->slot_count * sizeof(uint8_t*));
+        if (!fb->map_lengths || !fb->frame_maps) {
+            free(buf);
+            anim_cache_free(cache);
+            return NULL;
+        }
+        for (int s = 0; s < fb->slot_count; s++) {
+            uint8_t ml = 0;
+            if (!anim_read_u8(&cur, &ml, "framebase map length")) {
+                free(buf);
+                anim_cache_free(cache);
+                return NULL;
+            }
+            fb->map_lengths[s] = ml;
+            fb->frame_maps[s] = (uint8_t*)malloc(ml);
+            if (ml > 0 && !fb->frame_maps[s]) {
+                free(buf);
+                anim_cache_free(cache);
+                return NULL;
+            }
+            for (int j = 0; j < ml; j++) {
+                if (!anim_read_u8(&cur, &fb->frame_maps[s][j],
+                                  "framebase map label")) {
+                    free(buf);
+                    anim_cache_free(cache);
+                    return NULL;
+                }
+            }
+        }
+    }
+
+    /* load sequences */
+    cache->sequences = (AnimSequence*)calloc(cache->seq_count, sizeof(AnimSequence));
+    if (!cache->sequences) {
+        free(buf);
+        anim_cache_free(cache);
+        return NULL;
+    }
+    for (int i = 0; i < cache->seq_count; i++) {
+        AnimSequence* seq = &cache->sequences[i];
+        if (!anim_read_u16(&cur, &seq->seq_id, "sequence id") ||
+            !anim_read_u16(&cur, &seq->frame_count, "sequence frame count")) {
+            free(buf);
+            anim_cache_free(cache);
+            return NULL;
+        }
+
+        if (!anim_read_u8(&cur, &seq->interleave_count, "sequence interleave count")) {
+            free(buf);
+            anim_cache_free(cache);
+            return NULL;
+        }
+        if (seq->interleave_count > 0) {
+            seq->interleave_order = (uint8_t*)malloc(seq->interleave_count);
+            if (!seq->interleave_order) {
+                free(buf);
+                anim_cache_free(cache);
+                return NULL;
+            }
+            for (int j = 0; j < seq->interleave_count; j++) {
+                if (!anim_read_u8(&cur, &seq->interleave_order[j],
+                                  "sequence interleave slot")) {
+                    free(buf);
+                    anim_cache_free(cache);
+                    return NULL;
+                }
+            }
+        }
+
+        if (format_version >= 3) {
+            if (!anim_read_i16(&cur, &seq->frame_step,
+                               "sequence frame step") ||
+                !anim_read_i8(&cur, &seq->preanim_move,
+                              "sequence pre-animation movement") ||
+                !anim_read_i8(&cur, &seq->postanim_move,
+                              "sequence post-animation movement") ||
+                !anim_read_u8(&cur, &seq->forced_priority,
+                              "sequence forced priority") ||
+                !anim_read_u8(&cur, &seq->max_loops,
+                              "sequence max loops") ||
+                !anim_read_i8(&cur, &seq->reply_mode,
+                              "sequence reply mode") ||
+                !anim_read_u8(&cur, &seq->stretches,
+                              "sequence stretches")) {
+                free(buf);
+                anim_cache_free(cache);
+                return NULL;
+            }
+            seq->walk_flag = seq->postanim_move;
+        } else {
+            uint8_t walk_flag = 0;
+            if (!anim_read_u8(&cur, &walk_flag, "sequence walk flag")) {
+                free(buf);
+                anim_cache_free(cache);
+                return NULL;
+            }
+            seq->walk_flag = (int8_t)walk_flag;
+            seq->frame_step = -1;
+            seq->preanim_move = seq->interleave_count > 0 ? 2 : 0;
+            seq->postanim_move = seq->walk_flag >= 0
+                ? seq->walk_flag
+                : (seq->interleave_count > 0 ? 2 : 0);
+            seq->forced_priority = 5;
+            seq->max_loops = 99;
+            seq->reply_mode = -1;
+            seq->stretches = 0;
+        }
+
+        seq->frames = (AnimSequenceFrame*)calloc(seq->frame_count, sizeof(AnimSequenceFrame));
+        if (!seq->frames) {
+            free(buf);
+            anim_cache_free(cache);
+            return NULL;
+        }
+        for (int fi = 0; fi < seq->frame_count; fi++) {
+            AnimSequenceFrame* sf = &seq->frames[fi];
+            if (!anim_read_u16(&cur, &sf->delay, "sequence frame delay") ||
+                !anim_read_u16(&cur, &sf->frame.framebase_id, "sequence framebase id") ||
+                !anim_read_u8(&cur, &sf->frame.transform_count, "sequence transform count")) {
+                free(buf);
+                anim_cache_free(cache);
+                return NULL;
+            }
+
+            if (sf->frame.transform_count > 0) {
+                sf->frame.transforms = (AnimTransform*)malloc(
+                    sf->frame.transform_count * sizeof(AnimTransform));
+                if (!sf->frame.transforms) {
+                    free(buf);
+                    anim_cache_free(cache);
+                    return NULL;
+                }
+                for (int t = 0; t < sf->frame.transform_count; t++) {
+                    if (!anim_read_u8(&cur, &sf->frame.transforms[t].slot_index,
+                                      "sequence transform slot") ||
+                        !anim_read_i16(&cur, &sf->frame.transforms[t].dx,
+                                       "sequence transform dx") ||
+                        !anim_read_i16(&cur, &sf->frame.transforms[t].dy,
+                                       "sequence transform dy") ||
+                        !anim_read_i16(&cur, &sf->frame.transforms[t].dz,
+                                       "sequence transform dz")) {
+                        free(buf);
+                        anim_cache_free(cache);
+                        return NULL;
+                    }
+                }
+            }
+        }
+    }
+
+    free(buf);
+    anim_init_trig();
+
+    fprintf(stderr, "anim_cache_load: loaded %d framebases, %d sequences from %s\n",
+            cache->base_count, cache->seq_count, path);
+    return cache;
+}
+
+/* ======================================================================== */
+/* lookup                                                                     */
+/* ======================================================================== */
+
+AnimSequence* anim_get_sequence(AnimCache* cache, uint16_t seq_id) {
+    if (!cache) return NULL;
+    for (int i = 0; i < cache->seq_count; i++) {
+        if (cache->sequences[i].seq_id == seq_id) {
+            return &cache->sequences[i];
+        }
+    }
+    return NULL;
+}
+
+AnimFrameBase* anim_get_framebase(AnimCache* cache, uint16_t base_id) {
+    if (!cache) return NULL;
+    for (int i = 0; i < cache->base_count; i++) {
+        if (cache->bases[i].base_id == base_id) {
+            return &cache->bases[i];
+        }
+    }
+    return NULL;
+}
+
+/* ======================================================================== */
+/* per-model animation state                                                  */
+/* ======================================================================== */
+
+AnimModelState* anim_model_state_create(
+    const uint8_t* vertex_skins,
+    int base_vert_count
+) {
+    AnimModelState* state = (AnimModelState*)calloc(1, sizeof(AnimModelState));
+    state->vert_count = base_vert_count;
+    state->verts = (int16_t*)calloc(base_vert_count * 3, sizeof(int16_t));
+
+    /* build vertex group lookup from skin labels */
+    state->groups = (int**)calloc(ANIM_MAX_LABELS, sizeof(int*));
+    state->group_counts = (int*)calloc(ANIM_MAX_LABELS, sizeof(int));
+
+    /* first pass: count vertices per label */
+    int label_counts[ANIM_MAX_LABELS] = {0};
+    for (int v = 0; v < base_vert_count; v++) {
+        uint8_t label = vertex_skins[v];
+        label_counts[label]++;
+    }
+
+    /* allocate per-label arrays */
+    for (int l = 0; l < ANIM_MAX_LABELS; l++) {
+        if (label_counts[l] > 0) {
+            state->groups[l] = (int*)malloc(label_counts[l] * sizeof(int));
+            state->group_counts[l] = 0;
+        }
+    }
+
+    /* second pass: fill vertex indices */
+    for (int v = 0; v < base_vert_count; v++) {
+        uint8_t label = vertex_skins[v];
+        state->groups[label][state->group_counts[label]++] = v;
+    }
+
+    return state;
+}
+
+void anim_model_state_free(AnimModelState* state) {
+    if (!state) return;
+    free(state->verts);
+    for (int l = 0; l < ANIM_MAX_LABELS; l++) {
+        free(state->groups[l]);
+    }
+    free(state->groups);
+    free(state->group_counts);
+    free(state);
+}
+
+/* ======================================================================== */
+/* transform application (mirrors OSRS Model.transform)                       */
+/* ======================================================================== */
+
+void anim_apply_frame(
+    AnimModelState* state,
+    const int16_t* base_verts_src,
+    const AnimFrameData* frame,
+    const AnimFrameBase* fb
+) {
+    /* reset to base pose */
+    memcpy(state->verts, base_verts_src, state->vert_count * 3 * sizeof(int16_t));
+
+    /* pivot point for rotate/scale */
+    int pivot_x = 0, pivot_y = 0, pivot_z = 0;
+
+    for (int t = 0; t < frame->transform_count; t++) {
+        uint8_t slot_idx = frame->transforms[t].slot_index;
+        if (slot_idx >= fb->slot_count) continue;
+
+        int type = fb->types[slot_idx];
+        int dx = frame->transforms[t].dx;
+        int dy = frame->transforms[t].dy;
+        int dz = frame->transforms[t].dz;
+
+        uint8_t map_len = fb->map_lengths[slot_idx];
+        const uint8_t* labels = fb->frame_maps[slot_idx];
+
+        if (type == 0) {
+            /* origin: compute centroid of referenced vertex groups */
+            int count = 0;
+            int sum_x = 0, sum_y = 0, sum_z = 0;
+            for (int m = 0; m < map_len; m++) {
+                uint8_t label = labels[m];
+                /* label is uint8_t, always < 256 = ANIM_MAX_LABELS */
+                for (int vi = 0; vi < state->group_counts[label]; vi++) {
+                    int v = state->groups[label][vi];
+                    sum_x += state->verts[v * 3];
+                    sum_y += state->verts[v * 3 + 1];
+                    sum_z += state->verts[v * 3 + 2];
+                    count++;
+                }
+            }
+            if (count > 0) {
+                pivot_x = sum_x / count + dx;
+                pivot_y = sum_y / count + dy;
+                pivot_z = sum_z / count + dz;
+            } else {
+                pivot_x = dx;
+                pivot_y = dy;
+                pivot_z = dz;
+            }
+        } else if (type == 1) {
+            /* translate: add dx/dy/dz to all vertices in referenced groups */
+            for (int m = 0; m < map_len; m++) {
+                uint8_t label = labels[m];
+                /* label is uint8_t, always < 256 = ANIM_MAX_LABELS */
+                for (int vi = 0; vi < state->group_counts[label]; vi++) {
+                    int v = state->groups[label][vi];
+                    state->verts[v * 3]     += (int16_t)dx;
+                    state->verts[v * 3 + 1] += (int16_t)dy;
+                    state->verts[v * 3 + 2] += (int16_t)dz;
+                }
+            }
+        } else if (type == 2) {
+            /* rotate: euler Z-X-Y around pivot.
+             * raw value * 8 → index into 2048-entry sine table.
+             * rotation order: Z first, then X, then Y. */
+            int ax = (dx & 0xFF) * 8;
+            int ay = (dy & 0xFF) * 8;
+            int az = (dz & 0xFF) * 8;
+
+            int sin_x = anim_sine[ax & 2047];
+            int cos_x = anim_cosine[ax & 2047];
+            int sin_y = anim_sine[ay & 2047];
+            int cos_y = anim_cosine[ay & 2047];
+            int sin_z = anim_sine[az & 2047];
+            int cos_z = anim_cosine[az & 2047];
+
+            for (int m = 0; m < map_len; m++) {
+                uint8_t label = labels[m];
+                /* label is uint8_t, always < 256 = ANIM_MAX_LABELS */
+                for (int vi = 0; vi < state->group_counts[label]; vi++) {
+                    int v = state->groups[label][vi];
+                    int vx = state->verts[v * 3]     - pivot_x;
+                    int vy = state->verts[v * 3 + 1] - pivot_y;
+                    int vz = state->verts[v * 3 + 2] - pivot_z;
+
+                    /* Z rotation */
+                    int rx = (vx * cos_z + vy * sin_z) >> 16;
+                    int ry = (vy * cos_z - vx * sin_z) >> 16;
+                    vx = rx; vy = ry;
+
+                    /* X rotation */
+                    ry = (vy * cos_x - vz * sin_x) >> 16;
+                    int rz = (vy * sin_x + vz * cos_x) >> 16;
+                    vy = ry; vz = rz;
+
+                    /* Y rotation */
+                    rx = (vz * sin_y + vx * cos_y) >> 16;
+                    rz = (vz * cos_y - vx * sin_y) >> 16;
+                    vx = rx; vz = rz;
+
+                    state->verts[v * 3]     = (int16_t)(vx + pivot_x);
+                    state->verts[v * 3 + 1] = (int16_t)(vy + pivot_y);
+                    state->verts[v * 3 + 2] = (int16_t)(vz + pivot_z);
+                }
+            }
+        } else if (type == 3) {
+            /* scale: relative to pivot, 128 = 1.0x identity */
+            for (int m = 0; m < map_len; m++) {
+                uint8_t label = labels[m];
+                /* label is uint8_t, always < 256 = ANIM_MAX_LABELS */
+                for (int vi = 0; vi < state->group_counts[label]; vi++) {
+                    int v = state->groups[label][vi];
+                    int vx = state->verts[v * 3]     - pivot_x;
+                    int vy = state->verts[v * 3 + 1] - pivot_y;
+                    int vz = state->verts[v * 3 + 2] - pivot_z;
+
+                    vx = (vx * dx) / 128;
+                    vy = (vy * dy) / 128;
+                    vz = (vz * dz) / 128;
+
+                    state->verts[v * 3]     = (int16_t)(vx + pivot_x);
+                    state->verts[v * 3 + 1] = (int16_t)(vy + pivot_y);
+                    state->verts[v * 3 + 2] = (int16_t)(vz + pivot_z);
+                }
+            }
+        }
+        /* type 5 (alpha) skipped — we don't use face transparency in the viewer */
+    }
+}
+
+/* ======================================================================== */
+/* two-track interleaved animation (matches OSRS Model.applyAnimationFrames)  */
+/* ======================================================================== */
+
+/**
+ * Apply a single transform slot to the vertex state (extracted from anim_apply_frame
+ * to allow per-slot interleave filtering).
+ *
+ * pivot_x/y/z are read/written through pointers — they persist across slots
+ * within a pass, exactly like the reference's transformTempX/Y/Z.
+ */
+static void anim_apply_single_transform(
+    AnimModelState* state,
+    int type, const uint8_t* labels, uint8_t map_len,
+    int dx, int dy, int dz,
+    int* pivot_x, int* pivot_y, int* pivot_z
+) {
+    if (type == 0) {
+        /* origin: compute centroid of referenced vertex groups */
+        int count = 0, sx = 0, sy = 0, sz = 0;
+        for (int m = 0; m < map_len; m++) {
+            uint8_t label = labels[m];
+            for (int vi = 0; vi < state->group_counts[label]; vi++) {
+                int v = state->groups[label][vi];
+                sx += state->verts[v * 3];
+                sy += state->verts[v * 3 + 1];
+                sz += state->verts[v * 3 + 2];
+                count++;
+            }
+        }
+        if (count > 0) {
+            *pivot_x = sx / count + dx;
+            *pivot_y = sy / count + dy;
+            *pivot_z = sz / count + dz;
+        } else {
+            *pivot_x = dx;
+            *pivot_y = dy;
+            *pivot_z = dz;
+        }
+    } else if (type == 1) {
+        for (int m = 0; m < map_len; m++) {
+            uint8_t label = labels[m];
+            for (int vi = 0; vi < state->group_counts[label]; vi++) {
+                int v = state->groups[label][vi];
+                state->verts[v * 3]     += (int16_t)dx;
+                state->verts[v * 3 + 1] += (int16_t)dy;
+                state->verts[v * 3 + 2] += (int16_t)dz;
+            }
+        }
+    } else if (type == 2) {
+        int ax = (dx & 0xFF) * 8, ay = (dy & 0xFF) * 8, az = (dz & 0xFF) * 8;
+        int sin_x = anim_sine[ax & 2047], cos_x = anim_cosine[ax & 2047];
+        int sin_y = anim_sine[ay & 2047], cos_y = anim_cosine[ay & 2047];
+        int sin_z = anim_sine[az & 2047], cos_z = anim_cosine[az & 2047];
+        for (int m = 0; m < map_len; m++) {
+            uint8_t label = labels[m];
+            for (int vi = 0; vi < state->group_counts[label]; vi++) {
+                int v = state->groups[label][vi];
+                int vx = state->verts[v * 3]     - *pivot_x;
+                int vy = state->verts[v * 3 + 1] - *pivot_y;
+                int vz = state->verts[v * 3 + 2] - *pivot_z;
+                int rx = (vx * cos_z + vy * sin_z) >> 16;
+                int ry = (vy * cos_z - vx * sin_z) >> 16;
+                vx = rx; vy = ry;
+                ry = (vy * cos_x - vz * sin_x) >> 16;
+                int rz = (vy * sin_x + vz * cos_x) >> 16;
+                vy = ry; vz = rz;
+                rx = (vz * sin_y + vx * cos_y) >> 16;
+                rz = (vz * cos_y - vx * sin_y) >> 16;
+                state->verts[v * 3]     = (int16_t)(rx + *pivot_x);
+                state->verts[v * 3 + 1] = (int16_t)(vy + *pivot_y);
+                state->verts[v * 3 + 2] = (int16_t)(rz + *pivot_z);
+            }
+        }
+    } else if (type == 3) {
+        for (int m = 0; m < map_len; m++) {
+            uint8_t label = labels[m];
+            for (int vi = 0; vi < state->group_counts[label]; vi++) {
+                int v = state->groups[label][vi];
+                int vx = state->verts[v * 3]     - *pivot_x;
+                int vy = state->verts[v * 3 + 1] - *pivot_y;
+                int vz = state->verts[v * 3 + 2] - *pivot_z;
+                state->verts[v * 3]     = (int16_t)((vx * dx) / 128 + *pivot_x);
+                state->verts[v * 3 + 1] = (int16_t)((vy * dy) / 128 + *pivot_y);
+                state->verts[v * 3 + 2] = (int16_t)((vz * dz) / 128 + *pivot_z);
+            }
+        }
+    }
+}
+
+/**
+ * Apply two animation frames with body-part interleaving.
+ *
+ * Mirrors OSRS Model.applyAnimationFrames():
+ *   - interleave_order lists framebase SLOT INDICES owned by SECONDARY (walk)
+ *   - Pass 1: apply primary transforms for slots NOT in interleave_order
+ *   - Pass 2: apply secondary transforms for slots IN interleave_order
+ *   - Type-0 (pivot) transforms always execute in both passes
+ *
+ * CRITICAL: interleave_order contains framebase SLOT INDICES, not vertex labels!
+ * The reference code (Model.java:1322-1343) walks both the frame's slot list and
+ * the interleave_order simultaneously, comparing slot indices directly.
+ *
+ * Both passes operate on the same vertex state with independent pivot tracking,
+ * exactly as the reference does with transformTempX/Y/Z reset between passes.
+ */
+static void anim_apply_frame_interleaved(
+    AnimModelState* state,
+    const int16_t* base_verts_src,
+    const AnimFrameData* secondary_frame, const AnimFrameBase* secondary_fb,
+    const AnimFrameData* primary_frame, const AnimFrameBase* primary_fb,
+    const uint8_t* interleave_order, int interleave_count
+) {
+    /* reset to base pose */
+    memcpy(state->verts, base_verts_src, state->vert_count * 3 * sizeof(int16_t));
+
+    /* build boolean mask: interleave_order lists SLOT INDICES the SECONDARY owns.
+       index by slot index (0-244 for our 245-slot framebase), NOT vertex labels. */
+    uint8_t secondary_slot[256];
+    memset(secondary_slot, 0, sizeof(secondary_slot));
+    for (int i = 0; i < interleave_count; i++) {
+        secondary_slot[interleave_order[i]] = 1;
+    }
+
+    /* pass 1: primary frame — apply transforms for slots NOT in interleave_order.
+     * type-0 (pivot) always executes regardless of ownership.
+     * matches reference: if (k1 != i1 || class18.types[k1] == 0) */
+    int pivot_x = 0, pivot_y = 0, pivot_z = 0;
+    for (int t = 0; t < primary_frame->transform_count; t++) {
+        uint8_t slot_idx = primary_frame->transforms[t].slot_index;
+        if (slot_idx >= primary_fb->slot_count) continue;
+
+        int type = primary_fb->types[slot_idx];
+        int in_interleave = secondary_slot[slot_idx];
+
+        if (!in_interleave || type == 0) {
+            anim_apply_single_transform(
+                state, type,
+                primary_fb->frame_maps[slot_idx],
+                primary_fb->map_lengths[slot_idx],
+                primary_frame->transforms[t].dx,
+                primary_frame->transforms[t].dy,
+                primary_frame->transforms[t].dz,
+                &pivot_x, &pivot_y, &pivot_z);
+        }
+    }
+
+    /* pass 2: secondary frame — apply transforms for slots IN interleave_order.
+     * type-0 (pivot) always executes.
+     * matches reference: if (i2 == i1 || class18.types[i2] == 0) */
+    pivot_x = 0; pivot_y = 0; pivot_z = 0;
+    for (int t = 0; t < secondary_frame->transform_count; t++) {
+        uint8_t slot_idx = secondary_frame->transforms[t].slot_index;
+        if (slot_idx >= secondary_fb->slot_count) continue;
+
+        int type = secondary_fb->types[slot_idx];
+        int in_interleave = secondary_slot[slot_idx];
+
+        if (in_interleave || type == 0) {
+            anim_apply_single_transform(
+                state, type,
+                secondary_fb->frame_maps[slot_idx],
+                secondary_fb->map_lengths[slot_idx],
+                secondary_frame->transforms[t].dx,
+                secondary_frame->transforms[t].dy,
+                secondary_frame->transforms[t].dz,
+                &pivot_x, &pivot_y, &pivot_z);
+        }
+    }
+}
+
+/* Apply the current pose/action pair to one model state. The action owns the
+ * full model unless its sequence supplies an OSRS interleave table, in which
+ * case the pose supplies the interleaved transform slots. If the action frame
+ * cannot be applied, fall back to the pose exactly as a single-track actor
+ * would. Mesh upload remains the caller's responsibility because player
+ * models are unique while same-type NPCs share one render mesh. */
+int anim_mix_pose_action(
+    AnimCache* cache,
+    AnimModelState* state,
+    const int16_t* base_verts,
+    AnimSequence* pose,
+    int pose_frame_index,
+    AnimSequence* action,
+    int action_frame_index
+) {
+    if (!cache || !state || !base_verts) return 0;
+
+    if (action && action_frame_index >= 0 &&
+        action_frame_index < action->frame_count) {
+        AnimFrameData* action_frame =
+            &action->frames[action_frame_index].frame;
+        AnimFrameBase* action_base =
+            anim_get_framebase(cache, action_frame->framebase_id);
+        if (action_base && pose && pose_frame_index >= 0 &&
+            pose_frame_index < pose->frame_count &&
+            action->interleave_count > 0 && action->interleave_order) {
+            AnimFrameData* pose_frame =
+                &pose->frames[pose_frame_index].frame;
+            AnimFrameBase* pose_base =
+                anim_get_framebase(cache, pose_frame->framebase_id);
+            if (pose_base) {
+                anim_apply_frame_interleaved(
+                    state, base_verts,
+                    pose_frame, pose_base, action_frame, action_base,
+                    action->interleave_order, action->interleave_count);
+                return 1;
+            }
+        } else if (action_base) {
+            anim_apply_frame(state, base_verts, action_frame, action_base);
+            return 1;
+        }
+    }
+
+    if (pose && pose_frame_index >= 0 &&
+        pose_frame_index < pose->frame_count) {
+        AnimFrameData* pose_frame = &pose->frames[pose_frame_index].frame;
+        AnimFrameBase* pose_base =
+            anim_get_framebase(cache, pose_frame->framebase_id);
+        if (pose_base) {
+            anim_apply_frame(state, base_verts, pose_frame, pose_base);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* ======================================================================== */
+/* mesh re-expansion (apply animated base verts → expanded rendering verts)   */
+/* ======================================================================== */
+
+/**
+ * Re-expand animated base vertices into the raylib mesh's expanded vertex buffer.
+ * This mirrors expand_model from the Python exporter but in-place, using
+ * face_indices to map from base to expanded vertices.
+ *
+ * The mesh has face_count*3 expanded vertices. Each triplet (i*3, i*3+1, i*3+2)
+ * corresponds to face_indices[i*3], face_indices[i*3+1], face_indices[i*3+2]
+ * pointing into base_vertices.
+ *
+ * OSRS Y is negated for rendering (negative-up → positive-up).
+ */
+void anim_update_mesh(
+    float* mesh_vertices,
+    const AnimModelState* state,
+    const uint16_t* face_indices,
+    int face_count
+) {
+    for (int fi = 0; fi < face_count; fi++) {
+        int a = face_indices[fi * 3];
+        int b = face_indices[fi * 3 + 1];
+        int c = face_indices[fi * 3 + 2];
+
+        int vi = fi * 9; /* 3 verts * 3 coords */
+        mesh_vertices[vi]     = (float)state->verts[a * 3];
+        mesh_vertices[vi + 1] = (float)(-state->verts[a * 3 + 1]); /* negate Y */
+        mesh_vertices[vi + 2] = (float)state->verts[a * 3 + 2];
+
+        mesh_vertices[vi + 3] = (float)state->verts[b * 3];
+        mesh_vertices[vi + 4] = (float)(-state->verts[b * 3 + 1]);
+        mesh_vertices[vi + 5] = (float)state->verts[b * 3 + 2];
+
+        mesh_vertices[vi + 6] = (float)state->verts[c * 3];
+        mesh_vertices[vi + 7] = (float)(-state->verts[c * 3 + 1]);
+        mesh_vertices[vi + 8] = (float)state->verts[c * 3 + 2];
+    }
+}
+
+/* ======================================================================== */
+/* cleanup                                                                    */
+/* ======================================================================== */
+
+void anim_cache_free(AnimCache* cache) {
+    if (!cache) return;
+
+    for (int i = 0; i < cache->base_count; i++) {
+        AnimFrameBase* fb = &cache->bases[i];
+        free(fb->types);
+        free(fb->map_lengths);
+        for (int s = 0; s < fb->slot_count; s++) {
+            free(fb->frame_maps[s]);
+        }
+        free(fb->frame_maps);
+    }
+    free(cache->bases);
+    free(cache->base_ids);
+
+    for (int i = 0; i < cache->seq_count; i++) {
+        AnimSequence* seq = &cache->sequences[i];
+        free(seq->interleave_order);
+        for (int fi = 0; fi < seq->frame_count; fi++) {
+            free(seq->frames[fi].frame.transforms);
+        }
+        free(seq->frames);
+    }
+    free(cache->sequences);
+    free(cache);
+}
+
+#undef ANIM_MAGIC
+#undef ANIM2_MAGIC
+#undef ANIM2_MIN_VERSION
+#undef ANIM2_VERSION
+#undef ANIM2_HEADER_SIZE
+#undef ANIM_MAX_SLOTS
+#undef ANIM_SINE_COUNT
+
+/* Models */
+// Loads models from .models MDL2/MDL3 binary for Raylib rendering.
+// Fight Caves raylib model loader.
+
+#include "raylib.h"
+#include "raymath.h"
+#include <float.h>
+#include <math.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define MDL2_MAGIC 0x4D444C32
+#define MDL3_MAGIC 0x4D444C33
+#define MUV1_MAGIC 0x3156554D
+#define MODEL_ID_INDEX_MAX 20000
+
+static int model_id_filter_contains(const uint32_t *ids, int id_count, uint32_t id) {
+    if (!ids) return 1;
+    if (id_count <= 0) return 0;
+    for (int i = 0; i < id_count; i++)
+        if (ids[i] == id) return 1;
+    return 0;
+}
+
+ModelEntry *model_find(ModelSet *set, uint32_t id) {
+    if (!set) return NULL;
+    if (id < (uint32_t)set->index_limit && set->index_by_id) {
+        int idx = set->index_by_id[id];
+        if (idx >= 0 && idx < set->count) return &set->entries[idx];
+    }
+    for (int i = 0; i < set->count; i++)
+        if (set->entries[i].model_id == id && set->entries[i].loaded) return &set->entries[i];
+    return NULL;
+}
+
+float models_pick_depth(const ModelEntry *entry, const int16_t *posed_vertices,
+                         Vector3 position, float yaw_degrees, Camera3D camera,
+                         Vector2 mouse, int screen_width, int screen_height) {
+    if (!entry || !entry->loaded || !entry->rest_verts) return -1;
+    /* Same model -> yaw -> translation order as DrawModelEx. Never read the
+     * shared uploaded mesh: another NPC of this type may have a different pose. */
+    Matrix transform = MatrixMultiply(entry->model.transform,
+        MatrixMultiply(MatrixRotateY(yaw_degrees * DEG2RAD),
+                       MatrixTranslate(position.x, position.y, position.z)));
+    Vector3 forward = Vector3Normalize(Vector3Subtract(camera.target, camera.position));
+    float nearest = FLT_MAX;
+    for (int face = 0; face < entry->face_count; face++) {
+        float min_x = FLT_MAX, min_y = FLT_MAX;
+        float max_x = -FLT_MAX, max_y = -FLT_MAX, depth = 0;
+        int visible = 1;
+        for (int corner = 0; corner < 3; corner++) {
+            int offset = (face * 3 + corner) * 3;
+            Vector3 local;
+            if (posed_vertices && entry->face_indices) {
+                int vertex = entry->face_indices[face * 3 + corner] * 3;
+                local = (Vector3){posed_vertices[vertex] / 128.0f,
+                    -posed_vertices[vertex + 1] / 128.0f,
+                    -posed_vertices[vertex + 2] / 128.0f};
+            } else {
+                local = (Vector3){entry->rest_verts[offset], entry->rest_verts[offset + 1],
+                                   entry->rest_verts[offset + 2]};
+            }
+            Vector3 world = Vector3Transform(local, transform);
+            float z = Vector3DotProduct(Vector3Subtract(world, camera.position), forward);
+            if (z <= 0.01f) { visible = 0; break; }
+            Vector2 screen = GetWorldToScreenEx(world, camera, screen_width, screen_height);
+            min_x = fminf(min_x, screen.x); max_x = fmaxf(max_x, screen.x);
+            min_y = fminf(min_y, screen.y); max_y = fmaxf(max_y, screen.y);
+            depth += z / 3.0f;
+        }
+        /* RuneLite Perspective.calculate2DBounds uses projected face rectangles
+         * padded by five pixels, not a ground-tile test or pixel-perfect triangles. */
+        if (visible && mouse.x >= min_x - 5 && mouse.x <= max_x + 5 &&
+            mouse.y >= min_y - 5 && mouse.y <= max_y + 5 && depth < nearest)
+            nearest = depth;
+    }
+    return nearest == FLT_MAX ? -1 : nearest;
+}
+
+static float model_clamp_uv(float v) {
+    if (v < 0.0f) return 0.0f;
+    if (v > 1.0f) return 1.0f;
+    return v;
+}
+
+static float model_repeat_uv_with_margin(float v, float margin) {
+    if (margin <= 0.0f)
+        return model_clamp_uv(v);
+    while (v < -margin) v += 1.0f;
+    while (v > 1.0f + margin) v -= 1.0f;
+    if (v < -margin) return -margin;
+    if (v > 1.0f + margin) return 1.0f + margin;
+    return v;
+}
+
+static void model_project_uvs_for_face(const int16_t *verts,
+                                       int tri_a, int tri_b, int tri_c,
+                                       int tex_a, int tex_b, int tex_c,
+                                       float *u, float *v) {
+    u[0] = 0.0f; u[1] = 1.0f; u[2] = 0.0f;
+    v[0] = 0.0f; v[1] = 0.0f; v[2] = 1.0f;
+
+    float v1x = (float)verts[tex_a * 3];
+    float v1y = (float)verts[tex_a * 3 + 1];
+    float v1z = (float)verts[tex_a * 3 + 2];
+    float v2x = (float)verts[tex_b * 3] - v1x;
+    float v2y = (float)verts[tex_b * 3 + 1] - v1y;
+    float v2z = (float)verts[tex_b * 3 + 2] - v1z;
+    float v3x = (float)verts[tex_c * 3] - v1x;
+    float v3y = (float)verts[tex_c * 3 + 1] - v1y;
+    float v3z = (float)verts[tex_c * 3 + 2] - v1z;
+    float v4x = (float)verts[tri_a * 3] - v1x;
+    float v4y = (float)verts[tri_a * 3 + 1] - v1y;
+    float v4z = (float)verts[tri_a * 3 + 2] - v1z;
+    float v5x = (float)verts[tri_b * 3] - v1x;
+    float v5y = (float)verts[tri_b * 3 + 1] - v1y;
+    float v5z = (float)verts[tri_b * 3 + 2] - v1z;
+    float v6x = (float)verts[tri_c * 3] - v1x;
+    float v6y = (float)verts[tri_c * 3 + 1] - v1y;
+    float v6z = (float)verts[tri_c * 3 + 2] - v1z;
+
+    float v7x = v2y * v3z - v2z * v3y;
+    float v7y = v2z * v3x - v2x * v3z;
+    float v7z = v2x * v3y - v2y * v3x;
+
+    float v8x = v3y * v7z - v3z * v7y;
+    float v8y = v3z * v7x - v3x * v7z;
+    float v8z = v3x * v7y - v3y * v7x;
+    float denom = v8x * v2x + v8y * v2y + v8z * v2z;
+    if (fabsf(denom) < 1.0e-6f)
+        return;
+    float inv = 1.0f / denom;
+    u[0] = (v8x * v4x + v8y * v4y + v8z * v4z) * inv;
+    u[1] = (v8x * v5x + v8y * v5y + v8z * v5z) * inv;
+    u[2] = (v8x * v6x + v8y * v6y + v8z * v6z) * inv;
+
+    v8x = v2y * v7z - v2z * v7y;
+    v8y = v2z * v7x - v2x * v7z;
+    v8z = v2x * v7y - v2y * v7x;
+    denom = v8x * v3x + v8y * v3y + v8z * v3z;
+    if (fabsf(denom) < 1.0e-6f)
+        return;
+    inv = 1.0f / denom;
+    v[0] = (v8x * v4x + v8y * v4y + v8z * v4z) * inv;
+    v[1] = (v8x * v5x + v8y * v5y + v8z * v5z) * inv;
+    v[2] = (v8x * v6x + v8y * v6y + v8z * v6z) * inv;
+}
+
+void models_recompute_texture_uvs_from_vertices(ModelEntry *entry,
+                                                const int16_t *verts) {
+    if (!entry || !entry->loaded || !entry->face_uvs || !verts)
+        return;
+    Mesh *mesh = &entry->model.meshes[0];
+    if (!mesh->texcoords || !entry->face_indices)
+        return;
+    for (int fi = 0; fi < entry->face_count; fi++) {
+        ModelFaceUvInfo *info = &entry->face_uvs[fi];
+        if (!info->textured)
+            continue;
+        int tri_a = entry->face_indices[fi * 3];
+        int tri_b = entry->face_indices[fi * 3 + 1];
+        int tri_c = entry->face_indices[fi * 3 + 2];
+        if (tri_a >= entry->base_vert_count || tri_b >= entry->base_vert_count
+                || tri_c >= entry->base_vert_count
+                || info->tex_a >= entry->base_vert_count
+                || info->tex_b >= entry->base_vert_count
+                || info->tex_c >= entry->base_vert_count)
+            continue;
+        float u[3], v[3];
+        model_project_uvs_for_face(verts, tri_a, tri_b, tri_c,
+                                   info->tex_a, info->tex_b, info->tex_c,
+                                   u, v);
+        for (int j = 0; j < 3; j++) {
+            float cu = model_clamp_uv(u[j]);
+            float cv = model_repeat_uv_with_margin(v[j],
+                                                   info->repeat_v_margin);
+            int out = (fi * 3 + j) * 2;
+            mesh->texcoords[out] = info->u_base + cu * info->u_scale;
+            mesh->texcoords[out + 1] = info->v_base + cv * info->v_scale;
+        }
+    }
+    UpdateMeshBuffer(*mesh, 1, mesh->texcoords,
+                     mesh->vertexCount * 2 * sizeof(float), 0);
+}
+
+static ModelSet *models_load_filtered(const char *path, const uint32_t *ids,
+                                      int id_count, Texture2D atlas_texture) {
+    FILE *f = fc_asset_fopen(path, "rb");
+    if (!f) { fprintf(stderr, "models: can't open %s\n", path); return NULL; }
+
+    uint32_t magic, count;
+    if (!fc_read_exact(f, &magic, sizeof(magic), 1, path, "model magic")
+            || (magic != MDL2_MAGIC && magic != MDL3_MAGIC)) {
+        fprintf(stderr, "models: bad magic\n");
+        fc_asset_close(f);
+        return NULL;
+    }
+    int has_tex = (magic == MDL3_MAGIC);
+    if (!fc_read_exact(f, &count, sizeof(count), 1, path, "model count")) {
+        fc_asset_close(f);
+        return NULL;
+    }
+    uint32_t *offsets = malloc(count * 4);
+    if (!offsets
+            || !fc_read_exact(f, offsets, sizeof(offsets[0]), count, path, "model offsets")) {
+        free(offsets);
+        fc_asset_close(f);
+        return NULL;
+    }
+
+    ModelSet *set = calloc(1, sizeof(ModelSet));
+    if (!set) {
+        free(offsets);
+        fc_asset_close(f);
+        return NULL;
+    }
+    set->entries = calloc(count, sizeof(ModelEntry));
+    set->index_limit = MODEL_ID_INDEX_MAX;
+    set->index_by_id = malloc(sizeof(int) * set->index_limit);
+    if (!set->entries || !set->index_by_id) {
+        free(offsets);
+        fc_asset_close(f);
+        models_free(set);
+        return NULL;
+    }
+    for (int i = 0; i < set->index_limit; i++) set->index_by_id[i] = -1;
+    set->count = (int)count;
+    set->has_textures = has_tex;
+
+    if (has_tex && atlas_texture.id == 0) {
+        fprintf(stderr, "models: shared atlas unavailable for %s\n", path);
+        free(offsets);
+        fc_asset_close(f);
+        models_free(set);
+        return NULL;
+    }
+
+    long model_file_end = 0;
+    long model_file_pos = ftell(f);
+    if (model_file_pos >= 0 && fseek(f, 0, SEEK_END) == 0) {
+        model_file_end = ftell(f);
+        fseek(f, model_file_pos, SEEK_SET);
+    }
+
+    int loaded_count = 0;
+    for (uint32_t m = 0; m < count; m++) {
+        if (!fc_seek(f, offsets[m], SEEK_SET, path, "model offset table")) {
+            free(offsets);
+            fc_asset_close(f);
+            models_free(set);
+            return NULL;
+        }
+        uint32_t mid; uint16_t evc, fc, bvc;
+        if (!fc_read_exact(f, &mid, sizeof(mid), 1, path, "model id")
+                || !fc_read_exact(f, &evc, sizeof(evc), 1, path, "model expanded vertex count")
+                || !fc_read_exact(f, &fc, sizeof(fc), 1, path, "model face count")
+                || !fc_read_exact(f, &bvc, sizeof(bvc), 1, path, "model base vertex count")) {
+            free(offsets);
+            fc_asset_close(f);
+            models_free(set);
+            return NULL;
+        }
+        if (!model_id_filter_contains(ids, id_count, mid)) continue;
+
+        int vc = (int)evc, tc = (int)fc;
+        float *verts = malloc(vc * 3 * sizeof(float));
+        if (!verts
+                || !fc_read_exact(f, verts, sizeof(float), vc * 3, path, "model vertices")) {
+            free(verts);
+            free(offsets);
+            fc_asset_close(f);
+            models_free(set);
+            return NULL;
+        }
+        unsigned char *colors = malloc(vc * 4);
+        if (!colors
+                || !fc_read_exact(f, colors, sizeof(unsigned char), vc * 4, path, "model colors")) {
+            free(verts);
+            free(colors);
+            free(offsets);
+            fc_asset_close(f);
+            models_free(set);
+            return NULL;
+        }
+        float *texcoords = NULL;
+        if (has_tex) {
+            texcoords = malloc(vc * 2 * sizeof(float));
+            if (!texcoords
+                    || !fc_read_exact(f, texcoords, sizeof(float), vc * 2, path, "model texcoords")) {
+                free(verts);
+                free(colors);
+                free(texcoords);
+                free(offsets);
+                fc_asset_close(f);
+                models_free(set);
+                return NULL;
+            }
+        }
+
+        // OSRS units -> tile units, flip Z for Raylib
+        for (int i = 0; i < vc; i++) {
+            verts[i*3]   /=  128.0f;
+            verts[i*3+1] /=  128.0f;
+            verts[i*3+2] /= -128.0f;
+        }
+        float *rest_verts = malloc(vc * 3 * sizeof(float));
+        if (!rest_verts) {
+            free(verts);
+            free(colors);
+            free(offsets);
+            fc_asset_close(f);
+            models_free(set);
+            return NULL;
+        }
+        memcpy(rest_verts, verts, vc * 3 * sizeof(float));
+
+        Mesh mesh = {0};
+        mesh.vertexCount = vc;
+        mesh.triangleCount = tc;
+        mesh.vertices = verts;
+        mesh.colors = colors;
+        mesh.texcoords = texcoords;
+        mesh.normals = calloc(vc * 3, sizeof(float));
+        for (int i = 0; i < tc; i++) {
+            int i0 = i*3, i1 = i*3+1, i2 = i*3+2;
+            float ax = verts[i1*3]-verts[i0*3], ay = verts[i1*3+1]-verts[i0*3+1], az = verts[i1*3+2]-verts[i0*3+2];
+            float bx = verts[i2*3]-verts[i0*3], by = verts[i2*3+1]-verts[i0*3+1], bz = verts[i2*3+2]-verts[i0*3+2];
+            float nx = ay*bz-az*by, ny = az*bx-ax*bz, nz = ax*by-ay*bx;
+            float len = sqrtf(nx*nx+ny*ny+nz*nz);
+            if (len > 1e-4f) { nx/=len; ny/=len; nz/=len; }
+            for (int j = 0; j < 3; j++) {
+                mesh.normals[(i*3+j)*3] = nx; mesh.normals[(i*3+j)*3+1] = ny; mesh.normals[(i*3+j)*3+2] = nz;
+            }
+        }
+        UploadMesh(&mesh, false);
+
+        // Animation data
+        int16_t *bv = malloc(bvc * 3 * sizeof(int16_t));
+        if (!bv
+                || !fc_read_exact(f, bv, sizeof(int16_t), bvc * 3, path, "model base vertices")) {
+            free(offsets);
+            fc_asset_close(f);
+            models_free(set);
+            return NULL;
+        }
+        uint8_t *skins = malloc(bvc);
+        if (!skins
+                || !fc_read_exact(f, skins, sizeof(uint8_t), bvc, path, "model vertex skins")) {
+            free(offsets);
+            fc_asset_close(f);
+            models_free(set);
+            return NULL;
+        }
+        uint16_t *fi = malloc(tc * 3 * sizeof(uint16_t));
+        if (!fi
+                || !fc_read_exact(f, fi, sizeof(uint16_t), tc * 3, path, "model face indices")) {
+            free(offsets);
+            fc_asset_close(f);
+            models_free(set);
+            return NULL;
+        }
+        uint8_t *pri = malloc(tc);
+        if (!pri
+                || !fc_read_exact(f, pri, sizeof(uint8_t), tc, path, "model priorities")) {
+            free(offsets);
+            fc_asset_close(f);
+            models_free(set);
+            return NULL;
+        }
+
+        ModelFaceUvInfo *face_uvs = NULL;
+        long next_off = (m + 1 < count) ? (long)offsets[m + 1] : model_file_end;
+        long opt_pos = ftell(f);
+        if (has_tex && opt_pos >= 0 && next_off >= opt_pos + 8) {
+            uint32_t uv_magic = 0;
+            uint32_t uv_count = 0;
+            if (fc_read_exact(f, &uv_magic, sizeof(uv_magic), 1, path,
+                              "model uv magic")
+                    && fc_read_exact(f, &uv_count, sizeof(uv_count), 1, path,
+                                     "model uv count")
+                    && uv_magic == MUV1_MAGIC && uv_count == (uint32_t)tc) {
+                face_uvs = calloc(tc, sizeof(*face_uvs));
+                if (!face_uvs) {
+                    free(offsets);
+                    fc_asset_close(f);
+                    models_free(set);
+                    return NULL;
+                }
+                for (int i = 0; i < tc; i++) {
+                    uint8_t textured = 0, pad[3];
+                    if (!fc_read_exact(f, &textured, sizeof(textured), 1,
+                                       path, "model uv textured")
+                            || !fc_read_exact(f, pad, sizeof(pad), 1,
+                                              path, "model uv pad")
+                            || !fc_read_exact(f, &face_uvs[i].tex_a,
+                                              sizeof(face_uvs[i].tex_a), 1,
+                                              path, "model uv tex a")
+                            || !fc_read_exact(f, &face_uvs[i].tex_b,
+                                              sizeof(face_uvs[i].tex_b), 1,
+                                              path, "model uv tex b")
+                            || !fc_read_exact(f, &face_uvs[i].tex_c,
+                                              sizeof(face_uvs[i].tex_c), 1,
+                                              path, "model uv tex c")
+                            || !fc_read_exact(f, &face_uvs[i].u_base,
+                                              sizeof(face_uvs[i].u_base), 1,
+                                              path, "model uv u base")
+                            || !fc_read_exact(f, &face_uvs[i].v_base,
+                                              sizeof(face_uvs[i].v_base), 1,
+                                              path, "model uv v base")
+                            || !fc_read_exact(f, &face_uvs[i].u_scale,
+                                              sizeof(face_uvs[i].u_scale), 1,
+                                              path, "model uv u scale")
+                            || !fc_read_exact(f, &face_uvs[i].v_scale,
+                                              sizeof(face_uvs[i].v_scale), 1,
+                                              path, "model uv v scale")
+                            || !fc_read_exact(f,
+                                              &face_uvs[i].repeat_v_margin,
+                                              sizeof(face_uvs[i].repeat_v_margin),
+                                              1, path, "model uv repeat v")) {
+                        free(face_uvs);
+                        free(offsets);
+                        fc_asset_close(f);
+                        models_free(set);
+                        return NULL;
+                    }
+                    face_uvs[i].textured = textured != 0;
+                }
+            } else {
+                fseek(f, opt_pos, SEEK_SET);
+            }
+        }
+
+        Model ray_model = LoadModelFromMesh(mesh);
+        if (has_tex)
+            ray_model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture =
+                atlas_texture;
+
+        set->entries[m] = (ModelEntry){
+            .model_id = mid, .model = ray_model, .loaded = 1,
+            .rest_verts = rest_verts,
+            .rest_texcoords = texcoords && vc > 0
+                ? malloc((size_t)vc * 2 * sizeof(float)) : NULL,
+            .base_verts = bv, .vertex_skins = skins, .face_indices = fi,
+            .face_priorities = pri, .face_uvs = face_uvs,
+            .base_vert_count = (int)bvc, .face_count = tc,
+        };
+        if (texcoords && set->entries[m].rest_texcoords)
+            memcpy(set->entries[m].rest_texcoords, texcoords,
+                   (size_t)vc * 2 * sizeof(float));
+        if (mid < (uint32_t)set->index_limit) set->index_by_id[mid] = (int)m;
+        loaded_count++;
+        fprintf(stderr, "  model %u: %d tris, %d base verts\n", mid, tc, (int)bvc);
+    }
+    free(offsets); fc_asset_close(f);
+    set->loaded = 1;
+    fprintf(stderr, "models: loaded %d from %s\n", loaded_count, path);
+    return set;
+}
+
+ModelSet *models_load(const char *path, Texture2D atlas_texture) {
+    return models_load_filtered(path, NULL, 0, atlas_texture);
+}
+
+void models_free(ModelSet *set) {
+    if (!set) return;
+    for (int i = 0; i < set->count; i++) {
+        if (set->entries[i].loaded) {
+            UnloadModel(set->entries[i].model);
+        }
+        free(set->entries[i].base_verts);
+        free(set->entries[i].rest_verts);
+        free(set->entries[i].rest_texcoords);
+        free(set->entries[i].vertex_skins);
+        free(set->entries[i].face_indices);
+        free(set->entries[i].face_priorities);
+        free(set->entries[i].face_uvs);
+    }
+    free(set->entries);
+    free(set->index_by_id);
+    free(set);
+}
+
+#undef MDL2_MAGIC
+#undef MDL3_MAGIC
+#undef MUV1_MAGIC
+#undef MODEL_ID_INDEX_MAX
+
+/* Npc Models */
+/*
+ * Fight Caves model compatibility wrapper.
+ *
+ * The viewer historically used NpcModelSet/NpcModelEntry names for every
+ * runtime model file. Keep those names while routing all NPC/player/projectile
+ * files through the generalized MDL2/MDL3 model loader.
+ */
+
+uint32_t fc_npc_type_to_model_id(int npc_type) {
+    switch (npc_type) {
+        case 1: return FC_B237_TZ_KIH;
+        case 2: return FC_B237_TZ_KEK;
+        case 3: return FC_B237_TZ_KEK_SM;
+        case 4: return FC_B237_TOK_XIL;
+        case 5: return FC_B237_YT_MEJKOT;
+        case 6: return FC_B237_KET_ZEK;
+        case 7: return FC_B237_TZTOK_JAD;
+        case 8: return FC_B237_YT_HURKOT;
+        default: return 0;
+    }
+}
+
+NpcModelEntry* fc_npc_model_find(NpcModelSet* set, uint32_t model_id) {
+    return model_find(set, model_id);
+}
+
+NpcModelSet* fc_npc_models_load(const char* path, Texture2D atlas_texture) {
+    return models_load(path, atlas_texture);
+}
+
+void fc_npc_models_unload(NpcModelSet* set) {
+    models_free(set);
+}
+
+
+/* Model Animation */
+#include "raylib.h"
+
+static void apply_frame(NpcModelEntry *entry,
+                        AnimModelState *state,
+                        const AnimFrameData *frame,
+                        const AnimFrameBase *framebase) {
+    if (!entry || !entry->loaded || !state || !frame || !framebase) return;
+    anim_apply_frame(state, entry->base_verts, frame, framebase);
+    fc_model_animation_upload(entry, state);
+}
+
+void fc_model_animation_upload(NpcModelEntry *entry, AnimModelState *state) {
+    if (!entry || !entry->loaded || !state) return;
+    models_recompute_texture_uvs_from_vertices(entry, state->verts);
+    float *mesh_vertices = entry->model.meshes[0].vertices;
+    anim_update_mesh(mesh_vertices, state, entry->face_indices,
+                     entry->face_count);
+    int expanded_vertices = entry->face_count * 3;
+    for (int i = 0; i < expanded_vertices; i++) {
+        mesh_vertices[i * 3] /= 128.0f;
+        mesh_vertices[i * 3 + 1] /= 128.0f;
+        mesh_vertices[i * 3 + 2] /= -128.0f;
+    }
+    UpdateMeshBuffer(entry->model.meshes[0], 0, mesh_vertices,
+                     expanded_vertices * 3 * sizeof(float), 0);
+}
+
+void fc_model_animation_update(NpcModelEntry *entry,
+                               AnimCache *cache,
+                               AnimModelState **state,
+                               uint16_t *current_sequence,
+                               int *frame_index,
+                               float *frame_timer,
+                               int animation_id,
+                               float dt,
+                               float phase_ticks) {
+    if (!entry || !entry->loaded || !cache || animation_id < 0 ||
+        !entry->vertex_skins || !state || !current_sequence ||
+        !frame_index || !frame_timer) return;
+    AnimSequence *sequence = anim_get_sequence(cache, (uint16_t)animation_id);
+    if (!sequence || sequence->frame_count == 0) return;
+    if (!*state || (*state)->vert_count != entry->base_vert_count) {
+        if (*state) anim_model_state_free(*state);
+        *state = anim_model_state_create(entry->vertex_skins,
+                                         entry->base_vert_count);
+        *current_sequence = (uint16_t)animation_id;
+        *frame_index = (int)phase_ticks % sequence->frame_count;
+        if (*frame_index < 0) *frame_index = 0;
+        *frame_timer = (float)sequence->frames[*frame_index].delay * 0.02f;
+        if (*frame_timer < 0.016f) *frame_timer = 0.016f;
+    }
+    if (*current_sequence != (uint16_t)animation_id) {
+        *current_sequence = (uint16_t)animation_id;
+        *frame_index = 0;
+        *frame_timer = (float)sequence->frames[0].delay * 0.02f;
+        if (*frame_timer < 0.016f) *frame_timer = 0.016f;
+    }
+    *frame_timer -= dt;
+    while (*frame_timer <= 0.0f) {
+        *frame_index = (*frame_index + 1) % sequence->frame_count;
+        float delay = (float)sequence->frames[*frame_index].delay * 0.02f;
+        if (delay < 0.016f) delay = 0.016f;
+        *frame_timer += delay;
+    }
+    AnimFrameData *frame = &sequence->frames[*frame_index].frame;
+    AnimFrameBase *framebase = anim_get_framebase(cache, frame->framebase_id);
+    if (framebase) apply_frame(entry, *state, frame, framebase);
+}
+
+
+/* Objects Loader */
+/**
+ * @fileoverview Loads placed map objects from .objects binary into a single raylib Model.
+ *
+ * Supports two binary formats:
+ *   v1 (OBJS): vertices + colors only (flat vertex coloring)
+ *   v2 (OBJ2): vertices + colors + texcoords (texture atlas support)
+ *
+ * When v2 format is detected, also loads the companion .atlas file (raw RGBA)
+ * and assigns it as the model's diffuse texture. Vertex colors are multiplied
+ * by the texture sample: textured faces use white vertex color + real texture,
+ * non-textured faces use HSL vertex color + white atlas pixel.
+ */
+
+#include "raylib.h"
+#include "rlgl.h"
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+
+#define OBJS_MAGIC 0x4F424A53  /* "OBJS" v1 */
+#define OBJ2_MAGIC 0x4F424A32  /* "OBJ2" v2 with texcoords */
+#define OANM_MAGIC 0x4D4E414F  /* "OANM" animated object placements */
+#define OANM_VERSION 1
+ObjectMesh* objects_load(const char* path) {
+    FILE* f = fc_asset_fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "objects_load: could not open %s\n", path);
+        return NULL;
+    }
+
+    uint32_t magic, placement_count, total_verts;
+    int32_t min_wx, min_wy;
+    if (!fc_read_exact(f, &magic, sizeof(magic), 1, path, "object magic")) {
+        fc_asset_close(f);
+        return NULL;
+    }
+
+    int has_textures = 0;
+    if (magic == OBJ2_MAGIC) {
+        has_textures = 1;
+    } else if (magic != OBJS_MAGIC) {
+        fprintf(stderr, "objects_load: bad magic %08x\n", magic);
+        fc_asset_close(f);
+        return NULL;
+    }
+
+    if (!fc_read_exact(f, &placement_count, sizeof(placement_count), 1, path, "object placement count") ||
+        !fc_read_exact(f, &min_wx, sizeof(min_wx), 1, path, "object min world x") ||
+        !fc_read_exact(f, &min_wy, sizeof(min_wy), 1, path, "object min world y") ||
+        !fc_read_exact(f, &total_verts, sizeof(total_verts), 1, path, "object vertex count")) {
+        fc_asset_close(f);
+        return NULL;
+    }
+
+    fprintf(stderr, "objects_load: %u placements, %u verts, format=%s\n",
+            placement_count, total_verts, has_textures ? "OBJ2" : "OBJS");
+
+    /* read vertices */
+    float* raw_verts = (float*)malloc(total_verts * 3 * sizeof(float));
+    if (!raw_verts ||
+        !fc_read_exact(f, raw_verts, sizeof(float), total_verts * 3, path, "object vertices")) {
+        free(raw_verts);
+        fc_asset_close(f);
+        return NULL;
+    }
+
+    /* read colors */
+    unsigned char* raw_colors = (unsigned char*)malloc(total_verts * 4);
+    if (!raw_colors ||
+        !fc_read_exact(f, raw_colors, 1, total_verts * 4, path, "object colors")) {
+        free(raw_verts);
+        free(raw_colors);
+        fc_asset_close(f);
+        return NULL;
+    }
+    /* read texture coordinates (v2 only) */
+    float* raw_texcoords = NULL;
+    if (has_textures) {
+        raw_texcoords = (float*)malloc(total_verts * 2 * sizeof(float));
+        if (!raw_texcoords ||
+            !fc_read_exact(f, raw_texcoords, sizeof(float), total_verts * 2,
+                           path, "object texcoords")) {
+            free(raw_verts);
+            free(raw_colors);
+            free(raw_texcoords);
+            fc_asset_close(f);
+            return NULL;
+        }
+    }
+    fc_asset_close(f);
+
+    /* build raylib mesh */
+    Mesh mesh = { 0 };
+    mesh.vertexCount = (int)total_verts;
+    mesh.triangleCount = (int)(total_verts / 3);
+    mesh.vertices = raw_verts;
+    mesh.colors = raw_colors;
+    mesh.texcoords = raw_texcoords;
+
+    /* compute normals */
+    mesh.normals = (float*)calloc(total_verts * 3, sizeof(float));
+    if (!mesh.normals) {
+        free(raw_verts);
+        free(raw_colors);
+        free(raw_texcoords);
+        return NULL;
+    }
+    for (int i = 0; i < mesh.triangleCount; i++) {
+        int base = i * 9;
+        float ax = raw_verts[base + 0], ay = raw_verts[base + 1], az = raw_verts[base + 2];
+        float bx = raw_verts[base + 3], by = raw_verts[base + 4], bz = raw_verts[base + 5];
+        float cx = raw_verts[base + 6], cy = raw_verts[base + 7], cz = raw_verts[base + 8];
+
+        float e1x = bx - ax, e1y = by - ay, e1z = bz - az;
+        float e2x = cx - ax, e2y = cy - ay, e2z = cz - az;
+        float nx = e1y * e2z - e1z * e2y;
+        float ny = e1z * e2x - e1x * e2z;
+        float nz = e1x * e2y - e1y * e2x;
+        float len = sqrtf(nx * nx + ny * ny + nz * nz);
+        if (len > 0.0001f) { nx /= len; ny /= len; nz /= len; }
+
+        for (int v = 0; v < 3; v++) {
+            mesh.normals[i * 9 + v * 3 + 0] = nx;
+            mesh.normals[i * 9 + v * 3 + 1] = ny;
+            mesh.normals[i * 9 + v * 3 + 2] = nz;
+        }
+    }
+
+    UploadMesh(&mesh, false);
+
+    ObjectMesh* om = (ObjectMesh*)calloc(1, sizeof(ObjectMesh));
+    om->model = LoadModelFromMesh(mesh);
+    om->placement_count = (int)placement_count;
+    om->total_vertex_count = (int)total_verts;
+    om->min_world_x = min_wx;
+    om->min_world_y = min_wy;
+    om->has_textures = has_textures;
+    om->loaded = 1;
+
+    /* load atlas texture if v2 format */
+    if (has_textures) {
+        /* derive atlas path from objects path: replace .objects with .atlas */
+        char atlas_path[1024];
+        strncpy(atlas_path, path, sizeof(atlas_path) - 1);
+        atlas_path[sizeof(atlas_path) - 1] = '\0';
+        char* dot = strrchr(atlas_path, '.');
+        if (dot) {
+            strcpy(dot, ".atlas");
+        } else {
+            strncat(atlas_path, ".atlas", sizeof(atlas_path) - strlen(atlas_path) - 1);
+        }
+
+        if (fc_animated_atlas_load(&om->atlas, atlas_path, 1)) {
+            /* assign atlas as diffuse map for the model's material */
+            om->model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture =
+                om->atlas.texture;
+        }
+    }
+
+    return om;
+}
+
+ObjectAnimSet* object_anims_load(const char* path) {
+    FILE* f = fc_asset_fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "object_anims_load: could not open %s\n", path);
+        return NULL;
+    }
+
+    uint32_t magic = 0, version = 0, count = 0;
+    if (!fc_read_exact(f, &magic, sizeof(magic), 1, path, "oanim magic") ||
+        !fc_read_exact(f, &version, sizeof(version), 1, path, "oanim version") ||
+        !fc_read_exact(f, &count, sizeof(count), 1, path, "oanim count") ||
+        magic != OANM_MAGIC || version != OANM_VERSION) {
+        fc_asset_close(f);
+        return NULL;
+    }
+
+    ObjectAnimSet* set = (ObjectAnimSet*)calloc(1, sizeof(*set));
+    if (!set) {
+        fc_asset_close(f);
+        return NULL;
+    }
+    set->rows = (ObjectAnimPlacement*)calloc(count, sizeof(*set->rows));
+    if (count > 0 && !set->rows) {
+        fc_asset_close(f);
+        free(set);
+        return NULL;
+    }
+    set->count = (int)count;
+
+    for (uint32_t i = 0; i < count; i++) {
+        ObjectAnimPlacement* row = &set->rows[i];
+        if (!fc_read_exact(f, &row->model_id, sizeof(row->model_id), 1, path, "oanim model id") ||
+            !fc_read_exact(f, &row->obj_id, sizeof(row->obj_id), 1, path, "oanim object id") ||
+            !fc_read_exact(f, &row->animation_id, sizeof(row->animation_id), 1, path, "oanim animation id") ||
+            !fc_read_exact(f, &row->world_x, sizeof(row->world_x), 1, path, "oanim world x") ||
+            !fc_read_exact(f, &row->world_y, sizeof(row->world_y), 1, path, "oanim world y") ||
+            !fc_read_exact(f, &row->plane, sizeof(row->plane), 1, path, "oanim plane") ||
+            !fc_read_exact(f, &row->obj_type, sizeof(row->obj_type), 1, path, "oanim obj type") ||
+            !fc_read_exact(f, &row->rotation, sizeof(row->rotation), 1, path, "oanim rotation") ||
+            !fc_read_exact(f, &row->flags, sizeof(row->flags), 1, path, "oanim flags") ||
+            !fc_read_exact(f, &row->pos_x, sizeof(row->pos_x), 1, path, "oanim pos x") ||
+            !fc_read_exact(f, &row->pos_y, sizeof(row->pos_y), 1, path, "oanim pos y") ||
+            !fc_read_exact(f, &row->pos_z, sizeof(row->pos_z), 1, path, "oanim pos z") ||
+            !fc_read_exact(f, &row->phase_ticks, sizeof(row->phase_ticks), 1, path, "oanim phase")) {
+            fc_asset_close(f);
+            free(set->rows);
+            free(set);
+            return NULL;
+        }
+    }
+    fc_asset_close(f);
+    set->loaded = 1;
+    fprintf(stderr, "object_anims_load: loaded %d animated placements from %s\n",
+            set->count, path);
+    return set;
+}
+
+void object_anims_offset(ObjectAnimSet* set, int wx, int wy) {
+    if (!set || !set->loaded) return;
+    for (int i = 0; i < set->count; i++) {
+        set->rows[i].pos_x -= (float)wx;
+        set->rows[i].pos_z += (float)wy;
+        set->rows[i].world_x -= wx;
+        set->rows[i].world_y -= wy;
+    }
+}
+
+/* shift object vertices so world coordinates (wx, wy) become local (0, 0).
+   must match terrain_offset() values for alignment. */
+void objects_offset(ObjectMesh* om, int wx, int wy) {
+    if (!om || !om->loaded) return;
+    float dx = (float)wx;
+    float dz = (float)wy;
+    float* verts = om->model.meshes[0].vertices;
+    for (int i = 0; i < om->total_vertex_count; i++) {
+        verts[i * 3 + 0] -= dx;        /* X */
+        verts[i * 3 + 2] += dz;        /* Z (negated world Y) */
+    }
+    UpdateMeshBuffer(om->model.meshes[0], 0, verts,
+                     om->total_vertex_count * 3 * sizeof(float), 0);
+    om->min_world_x -= wx;
+    om->min_world_y -= wy;
+    fprintf(stderr, "objects_offset: shifted by (%d, %d)\n", wx, wy);
+}
+
+void objects_free(ObjectMesh* om) {
+    if (!om) return;
+    fc_animated_atlas_unload(&om->atlas);
+    if (om->loaded) UnloadModel(om->model);
+    free(om);
+}
+
+void object_anims_free(ObjectAnimSet* set) {
+    if (!set) return;
+    free(set->rows);
+    free(set);
+}
+
+#undef OBJS_MAGIC
+#undef OBJ2_MAGIC
+#undef OANM_MAGIC
+#undef OANM_VERSION
+
+/* Terrain Loader */
+/**
+ * @fileoverview Loads terrain mesh from .terrain binary into raylib Model.
+ *
+ * Binary format:
+ *   magic: uint32 "TERR" (0x54455252)
+ *   vertex_count: uint32
+ *   region_count: uint32
+ *   min_world_x: int32
+ *   min_world_y: int32
+ *   vertices: float32[vertex_count * 3]
+ *   colors: uint8[vertex_count * 4]
+ */
+
+#include "raylib.h"
+#include <math.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define TERR_MAGIC 0x54455252
+
+TerrainMesh* terrain_load(const char* path) {
+    FILE* f = fc_asset_fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "terrain_load: could not open %s\n", path);
+        return NULL;
+    }
+
+    uint32_t magic, vert_count, region_count;
+    int32_t min_wx, min_wy;
+    if (!fc_read_exact(f, &magic, sizeof(magic), 1, path, "terrain magic")) {
+        fc_asset_close(f);
+        return NULL;
+    }
+    if (magic != TERR_MAGIC) {
+        fprintf(stderr, "terrain_load: bad magic %08x\n", magic);
+        fc_asset_close(f);
+        return NULL;
+    }
+    if (!fc_read_exact(f, &vert_count, sizeof(vert_count), 1, path, "terrain vertex count") ||
+        !fc_read_exact(f, &region_count, sizeof(region_count), 1, path, "terrain region count") ||
+        !fc_read_exact(f, &min_wx, sizeof(min_wx), 1, path, "terrain min world x") ||
+        !fc_read_exact(f, &min_wy, sizeof(min_wy), 1, path, "terrain min world y")) {
+        fc_asset_close(f);
+        return NULL;
+    }
+
+    fprintf(stderr, "terrain_load: %u verts, %u regions, origin (%d, %d)\n",
+            vert_count, region_count, min_wx, min_wy);
+
+    /* read vertices */
+    float* raw_verts = (float*)malloc(vert_count * 3 * sizeof(float));
+    if (!raw_verts ||
+        !fc_read_exact(f, raw_verts, sizeof(float), vert_count * 3, path, "terrain vertices")) {
+        free(raw_verts);
+        fc_asset_close(f);
+        return NULL;
+    }
+
+    /* read colors */
+    unsigned char* raw_colors = (unsigned char*)malloc(vert_count * 4);
+    if (!raw_colors ||
+        !fc_read_exact(f, raw_colors, 1, vert_count * 4, path, "terrain colors")) {
+        free(raw_verts);
+        free(raw_colors);
+        fc_asset_close(f);
+        return NULL;
+    }
+    /* build raylib mesh */
+    Mesh mesh = { 0 };
+    mesh.vertexCount = (int)vert_count;
+    mesh.triangleCount = (int)(vert_count / 3);
+    mesh.vertices = raw_verts;
+    mesh.colors = raw_colors;
+
+    /* compute normals for proper lighting */
+    mesh.normals = (float*)calloc(vert_count * 3, sizeof(float));
+    if (!mesh.normals) {
+        free(raw_verts);
+        free(raw_colors);
+        fc_asset_close(f);
+        return NULL;
+    }
+    for (int i = 0; i < mesh.triangleCount; i++) {
+        int base = i * 9;
+        float ax = raw_verts[base + 0], ay = raw_verts[base + 1], az = raw_verts[base + 2];
+        float bx = raw_verts[base + 3], by = raw_verts[base + 4], bz = raw_verts[base + 5];
+        float cx = raw_verts[base + 6], cy = raw_verts[base + 7], cz = raw_verts[base + 8];
+
+        float e1x = bx - ax, e1y = by - ay, e1z = bz - az;
+        float e2x = cx - ax, e2y = cy - ay, e2z = cz - az;
+        float nx = e1y * e2z - e1z * e2y;
+        float ny = e1z * e2x - e1x * e2z;
+        float nz = e1x * e2y - e1y * e2x;
+        float len = sqrtf(nx * nx + ny * ny + nz * nz);
+        if (len > 0.0001f) { nx /= len; ny /= len; nz /= len; }
+
+        for (int v = 0; v < 3; v++) {
+            mesh.normals[i * 9 + v * 3 + 0] = nx;
+            mesh.normals[i * 9 + v * 3 + 1] = ny;
+            mesh.normals[i * 9 + v * 3 + 2] = nz;
+        }
+    }
+
+    UploadMesh(&mesh, false);
+
+    TerrainMesh* tm = (TerrainMesh*)calloc(1, sizeof(TerrainMesh));
+    tm->model = LoadModelFromMesh(mesh);
+    tm->vertex_count = (int)vert_count;
+    tm->region_count = (int)region_count;
+    tm->min_world_x = min_wx;
+    tm->min_world_y = min_wy;
+    tm->loaded = 1;
+
+    /* read heightmap (appended after colors in the binary) */
+    int32_t hm_min_x, hm_min_y;
+    uint32_t hm_w, hm_h;
+    int next = fgetc(f);
+    if (next != EOF) {
+        ungetc(next, f);
+        if (!fc_read_exact(f, &hm_min_x, sizeof(hm_min_x), 1, path, "terrain heightmap min x") ||
+            !fc_read_exact(f, &hm_min_y, sizeof(hm_min_y), 1, path, "terrain heightmap min y") ||
+            !fc_read_exact(f, &hm_w, sizeof(hm_w), 1, path, "terrain heightmap width") ||
+            !fc_read_exact(f, &hm_h, sizeof(hm_h), 1, path, "terrain heightmap height")) {
+            fc_asset_close(f);
+            terrain_free(tm);
+            return NULL;
+        }
+        if (!(hm_w > 0 && hm_h > 0 && hm_w <= 4096 && hm_h <= 4096)) {
+            fprintf(stderr, "%s: invalid terrain heightmap dimensions %ux%u\n",
+                    path, hm_w, hm_h);
+            fc_asset_close(f);
+            terrain_free(tm);
+            return NULL;
+        }
+        tm->hm_min_x = hm_min_x;
+        tm->hm_min_y = hm_min_y;
+        tm->hm_width = (int)hm_w;
+        tm->hm_height = (int)hm_h;
+        tm->heightmap = (float*)malloc(hm_w * hm_h * sizeof(float));
+        if (!tm->heightmap ||
+            !fc_read_exact(f, tm->heightmap, sizeof(float), hm_w * hm_h,
+                           path, "terrain heightmap values")) {
+            fc_asset_close(f);
+            terrain_free(tm);
+            return NULL;
+        }
+        fprintf(stderr, "terrain heightmap: %dx%d, origin (%d, %d)\n",
+                tm->hm_width, tm->hm_height, tm->hm_min_x, tm->hm_min_y);
+    }
+
+    fc_asset_close(f);
+    return tm;
+}
+
+/* shift terrain so world coordinates (wx, wy) become local (0, 0).
+   offsets all mesh vertices and heightmap origin. must call before rendering. */
+void terrain_offset(TerrainMesh* tm, int wx, int wy) {
+    if (!tm || !tm->loaded) return;
+    float dx = (float)wx;
+    float dz = (float)wy;  /* Z = -world_y in our coord system */
+    float* verts = tm->model.meshes[0].vertices;
+    for (int i = 0; i < tm->vertex_count; i++) {
+        verts[i * 3 + 0] -= dx;        /* X */
+        verts[i * 3 + 2] += dz;        /* Z (negated world Y) */
+    }
+    UpdateMeshBuffer(tm->model.meshes[0], 0, verts,
+                     tm->vertex_count * 3 * sizeof(float), 0);
+    tm->min_world_x -= wx;
+    tm->min_world_y -= wy;
+    if (tm->heightmap) {
+        tm->hm_min_x -= wx;
+        tm->hm_min_y -= wy;
+    }
+    fprintf(stderr, "terrain_offset: shifted by (%d, %d), new origin (%d, %d)\n",
+            wx, wy, tm->min_world_x, tm->min_world_y);
+}
+
+/* query terrain height at a world tile position (tile corner) */
+float terrain_height_at(TerrainMesh* tm, int world_x, int world_y) {
+    if (!tm || !tm->heightmap) return -2.0f;
+    int lx = world_x - tm->hm_min_x;
+    int ly = world_y - tm->hm_min_y;
+    if (lx < 0 || lx >= tm->hm_width || ly < 0 || ly >= tm->hm_height)
+        return -2.0f;
+    return tm->heightmap[lx + ly * tm->hm_width];
+}
+
+void terrain_free(TerrainMesh* tm) {
+    if (!tm) return;
+    if (tm->loaded) {
+        UnloadModel(tm->model);
+    }
+    free(tm->heightmap);
+    free(tm);
+}
+
+#undef TERR_MAGIC
+
+/* Spotanims */
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#define SPOTANIM_MAGIC 0x544F5053u
+#define SPOTANIM_VERSION 1u
+
+SpotAnimSet *spotanims_load(const char *path) {
+    FILE *f = fc_asset_fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "spotanims: can't open %s\n", path);
+        return NULL;
+    }
+
+    uint32_t magic, version, count;
+    if (!fc_read_exact(f, &magic, sizeof(magic), 1, path, "spotanim magic")
+            || !fc_read_exact(f, &version, sizeof(version), 1, path,
+                              "spotanim version")
+            || !fc_read_exact(f, &count, sizeof(count), 1, path,
+                              "spotanim count")
+            || magic != SPOTANIM_MAGIC || version != SPOTANIM_VERSION) {
+        fc_asset_close(f);
+        return NULL;
+    }
+
+    SpotAnimSet *set = (SpotAnimSet *)calloc(1, sizeof(*set));
+    if (!set) {
+        fc_asset_close(f);
+        return NULL;
+    }
+    set->defs = (SpotAnimDef *)calloc(count, sizeof(*set->defs));
+    if (count > 0 && !set->defs) {
+        fc_asset_close(f);
+        spotanims_free(set);
+        return NULL;
+    }
+    set->count = (int)count;
+    for (uint32_t i = 0; i < count; i++) {
+        if (!fc_read_exact(f, &set->defs[i], sizeof(set->defs[i]), 1, path,
+                           "spotanim row")) {
+            fc_asset_close(f);
+            spotanims_free(set);
+            return NULL;
+        }
+    }
+    fc_asset_close(f);
+    set->loaded = 1;
+    fprintf(stderr, "spotanims: loaded %d from %s\n", set->count, path);
+    return set;
+}
+
+const SpotAnimDef *spotanim_find(const SpotAnimSet *set, int id) {
+    if (!set || !set->loaded || id < 0) return NULL;
+    for (int i = 0; i < set->count; i++) {
+        if ((int)set->defs[i].id == id) return &set->defs[i];
+    }
+    return NULL;
+}
+
+void spotanims_free(SpotAnimSet *set) {
+    if (!set) return;
+    free(set->defs);
+    free(set);
+}
+
+#undef SPOTANIM_MAGIC
+#undef SPOTANIM_VERSION
+
+/* Player Appearance */
+#include <stdlib.h>
+#include <string.h>
+
+int fc_player_appearance_load(FcPlayerAppearance *appearance) {
+    memset(appearance, 0, sizeof(*appearance));
+    const char *path = "fc_player.parts";
+    FILE *file = fc_asset_fopen(path, "rb");
+    if (!file) return 0;
+    uint32_t header[2];
+    int ok = fc_read_exact(file, header, sizeof(uint32_t), 2, path, "header") &&
+        header[0] == 0x31504346 && header[1] > 0 && header[1] <= 64;
+    if (ok) {
+        appearance->record_count = (int)header[1];
+        for (int i = 0; i < appearance->record_count; i++) {
+            uint32_t row[2];
+            if (!fc_read_exact(file, row, sizeof(uint32_t), 2, path, "item mapping") ||
+                !fc_item_definition((int)row[0]) || row[1] > 127) { ok = 0; break; }
+            appearance->records[i].item_id = row[0];
+            appearance->records[i].hide_mask = row[1];
+        }
+        if (fgetc(file) != EOF) ok = 0;
+    }
+    fc_asset_close(file);
+    if (!ok) { fprintf(stderr, "Invalid player appearance map: %s\n", path); return 0; }
+    appearance->parts = models_load("fc_player.models", (Texture2D){0});
+    if (!appearance->parts || appearance->parts->has_textures) return 0;
+    for (int i = 0; i < 7; i++)
+        if (!model_find(appearance->parts, 0xFC100000u + (uint32_t)i)) return 0;
+    for (int i = 0; i < appearance->record_count; i++)
+        if (!model_find(appearance->parts, appearance->records[i].item_id)) return 0;
+    return 1;
+}
+
+static ModelSet *compose(ModelEntry *parts[], int count, uint32_t id) {
+    int vertices = 0, faces = 0;
+    for (int i = 0; i < count; i++) {
+        vertices += parts[i]->base_vert_count;
+        faces += parts[i]->face_count;
+    }
+    if (vertices <= 0 || vertices > UINT16_MAX || faces <= 0) return NULL;
+    ModelSet *set = calloc(1, sizeof(*set));
+    if (!set) return NULL;
+    set->entries = calloc(1, sizeof(*set->entries));
+    if (!set->entries) { free(set); return NULL; }
+    set->count = 1;
+    ModelEntry *out = set->entries;
+    out->model_id = id;
+    out->base_vert_count = vertices;
+    out->face_count = faces;
+    out->base_verts = malloc((size_t)vertices * 3 * sizeof(int16_t));
+    out->vertex_skins = malloc((size_t)vertices);
+    out->face_indices = malloc((size_t)faces * 3 * sizeof(uint16_t));
+    out->face_priorities = malloc((size_t)faces);
+    out->rest_verts = malloc((size_t)faces * 9 * sizeof(float));
+    Mesh mesh = {.vertexCount = faces * 3, .triangleCount = faces};
+    mesh.vertices = malloc((size_t)faces * 9 * sizeof(float));
+    mesh.normals = malloc((size_t)faces * 9 * sizeof(float));
+    mesh.colors = malloc((size_t)faces * 12);
+    if (!out->base_verts || !out->vertex_skins || !out->face_indices ||
+        !out->face_priorities || !out->rest_verts || !mesh.vertices ||
+        !mesh.normals || !mesh.colors) {
+        free(mesh.vertices); free(mesh.normals); free(mesh.colors);
+        models_free(set);
+        return NULL;
+    }
+    int vertex_offset = 0, face_offset = 0;
+    for (int i = 0; i < count; i++) {
+        const ModelEntry *part = parts[i];
+        const Mesh *source = &part->model.meshes[0];
+        memcpy(out->base_verts + vertex_offset * 3, part->base_verts,
+               (size_t)part->base_vert_count * 3 * sizeof(int16_t));
+        memcpy(out->vertex_skins + vertex_offset, part->vertex_skins,
+               (size_t)part->base_vert_count);
+        for (int f = 0; f < part->face_count * 3; f++)
+            out->face_indices[face_offset * 3 + f] =
+                (uint16_t)(part->face_indices[f] + vertex_offset);
+        memcpy(out->face_priorities + face_offset, part->face_priorities,
+               (size_t)part->face_count);
+        memcpy(mesh.vertices + face_offset * 9, part->rest_verts,
+               (size_t)part->face_count * 9 * sizeof(float));
+        memcpy(mesh.normals + face_offset * 9, source->normals,
+               (size_t)part->face_count * 9 * sizeof(float));
+        memcpy(mesh.colors + face_offset * 12, source->colors,
+               (size_t)part->face_count * 12);
+        vertex_offset += part->base_vert_count;
+        face_offset += part->face_count;
+    }
+    memcpy(out->rest_verts, mesh.vertices, (size_t)faces * 9 * sizeof(float));
+    UploadMesh(&mesh, true);
+    out->model = LoadModelFromMesh(mesh);
+    out->loaded = set->loaded = 1;
+    return set;
+}
+
+int fc_player_appearance_sync(FcPlayerAppearance *appearance,
+                               const FcPlayer *player, uint32_t model_id) {
+    int ids[FC_EQUIPMENT_SLOTS];
+    for (int i = 0; i < FC_EQUIPMENT_SLOTS; i++) ids[i] = player->equipment[i].item_id;
+    if (appearance->model && appearance->model->entries[0].model_id == model_id &&
+        memcmp(ids, appearance->worn_ids, sizeof(ids)) == 0) return 0;
+    if (!appearance->parts) return -1;
+    ModelEntry *selected[7 + FC_EQUIPMENT_SLOTS];
+    int count = 0;
+    uint32_t hidden = 0;
+    for (int slot = 0; slot < FC_EQUIPMENT_SLOTS; slot++) {
+        if (!ids[slot] || slot == FC_EQUIP_SLOT_AMMO || slot == FC_EQUIP_SLOT_RING) continue;
+        int record = 0;
+        while (record < appearance->record_count &&
+               appearance->records[record].item_id != (uint32_t)ids[slot]) record++;
+        if (record == appearance->record_count) return -1;
+        hidden |= appearance->records[record].hide_mask;
+    }
+    /* Identity kits precede equipped models, matching client composition. */
+    for (int body = 0; body < 7; body++)
+        if (!(hidden & (1u << body)))
+            selected[count++] = model_find(appearance->parts, 0xFC100000u + (uint32_t)body);
+    for (int slot = 0; slot < FC_EQUIPMENT_SLOTS; slot++)
+        if (ids[slot] && slot != FC_EQUIP_SLOT_AMMO && slot != FC_EQUIP_SLOT_RING)
+            selected[count++] = model_find(appearance->parts, (uint32_t)ids[slot]);
+    for (int i = 0; i < count; i++) if (!selected[i]) return -1;
+    ModelSet *model = compose(selected, count, model_id);
+    if (!model) return -1;
+    models_free(appearance->model);
+    appearance->model = model;
+    memcpy(appearance->worn_ids, ids, sizeof(ids));
+    return 1;
+}
+
+void fc_player_appearance_free(FcPlayerAppearance *appearance) {
+    models_free(appearance->model);
+    models_free(appearance->parts);
+    memset(appearance, 0, sizeof(*appearance));
+}
+
+/* ===================== Game interface ===================== */
+
+/* Ui Assets */
+
+#include "raylib.h"
+
+#define RUNEC_UI_ASSET_MAX 512
+
+typedef struct RuneCUiAssets {
+    Texture2D textures[RUNEC_UI_ASSET_MAX];
+    unsigned char loaded[RUNEC_UI_ASSET_MAX];
+    Font font;
+    Font small_font;
+    int font_loaded;
+    int small_font_loaded;
+    int loaded_count;
+    int missing_count;
+    int required_count;
+    int missing_required_count;
+    int missing_optional_count;
+} RuneCUiAssets;
+
+void runec_ui_assets_load(RuneCUiAssets *assets);
+void runec_ui_assets_unload(RuneCUiAssets *assets);
+
+const Texture2D *runec_ui_asset(const RuneCUiAssets *assets, const char *name);
+int runec_ui_asset_ready(const RuneCUiAssets *assets, const char *name);
+void runec_ui_draw_asset(const RuneCUiAssets *assets, const char *name,
+                         Rectangle dst, Color tint);
+Font runec_ui_font(const RuneCUiAssets *assets);
+Font runec_ui_font_for_size(const RuneCUiAssets *assets, float size);
+void runec_ui_draw_text_shadow(const RuneCUiAssets *assets, const char *text,
+                               float x, float y, float size, Color color);
+
+
+/* Ui Reference */
+
+#include "raylib.h"
+
+/*
+ * OSRS UI reference constants copied from the local rsmod/model_dump interface
+ * dumps. These mirror what Void/RSMod open server-side; the viewer should use
+ * these as layout authority instead of hand-tuned gameframe coordinates.
+ *
+ * Source files:
+ * - data/source/model_dump/osrs-dumps/interface/toplevel_osrs_stretch.if3
+ * - data/source/model_dump/osrs-dumps/interface/orbs.if3
+ * - data/source/model_dump/osrs-dumps/interface/stats.if3
+ * - data/source/model_dump/osrs-dumps/interface/inventory.if3
+ * - data/source/model_dump/osrs-dumps/interface/combat_interface.if3
+ * - data/source/model_dump/osrs-dumps/interface/wornitems.if3
+ */
+
+#define RUNEC_IFACE_TOPLEVEL_OSRS_STRETCH 161
+#define RUNEC_IFACE_ORBS 160
+#define RUNEC_IFACE_INVENTORY 149
+#define RUNEC_IFACE_STATS 320
+#define RUNEC_IFACE_WORNITEMS 387
+#define RUNEC_IFACE_PRAYERBOOK 541
+#define RUNEC_IFACE_MAGIC_SPELLBOOK 218
+#define RUNEC_IFACE_COMBAT_INTERFACE 593
+
+#define RUNEC_OSRS_MAP_CONTAINER_W 211.0f
+#define RUNEC_OSRS_MAP_CONTAINER_H 207.0f
+#define RUNEC_OSRS_MINIMAP_X 53.0f
+#define RUNEC_OSRS_MINIMAP_Y 8.0f
+#define RUNEC_OSRS_MINIMAP_W 152.0f
+#define RUNEC_OSRS_MINIMAP_H 152.0f
+#define RUNEC_OSRS_MAP_SURROUND_X 29.0f
+#define RUNEC_OSRS_MAP_SURROUND_Y 0.0f
+#define RUNEC_OSRS_MAP_SURROUND_W 182.0f
+#define RUNEC_OSRS_MAP_SURROUND_H 166.0f
+#define RUNEC_OSRS_COMPASS_X 34.0f
+#define RUNEC_OSRS_COMPASS_Y 5.0f
+#define RUNEC_OSRS_COMPASS_W 35.0f
+#define RUNEC_OSRS_COMPASS_H 35.0f
+
+#define RUNEC_OSRS_ORBS_X 0.0f
+#define RUNEC_OSRS_ORBS_Y 10.0f
+#define RUNEC_OSRS_ORBS_W 207.0f
+#define RUNEC_OSRS_ORBS_H 197.0f
+#define RUNEC_OSRS_HP_X 0.0f
+#define RUNEC_OSRS_HP_Y 37.0f
+#define RUNEC_OSRS_PRAYER_X 0.0f
+#define RUNEC_OSRS_PRAYER_Y 71.0f
+#define RUNEC_OSRS_RUN_X 10.0f
+#define RUNEC_OSRS_RUN_Y 103.0f
+#define RUNEC_OSRS_SPEC_X 32.0f
+#define RUNEC_OSRS_SPEC_Y 128.0f
+#define RUNEC_OSRS_WORLDMAP_X 177.0f
+#define RUNEC_OSRS_WORLDMAP_Y 137.0f
+
+#define RUNEC_OSRS_CHAT_W 519.0f
+#define RUNEC_OSRS_CHAT_H 165.0f
+#define RUNEC_OSRS_SIDE_MENU_W 241.0f
+#define RUNEC_OSRS_SIDE_MENU_H 335.0f
+#define RUNEC_OSRS_SIDE_CONTENT_X 25.0f
+#define RUNEC_OSRS_SIDE_CONTENT_Y 37.0f
+#define RUNEC_OSRS_SIDE_CONTENT_W 190.0f
+#define RUNEC_OSRS_SIDE_CONTENT_H 261.0f
+#define RUNEC_OSRS_SIDE_TOP_Y 0.0f
+#define RUNEC_OSRS_SIDE_BOTTOM_Y 298.0f
+
+#define RUNEC_OSRS_INVENTORY_SLOT_COLS 4
+#define RUNEC_OSRS_INVENTORY_SLOT_COUNT 28
+#define RUNEC_OSRS_INVENTORY_SLOT_X 14.0f
+#define RUNEC_OSRS_INVENTORY_SLOT_Y 8.0f
+#define RUNEC_OSRS_INVENTORY_SLOT_STEP_X 42.0f
+#define RUNEC_OSRS_INVENTORY_SLOT_STEP_Y 36.0f
+#define RUNEC_OSRS_INVENTORY_SLOT_W 32.0f
+#define RUNEC_OSRS_INVENTORY_SLOT_H 32.0f
+
+typedef struct RuneCUiStoneRef {
+    int logical_tab;
+    const char *stone_asset;
+    const char *icon_asset;
+    Rectangle rect;
+    Rectangle icon_rect;
+} RuneCUiStoneRef;
+
+static const RuneCUiStoneRef RUNEC_OSRS_SIDE_STONES[] = {
+    {0, "side_stone_highlights_0", "side_icon_combat",    {0,   0, 38, 36}, {4,   0, 33, 36}},
+    {1, "side_stone_highlights_4", "side_icon_stats",     {38,  0, 33, 36}, {38,  0, 33, 36}},
+    {2, "side_stone_highlights_4", "side_icon_quests",    {71,  0, 38, 36}, {71,  0, 33, 36}},
+    {3, "side_stone_highlights_4", "side_icon_inventory", {104, 0, 33, 36}, {104, 0, 33, 36}},
+    {4, "side_stone_highlights_4", "side_icon_equipment", {137, 0, 33, 36}, {137, 0, 33, 36}},
+    {5, "side_stone_highlights_4", "side_icon_prayer",    {170, 0, 33, 36}, {170, 0, 33, 36}},
+    {6, "side_stone_highlights_1", "side_icon_magic",     {203, 0, 38, 36}, {204, 0, 33, 36}},
+    {8, "side_stone_highlights_2", "side_icon_clan",     {0,   0, 38, 36}, {4,   0, 33, 36}},
+    {9, "side_stone_highlights_4", "side_icon_friends",  {38,  0, 33, 36}, {38,  0, 33, 36}},
+    {-1, "side_stone_highlights_4", "side_icon_grouping", {71,  0, 33, 36}, {71,  0, 33, 36}},
+    {-1, "side_stone_highlights_4", "side_icon_logout",   {104, 0, 33, 36}, {104, 0, 33, 36}},
+    {7, "side_stone_highlights_4", "side_icon_options",   {137, 0, 33, 36}, {137, 0, 33, 36}},
+    {-1, "side_stone_highlights_4", "side_icon_emotes",   {170, 0, 33, 36}, {170, 0, 33, 36}},
+    {-1, "side_stone_highlights_3", "side_icon_music",    {203, 0, 38, 36}, {204, 0, 33, 36}},
+};
+
+typedef struct RuneCUiSkillRef {
+    const char *name;
+    int icon_index;
+    Rectangle rect;
+} RuneCUiSkillRef;
+
+static const RuneCUiSkillRef RUNEC_OSRS_SKILLS[] = {
+    {"Attack",       0,  {1,   1,   62, 30}},
+    {"Strength",     1,  {1,   31,  62, 30}},
+    {"Defence",      2,  {1,   61,  62, 30}},
+    {"Ranged",       3,  {1,   91,  62, 30}},
+    {"Prayer",       4,  {1,   121, 62, 30}},
+    {"Magic",        5,  {1,   151, 62, 30}},
+    {"Runecraft",    18, {1,   181, 62, 30}},
+    {"Construction", 22, {1,   211, 62, 32}},
+    {"Hitpoints",    6,  {64,  1,   62, 30}},
+    {"Agility",      7,  {64,  31,  62, 30}},
+    {"Herblore",     8,  {64,  61,  62, 30}},
+    {"Thieving",     9,  {64,  91,  62, 30}},
+    {"Crafting",     10, {64,  121, 62, 30}},
+    {"Fletching",    11, {64,  151, 62, 30}},
+    {"Slayer",       19, {64,  181, 62, 30}},
+    {"Hunter",       21, {64,  211, 62, 32}},
+    {"Mining",       12, {127, 1,   62, 30}},
+    {"Smithing",     13, {127, 31,  62, 30}},
+    {"Fishing",      14, {127, 61,  62, 30}},
+    {"Cooking",      15, {127, 91,  62, 30}},
+    {"Firemaking",   16, {127, 121, 62, 30}},
+    {"Woodcutting",  17, {127, 151, 62, 30}},
+    {"Farming",      20, {127, 181, 62, 30}},
+    {"Sailing",      23, {127, 211, 62, 32}},
+};
+
+static const Rectangle RUNEC_OSRS_STATS_TOTAL = {0, 241, 190, 19};
+
+typedef struct RuneCUiCombatStyleRef {
+    const char *label;
+    const char *mode;
+    const char *icon_asset;
+    int visible;
+    Rectangle rect;
+    Rectangle icon_rect;
+    Rectangle text_rect;
+} RuneCUiCombatStyleRef;
+
+static const RuneCUiCombatStyleRef RUNEC_OSRS_COMBAT_STYLES[] = {
+    {"Flick",   "Accurate",  "sideicons_interface_0", 1, {20,  46, 68, 47}, {37,  51, 34, 24}, {20,  67, 68, 13}},
+    {"Lash",    "Controlled", "sideicons_interface_1", 1, {102, 46, 68, 47}, {119, 51, 34, 24}, {102, 76, 68, 13}},
+    {"Deflect", "Defensive",  "sideicons_interface_2", 1, {20,  99, 68, 47}, {37, 104, 34, 24}, {20, 129, 68, 13}},
+    {"",        "",           "sideicons_interface_3", 0, {102, 99, 68, 47}, {119,104, 34, 24}, {102,129, 68, 13}},
+};
+
+static const Rectangle RUNEC_OSRS_COMBAT_HEADER = {10, 0, 170, 44};
+static const Rectangle RUNEC_OSRS_COMBAT_TITLE = {10, 6, 170, 14};
+static const Rectangle RUNEC_OSRS_COMBAT_LEVEL = {10, 26, 170, 12};
+static const Rectangle RUNEC_OSRS_COMBAT_RETALIATE = {20, 153, 150, 47};
+static const Rectangle RUNEC_OSRS_COMBAT_RETALIATE_ICON = {27, 156, 26, 39};
+static const Rectangle RUNEC_OSRS_COMBAT_RETALIATE_TEXT = {58, 156, 108, 39};
+static const Rectangle RUNEC_OSRS_COMBAT_SPECIAL_BAR = {20, 200, 150, 26};
+static const Rectangle RUNEC_OSRS_COMBAT_CATEGORY = {0, 233, 190, 28};
+
+typedef struct RuneCUiWornButtonRef {
+    const char *asset;
+    Rectangle rect;
+    Rectangle icon_rect;
+} RuneCUiWornButtonRef;
+
+static const RuneCUiWornButtonRef RUNEC_OSRS_WORN_BUTTONS[] = {
+    {"options_icons_16", {7,   208, 40, 40}, {10,  210, 32, 32}},
+    {"options_icons_28", {52,  208, 40, 40}, {56,  212, 32, 32}},
+    {"options_icons_18", {97,  208, 40, 40}, {99,  211, 34, 34}},
+    {"whistle",          {142, 208, 40, 40}, {145, 211, 32, 32}},
+};
+
+
+/* Osrs Text */
+
+#include "raylib.h"
+
+#define FC_OSRS_MENU_FONT_SIZE 16.0f
+
+int fc_osrs_text_init(void);
+void fc_osrs_text_shutdown(void);
+Font fc_osrs_menu_font(void);
+void fc_osrs_draw_text(const char* text, int x, int y, int font_size,
+                       Color color);
+int fc_osrs_measure_text(const char* text, int font_size);
+
+
+/* Minimap */
+
+#include "raylib.h"
+
+#define FC_MINIMAP_DISPLAY_SIZE 152
+#define FC_MINIMAP_DISPLAY_CENTER 76.0f
+#define FC_MINIMAP_DISPLAY_RADIUS 75.0f
+#define FC_MINIMAP_DISPLAY_PIXELS_PER_TILE 3.5f
+#define FC_MINIMAP_SCENE_SIZE 512
+#define FC_MINIMAP_SCENE_PIXELS_PER_TILE 4.0f
+#define FC_MINIMAP_SCENE_BORDER_TILES 32.0f
+
+typedef struct FcMinimapScene {
+    Color* pixels;
+    int ready;
+} FcMinimapScene;
+
+int fc_minimap_scene_load_pixels(FcMinimapScene* scene,
+                                 const Color* pixels, int width, int height);
+void fc_minimap_scene_free(FcMinimapScene* scene);
+
+void fc_minimap_render(const FcMinimapScene* scene, float player_x,
+                       float player_y, float camera_yaw, Color* output);
+
+Vector2 fc_minimap_rotate_offset(float dx, float dy, float camera_yaw);
+int fc_minimap_click_to_tile(float map_x, float map_y, float player_x,
+                             float player_y, float camera_yaw,
+                             int* tile_x, int* tile_y);
+
+
+/* Context Menu */
+
+#include <stdint.h>
+
+/* RuneC's client-style geometry, shared by menu drawing and hit testing. */
+#define FC_MENU_HEADER_HEIGHT 24
+#define FC_MENU_ROW_HEIGHT 19
+#define FC_MENU_DISMISS_MARGIN 10
+
+typedef struct { int x, y, width, height; } FcMenuLayout;
+typedef struct { const char *name; int level; } FcNpcMenuInfo;
+
+FcNpcMenuInfo fc_menu_npc_info(int npc_type);
+uint32_t fc_menu_level_color(int player_level, int npc_level);
+
+FcMenuLayout fc_menu_layout(int x, int y, int screen_width, int screen_height,
+                             int text_width, int rows);
+int fc_menu_contains(FcMenuLayout menu, int x, int y, int margin);
+int fc_menu_action_at(FcMenuLayout menu, int rows, int x, int y);
+
+
+/* Ui */
+
+#include "raylib.h"
+#include <stddef.h>
+#include <stdint.h>
+
+#define RUNEC_UI_INV_SLOT_COUNT 28
+#define RUNEC_UI_EQUIP_SLOT_COUNT 14
+#define RUNEC_UI_CHAT_INPUT_MAX 128
+#define RUNEC_UI_CONTEXT_ACTIONS 5
+#define RUNEC_UI_MINIMAP_DOTS 256
+#define RUNEC_UI_ITEM_ICON_CACHE 512
+#define RUNEC_UI_SKILL_COUNT 24
+#define RUNEC_UI_COMBAT_STYLE_COUNT 4
+
+typedef enum RuneCUiTab {
+    RUNEC_UI_TAB_NONE = -1,
+    RUNEC_UI_TAB_COMBAT = 0,
+    RUNEC_UI_TAB_SKILLS,
+    RUNEC_UI_TAB_QUESTS,
+    RUNEC_UI_TAB_INVENTORY,
+    RUNEC_UI_TAB_EQUIPMENT,
+    RUNEC_UI_TAB_PRAYER,
+    RUNEC_UI_TAB_SPELLBOOK,
+    RUNEC_UI_TAB_SETTINGS,
+    RUNEC_UI_TAB_CLAN_CHAT,
+    RUNEC_UI_TAB_FRIENDS,
+    RUNEC_UI_TAB_COUNT
+} RuneCUiTab;
+
+typedef enum RuneCUiIntentKind {
+    RUNEC_UI_INTENT_NONE = 0,
+    RUNEC_UI_INTENT_TAB,
+    RUNEC_UI_INTENT_INVENTORY_SLOT,
+    RUNEC_UI_INTENT_EQUIPMENT_SLOT,
+    RUNEC_UI_INTENT_PRAYER_SLOT,
+    RUNEC_UI_INTENT_QUICK_PRAYER_SLOT,
+    RUNEC_UI_INTENT_QUICK_PRAYER_TOGGLE,
+    RUNEC_UI_INTENT_AUTOCAST_SPELL,
+    RUNEC_UI_INTENT_SKILL_SLOT,
+    RUNEC_UI_INTENT_MINIMAP_CLICK,
+    RUNEC_UI_INTENT_RUN_TOGGLE,
+    RUNEC_UI_INTENT_COMBAT_STYLE,
+    RUNEC_UI_INTENT_AUTO_RETALIATE,
+    RUNEC_UI_INTENT_SPECIAL_ATTACK,
+    RUNEC_UI_INTENT_CONTEXT_ACTION,
+    RUNEC_UI_INTENT_WORLD_ACTION,
+    RUNEC_UI_INTENT_INVENTORY_ACTION,
+    RUNEC_UI_INTENT_EQUIPMENT_ACTION,
+    RUNEC_UI_INTENT_INVENTORY_DRAG,
+    RUNEC_UI_INTENT_SELECTED_ITEM,
+    RUNEC_UI_INTENT_SELECTED_SPELL,
+    RUNEC_UI_INTENT_SELECTED_ITEM_ON_ITEM,
+    RUNEC_UI_INTENT_SELECTED_SPELL_ON_ITEM,
+    RUNEC_UI_INTENT_SELECTED_TARGET_CANCEL
+} RuneCUiIntentKind;
+
+typedef struct RuneCUiIntent {
+    RuneCUiIntentKind kind;
+    int primary;
+    int secondary;
+    Vector2 position;
+    char text[RUNEC_UI_CHAT_INPUT_MAX];
+} RuneCUiIntent;
+
+typedef struct RuneCUiSlot {
+    uint32_t item_id;
+    uint32_t icon_item_id;
+    int quantity;
+    char label[24];
+    int enabled;
+    const char *action;           /* supplied by the inventory owner */
+} RuneCUiSlot;
+
+typedef enum RuneCUiMinimapDotKind {
+    RUNEC_UI_MINIMAP_DOT_NPC = 0,
+    RUNEC_UI_MINIMAP_DOT_PLAYER,
+    RUNEC_UI_MINIMAP_DOT_DESTINATION
+} RuneCUiMinimapDotKind;
+
+typedef struct RuneCUiMinimapDot {
+    float dx;
+    float dy;
+    RuneCUiMinimapDotKind kind;
+} RuneCUiMinimapDot;
+
+typedef struct RuneCUiItemIcon {
+    uint32_t item_id;
+    Texture2D texture;
+    int ready;
+} RuneCUiItemIcon;
+
+typedef struct RuneCUiCombatStyleOption {
+    int visible;
+    int style_index;
+    char label[24];
+    char mode[32];
+    char icon_asset[32];
+} RuneCUiCombatStyleOption;
+
+typedef enum RuneCUiContextSourceKind {
+    RUNEC_UI_CONTEXT_NONE = 0,
+    RUNEC_UI_CONTEXT_INVENTORY,
+    RUNEC_UI_CONTEXT_EQUIPMENT,
+    RUNEC_UI_CONTEXT_PRAYER,
+    RUNEC_UI_CONTEXT_SPELL,
+    RUNEC_UI_CONTEXT_WORLD
+} RuneCUiContextSourceKind;
+
+typedef enum RuneCUiSelectedTargetKind {
+    RUNEC_UI_SELECTED_NONE = 0,
+    RUNEC_UI_SELECTED_ITEM,
+    RUNEC_UI_SELECTED_SPELL
+} RuneCUiSelectedTargetKind;
+
+typedef struct RuneCUiSelectedTarget {
+    RuneCUiSelectedTargetKind kind;
+    int source_slot;
+    uint32_t source_item_id;
+    char label[48];
+    char verb[24];
+} RuneCUiSelectedTarget;
+
+typedef struct RuneCUiDragState {
+    int active;
+    RuneCUiContextSourceKind source_kind;
+    int source_slot;
+    Vector2 start;
+} RuneCUiDragState;
+
+typedef struct RuneCUiState {
+    RuneCUiTab active_tab;
+    RuneCUiIntent last_intent;
+    float tab_press_timer[RUNEC_UI_TAB_COUNT];
+
+    RuneCUiSlot inventory[RUNEC_UI_INV_SLOT_COUNT];
+    RuneCUiSlot equipment[RUNEC_UI_EQUIP_SLOT_COUNT];
+    int selected_combat_style;
+    int auto_retaliate;
+    int special_attack_enabled;
+    int special_attack_energy;
+    int combat_weapon_category;
+    char combat_weapon_name[64];
+    RuneCUiCombatStyleOption combat_styles[RUNEC_UI_COMBAT_STYLE_COUNT];
+
+    int hitpoints;
+    int hitpoints_max;
+    int prayer_points;
+    int prayer_points_max;
+    uint32_t active_prayers;
+    int run_energy;
+    int run_enabled;
+    int combat_level;
+    int skill_current[RUNEC_UI_SKILL_COUNT];
+    int skill_base[RUNEC_UI_SKILL_COUNT];
+    int skill_total;
+
+    int context_open;
+    Vector2 context_pos;
+    Color context_target_color;
+    int context_combat_level;
+    char context_title[48];
+    char context_actions[RUNEC_UI_CONTEXT_ACTIONS][32];
+    int context_action_count;
+    RuneCUiContextSourceKind context_source_kind;
+    int context_source_slot;
+    uint32_t context_source_item_id;
+
+    RuneCUiSelectedTarget selected_target;
+    RuneCUiDragState drag;
+
+    RuneCUiMinimapDot minimap_dots[RUNEC_UI_MINIMAP_DOTS];
+    int minimap_dot_count;
+    float minimap_rotation;
+    Texture2D minimap_texture;
+    int minimap_texture_ready;
+    RuneCUiItemIcon item_icons[RUNEC_UI_ITEM_ICON_CACHE];
+    int item_icon_count;
+
+    RuneCUiAssets assets;
+} RuneCUiState;
+
+void runec_ui_init(RuneCUiState *ui);
+void runec_ui_shutdown(RuneCUiState *ui);
+void runec_ui_clear_minimap(RuneCUiState *ui);
+void runec_ui_add_minimap_dot(RuneCUiState *ui, float dx, float dy,
+                              RuneCUiMinimapDotKind kind);
+void runec_ui_update_minimap(RuneCUiState *ui, const Color *pixels,
+                             int width, int height);
+void runec_ui_set_minimap_rotation(RuneCUiState *ui, float radians);
+void runec_ui_set_item_icon(RuneCUiState *ui, uint32_t icon_item_id, Texture2D texture);
+void runec_ui_set_combat_weapon_name(RuneCUiState *ui, const char *name);
+void runec_ui_set_combat_style_profile(RuneCUiState *ui, int core_weapon_category);
+void runec_ui_clear_selected_target(RuneCUiState *ui);
+int runec_ui_handle_input(RuneCUiState *ui, int screen_w, int screen_h);
+void runec_ui_open_world_context(RuneCUiState *ui, Vector2 pos, int npc_type, int can_walk);
+void runec_ui_open_prayer_context(RuneCUiState *ui, Vector2 pos, int slot);
+void runec_ui_close_context(RuneCUiState *ui);
+void runec_ui_draw_context(const RuneCUiState *ui);
+void runec_ui_draw(RuneCUiState *ui, int screen_w, int screen_h);
+Rectangle runec_ui_chat_panel_rect(int screen_w, int screen_h);
+const char *runec_ui_tab_name(RuneCUiTab tab);
+
+
+/* Ui Assets */
+#include <stdio.h>
+#include <string.h>
+
+typedef struct RuneCUiAssetSpec {
+    const char *name;
+    const char *file;
+    int required;
+} RuneCUiAssetSpec;
+
+#define UI_ASSET(name) { name, name ".png", 1 }
+#define UI_OPTIONAL_ASSET(name, file) { name, file, 0 }
+
+static const RuneCUiAssetSpec g_ui_asset_specs[] = {
+    UI_ASSET("tradebacking_dark"),
+    UI_ASSET("chatbox_bg"),
+    UI_ASSET("main_stones_bottom"),
+    UI_ASSET("side_background"),
+    UI_ASSET("side_background_bottom"),
+    UI_ASSET("side_background_left1"),
+    UI_ASSET("side_background_left2"),
+    UI_ASSET("side_background_right"),
+    UI_ASSET("side_background_top"),
+    UI_ASSET("side_stone_highlights_0"),
+    UI_ASSET("side_stone_highlights_1"),
+    UI_ASSET("side_stone_highlights_2"),
+    UI_ASSET("side_stone_highlights_3"),
+    UI_ASSET("side_stone_highlights_4"),
+    UI_ASSET("osrs_stretch_side_topbottom_0"),
+    UI_ASSET("osrs_stretch_side_topbottom_1"),
+    UI_ASSET("osrs_stretch_side_columns_0"),
+    UI_ASSET("osrs_stretch_side_columns_1"),
+    UI_ASSET("compass"),
+    UI_ASSET("mini_left"),
+    UI_ASSET("mini_right"),
+    UI_ASSET("mini_topright"),
+    UI_ASSET("osrs_stretch_mapsurround"),
+    UI_ASSET("resize_map_mask"),
+    UI_ASSET("resize_compass_mask"),
+    UI_ASSET("fixed_minimap_cover"),
+    UI_ASSET("fixed_map_mask"),
+    UI_ASSET("fixed_compass_mask"),
+    UI_ASSET("fixed_map_clickmask"),
+    UI_ASSET("mini_bottom"),
+    UI_ASSET("compass_outline"),
+    UI_ASSET("border_map_compass"),
+    UI_ASSET("side_icon_combat"),
+    UI_ASSET("side_icon_stats"),
+    UI_ASSET("side_icon_quests"),
+    UI_ASSET("side_icon_inventory"),
+    UI_ASSET("side_icon_equipment"),
+    UI_ASSET("side_icon_prayer"),
+    UI_ASSET("side_icon_magic"),
+    UI_ASSET("side_icon_clan"),
+    UI_ASSET("side_icon_friends"),
+    UI_ASSET("side_icon_options"),
+    UI_ASSET("side_icon_logout"),
+    UI_ASSET("side_icon_emotes"),
+    UI_ASSET("side_icon_music"),
+    UI_ASSET("side_icon_grouping"),
+    UI_ASSET("side_icon_logout_modern"),
+    UI_ASSET("options_icons_16"),
+    UI_ASSET("options_icons_18"),
+    UI_ASSET("options_icons_28"),
+    UI_ASSET("whistle"),
+    UI_ASSET("orb_frame_0"),
+    UI_ASSET("orb_frame_1"),
+    UI_ASSET("orb_frame_2"),
+    UI_ASSET("orb_filler_0"),
+    UI_ASSET("orb_filler_1"),
+    UI_ASSET("orb_filler_4"),
+    UI_ASSET("orb_filler_5"),
+    UI_ASSET("orb_filler_6"),
+    UI_ASSET("orb_filler_9"),
+    UI_ASSET("orb_icon_0"),
+    UI_ASSET("orb_icon_1"),
+    UI_ASSET("orb_icon_2"),
+    UI_ASSET("orb_icon_3"),
+    UI_ASSET("orb_icon_6"),
+    UI_ASSET("tli_button01_orbinfo_65x34_0"),
+    UI_ASSET("tli_button01_orbinfo_65x34_1"),
+    UI_ASSET("tli_button01_orbinfo_65x34_2"),
+    UI_ASSET("ring_30"),
+    UI_ASSET("worldmap_icon_0"),
+    UI_ASSET("chat_tab_button_0"),
+    UI_ASSET("wornicons_0"),
+    UI_ASSET("wornicons_1"),
+    UI_ASSET("wornicons_2"),
+    UI_ASSET("wornicons_3"),
+    UI_ASSET("wornicons_4"),
+    UI_ASSET("wornicons_5"),
+    UI_ASSET("wornicons_6"),
+    UI_ASSET("wornicons_7"),
+    UI_ASSET("wornicons_8"),
+    UI_ASSET("wornicons_9"),
+    UI_ASSET("wornicons_10"),
+    UI_ASSET("wornicons_11"),
+    UI_ASSET("miscgraphics_2"),
+    UI_ASSET("miscgraphics_3"),
+    UI_ASSET("combatboxes_0"),
+    UI_ASSET("combatboxes_1"),
+    UI_ASSET("combatboxes_2"),
+    UI_ASSET("combatboxes_3"),
+    UI_ASSET("combatboxes_large_0"),
+    UI_ASSET("combatboxes_large_1"),
+    UI_ASSET("combatboxes_very_large_0"),
+    UI_ASSET("combatboxes_very_large_1"),
+    UI_ASSET("combatboxes_special_attack"),
+    UI_ASSET("combat_shield"),
+    UI_ASSET("combaticons_0"),
+    UI_ASSET("combaticons_1"),
+    UI_ASSET("combaticons_2"),
+    UI_ASSET("combaticons_3"),
+    UI_ASSET("combaticons_4"),
+    UI_ASSET("combaticons_5"),
+    UI_ASSET("combaticons_6"),
+    UI_ASSET("combaticons_7"),
+    UI_ASSET("combaticons_8"),
+    UI_ASSET("combaticons_9"),
+    UI_ASSET("combaticons_10"),
+    UI_ASSET("combaticons_11"),
+    UI_ASSET("combaticons_12"),
+    UI_ASSET("combaticons_13"),
+    UI_ASSET("combaticons_14"),
+    UI_ASSET("combaticons_15"),
+    UI_ASSET("combaticons_16"),
+    UI_ASSET("combaticons_17"),
+    UI_ASSET("combaticons_18"),
+    UI_ASSET("combaticons_19"),
+    UI_ASSET("combaticons2_0"),
+    UI_ASSET("combaticons2_1"),
+    UI_ASSET("combaticons2_2"),
+    UI_ASSET("combaticons2_3"),
+    UI_ASSET("combaticons2_4"),
+    UI_ASSET("combaticons2_5"),
+    UI_ASSET("combaticons2_6"),
+    UI_ASSET("combaticons2_7"),
+    UI_ASSET("combaticons2_8"),
+    UI_ASSET("combaticons2_9"),
+    UI_ASSET("combaticons2_10"),
+    UI_ASSET("combaticons2_11"),
+    UI_ASSET("combaticons2_12"),
+    UI_ASSET("combaticons2_13"),
+    UI_ASSET("combaticons2_14"),
+    UI_ASSET("combaticons2_15"),
+    UI_ASSET("combaticons2_16"),
+    UI_ASSET("combaticons2_17"),
+    UI_ASSET("combaticons2_18"),
+    UI_ASSET("combaticons2_19"),
+    UI_ASSET("combaticons3_0"),
+    UI_ASSET("combaticons3_1"),
+    UI_ASSET("combaticons3_2"),
+    UI_ASSET("combaticons3_3"),
+    UI_ASSET("combaticons3_4"),
+    UI_ASSET("combaticons3_5"),
+    UI_ASSET("combaticons3_6"),
+    UI_ASSET("combaticons3_7"),
+    UI_ASSET("combaticons3_8"),
+    UI_ASSET("combaticons3_9"),
+    UI_ASSET("combaticons3_10"),
+    UI_ASSET("combaticons3_11"),
+    UI_ASSET("combaticons3_12"),
+    UI_ASSET("combaticons3_13"),
+    UI_ASSET("combaticons3_14"),
+    UI_ASSET("combaticons3_15"),
+    UI_ASSET("combaticons3_16"),
+    UI_ASSET("combaticons3_17"),
+    UI_ASSET("combaticons3_18"),
+    UI_ASSET("combaticons3_19"),
+    UI_ASSET("sideicons_interface_0"),
+    UI_ASSET("sideicons_interface_1"),
+    UI_ASSET("sideicons_interface_2"),
+    UI_ASSET("sideicons_interface_3"),
+    UI_ASSET("sideicons_interface_4"),
+    UI_ASSET("sideicons_interface_5"),
+    UI_ASSET("sideicons_interface_6"),
+    UI_ASSET("sideicons_interface_7"),
+    UI_ASSET("sideicons_interface_8"),
+    UI_ASSET("sideicons_interface_9"),
+    UI_ASSET("sideicons_interface_10"),
+    UI_ASSET("sideicons_interface_11"),
+    UI_ASSET("sideicons_interface_12"),
+    UI_ASSET("sideicons_interface_13"),
+    UI_ASSET("sideicons_interface_14"),
+    UI_ASSET("sideicons_interface_15"),
+    UI_ASSET("sideicons_interface_16"),
+    UI_OPTIONAL_ASSET("item_995", "../items/item_995.png"),
+    UI_OPTIONAL_ASSET("item_995_1", "../items/item_995_1.png"),
+    UI_OPTIONAL_ASSET("item_995_2", "../items/item_995_2.png"),
+    UI_OPTIONAL_ASSET("item_995_3", "../items/item_995_3.png"),
+    UI_OPTIONAL_ASSET("item_995_4", "../items/item_995_4.png"),
+    UI_OPTIONAL_ASSET("item_995_5", "../items/item_995_5.png"),
+    UI_OPTIONAL_ASSET("item_995_25", "../items/item_995_25.png"),
+    UI_OPTIONAL_ASSET("item_995_100", "../items/item_995_100.png"),
+    UI_OPTIONAL_ASSET("item_995_250", "../items/item_995_250.png"),
+    UI_OPTIONAL_ASSET("item_995_1000", "../items/item_995_1000.png"),
+    UI_OPTIONAL_ASSET("item_995_10000", "../items/item_995_10000.png"),
+    UI_OPTIONAL_ASSET("item_1038", "../items/item_1038.png"),
+    UI_OPTIONAL_ASSET("item_1040", "../items/item_1040.png"),
+    UI_OPTIONAL_ASSET("item_1042", "../items/item_1042.png"),
+    UI_OPTIONAL_ASSET("item_1044", "../items/item_1044.png"),
+    UI_OPTIONAL_ASSET("item_1046", "../items/item_1046.png"),
+    UI_OPTIONAL_ASSET("item_1048", "../items/item_1048.png"),
+    UI_OPTIONAL_ASSET("item_4151", "../items/item_4151.png"),
+    UI_OPTIONAL_ASSET("item_554", "../items/item_554.png"),
+    UI_OPTIONAL_ASSET("item_555", "../items/item_555.png"),
+    UI_OPTIONAL_ASSET("item_556", "../items/item_556.png"),
+    UI_OPTIONAL_ASSET("item_557", "../items/item_557.png"),
+    UI_OPTIONAL_ASSET("item_558", "../items/item_558.png"),
+    UI_OPTIONAL_ASSET("item_560", "../items/item_560.png"),
+    UI_OPTIONAL_ASSET("item_562", "../items/item_562.png"),
+    UI_OPTIONAL_ASSET("item_861", "../items/item_861.png"),
+    UI_OPTIONAL_ASSET("item_892", "../items/item_892.png"),
+    UI_OPTIONAL_ASSET("item_1381", "../items/item_1381.png"),
+    UI_OPTIONAL_ASSET("item_10346", "../items/item_10346.png"),
+    UI_OPTIONAL_ASSET("item_10348", "../items/item_10348.png"),
+    UI_OPTIONAL_ASSET("item_10350", "../items/item_10350.png"),
+    UI_OPTIONAL_ASSET("item_10352", "../items/item_10352.png"),
+    UI_OPTIONAL_ASSET("item_11802", "../items/item_11802.png"),
+    UI_OPTIONAL_ASSET("item_11832", "../items/item_11832.png"),
+    UI_OPTIONAL_ASSET("item_11834", "../items/item_11834.png"),
+    UI_OPTIONAL_ASSET("item_26382", "../items/item_26382.png"),
+    UI_OPTIONAL_ASSET("item_26384", "../items/item_26384.png"),
+    UI_OPTIONAL_ASSET("item_26386", "../items/item_26386.png"),
+    UI_ASSET("skill_icon_0"),
+    UI_ASSET("skill_icon_1"),
+    UI_ASSET("skill_icon_2"),
+    UI_ASSET("skill_icon_3"),
+    UI_ASSET("skill_icon_4"),
+    UI_ASSET("skill_icon_5"),
+    UI_ASSET("skill_icon_6"),
+    UI_ASSET("skill_icon_7"),
+    UI_ASSET("skill_icon_8"),
+    UI_ASSET("skill_icon_9"),
+    UI_ASSET("skill_icon_10"),
+    UI_ASSET("skill_icon_11"),
+    UI_ASSET("skill_icon_12"),
+    UI_ASSET("skill_icon_13"),
+    UI_ASSET("skill_icon_14"),
+    UI_ASSET("skill_icon_15"),
+    UI_ASSET("skill_icon_16"),
+    UI_ASSET("skill_icon_17"),
+    UI_ASSET("skill_icon_18"),
+    UI_ASSET("skill_icon_19"),
+    UI_ASSET("skill_icon_20"),
+    UI_ASSET("skill_icon_21"),
+    UI_ASSET("skill_icon_22"),
+    UI_ASSET("skill_icon_23"),
+    UI_ASSET("prayeroff_0"),
+    UI_ASSET("prayeroff_1"),
+    UI_ASSET("prayeroff_2"),
+    UI_ASSET("prayeroff_3"),
+    UI_ASSET("prayeroff_4"),
+    UI_ASSET("prayeroff_5"),
+    UI_ASSET("prayeroff_6"),
+    UI_ASSET("prayeroff_7"),
+    UI_ASSET("prayeroff_8"),
+    UI_ASSET("prayeroff_9"),
+    UI_ASSET("prayeroff_10"),
+    UI_ASSET("prayeroff_11"),
+    UI_ASSET("prayeroff_12"),
+    UI_ASSET("prayeroff_13"),
+    UI_ASSET("prayeroff_14"),
+    UI_ASSET("prayeroff_15"),
+    UI_ASSET("prayeroff_16"),
+    UI_ASSET("prayeroff_17"),
+    UI_ASSET("prayeroff_18"),
+    UI_ASSET("prayeroff_19"),
+    UI_ASSET("prayeroff_20"),
+    UI_ASSET("prayeroff_21"),
+    UI_ASSET("prayeroff_22"),
+    UI_ASSET("prayeroff_23"),
+    UI_ASSET("prayeroff_24"),
+    UI_ASSET("magicon_0"),
+    UI_ASSET("magicon_1"),
+    UI_ASSET("magicon_2"),
+    UI_ASSET("magicon_3"),
+    UI_ASSET("magicon_4"),
+    UI_ASSET("magicon_5"),
+    UI_ASSET("magicon_6"),
+    UI_ASSET("magicon_7"),
+    UI_ASSET("magicon_8"),
+    UI_ASSET("magicon_9"),
+    UI_ASSET("magicon_10"),
+    UI_ASSET("magicon_11"),
+    UI_ASSET("magicon_12"),
+    UI_ASSET("magicon_13"),
+    UI_ASSET("magicon_14"),
+    UI_ASSET("magicon_15"),
+    UI_ASSET("magicon_16"),
+    UI_ASSET("magicon_17"),
+    UI_ASSET("magicon_18"),
+    UI_ASSET("magicon_19"),
+    UI_ASSET("magicon_20"),
+    UI_ASSET("magicon_21"),
+    UI_ASSET("magicon_22"),
+    UI_ASSET("magicon_23"),
+    UI_ASSET("magicon_24"),
+    UI_ASSET("standard_spell_on_0"),
+    UI_ASSET("standard_spell_on_1"),
+    UI_ASSET("standard_spell_on_2"),
+    UI_ASSET("standard_spell_on_3"),
+    UI_ASSET("standard_spell_on_4"),
+    UI_ASSET("standard_spell_on_5"),
+    UI_ASSET("standard_spell_on_6"),
+    UI_ASSET("standard_spell_on_7"),
+    UI_ASSET("standard_spell_on_8"),
+    UI_ASSET("standard_spell_on_9"),
+    UI_ASSET("standard_spell_on_10"),
+    UI_ASSET("standard_spell_on_11"),
+    UI_ASSET("standard_spell_on_12"),
+    UI_ASSET("standard_spell_on_13"),
+    UI_ASSET("standard_spell_on_14"),
+    UI_ASSET("standard_spell_on_15"),
+    UI_ASSET("standard_spell_on_16"),
+    UI_ASSET("standard_spell_on_17"),
+    UI_ASSET("standard_spell_on_18"),
+    UI_ASSET("standard_spell_on_19"),
+    UI_ASSET("standard_spell_on_20"),
+    UI_ASSET("standard_spell_on_21"),
+    UI_ASSET("standard_spell_on_22"),
+    UI_ASSET("standard_spell_on_23"),
+    UI_ASSET("standard_spell_on_24"),
+    UI_ASSET("standard_spell_on_25"),
+    UI_ASSET("standard_spell_on_26"),
+    UI_ASSET("standard_spell_on_27"),
+    UI_ASSET("standard_spell_on_28"),
+    UI_ASSET("standard_spell_on_29"),
+    UI_ASSET("standard_spell_on_30"),
+    UI_ASSET("standard_spell_on_31"),
+    UI_ASSET("standard_spell_on_32"),
+    UI_ASSET("standard_spell_on_33"),
+    UI_ASSET("standard_spell_on_34"),
+    UI_ASSET("standard_spell_on_35"),
+    UI_ASSET("standard_spell_on_36"),
+    UI_ASSET("standard_spell_on_37"),
+    UI_ASSET("standard_spell_on_38"),
+    UI_ASSET("standard_spell_on_39"),
+    UI_ASSET("standard_spell_on_40"),
+    UI_ASSET("standard_spell_on_41"),
+    UI_ASSET("standard_spell_on_42"),
+    UI_ASSET("standard_spell_on_43"),
+    UI_ASSET("standard_spell_on_44"),
+    UI_ASSET("standard_spell_on_45"),
+    UI_ASSET("standard_spell_on_46"),
+    UI_ASSET("standard_spell_on_47"),
+    UI_ASSET("standard_spell_on_48"),
+    UI_ASSET("standard_spell_on_49"),
+    UI_ASSET("standard_spell_on_50"),
+    UI_ASSET("standard_spell_on_51"),
+    UI_ASSET("standard_spell_on_52"),
+    UI_ASSET("standard_spell_on_53"),
+    UI_ASSET("standard_spell_on_54"),
+    UI_ASSET("standard_spell_on_55"),
+    UI_ASSET("standard_spell_on_56"),
+    UI_ASSET("standard_spell_on_57"),
+    UI_ASSET("standard_spell_on_58"),
+    UI_ASSET("standard_spell_on_59"),
+    UI_ASSET("standard_spell_on_60"),
+    UI_ASSET("standard_spell_on_61"),
+    UI_ASSET("standard_spell_on_62"),
+    UI_ASSET("standard_spell_on_63"),
+    UI_ASSET("standard_spell_on_64"),
+    UI_ASSET("standard_spell_on_65"),
+    UI_ASSET("standard_spell_on_66"),
+    UI_ASSET("standard_spell_on_67"),
+    UI_ASSET("standard_spell_on_68"),
+    UI_ASSET("standard_spell_on_69"),
+    UI_ASSET("standard_spell_on_70"),
+    UI_ASSET("standard_spell_on_71"),
+    UI_ASSET("standard_spell_on_72"),
+    UI_ASSET("standard_spell_on_73"),
+    UI_ASSET("standard_spell_on_74"),
+    UI_ASSET("standard_spell_on_75"),
+    UI_ASSET("standard_spell_on_76"),
+    UI_ASSET("standard_spell_on_77"),
+    UI_ASSET("standard_spell_on_78"),
+    UI_ASSET("standard_spell_on_79"),
+};
+
+static int ui_asset_count(void) {
+    return (int)(sizeof(g_ui_asset_specs) / sizeof(g_ui_asset_specs[0]));
+}
+
+static int find_asset_index(const char *name) {
+    int count = ui_asset_count();
+    for (int i = 0; i < count; i++) {
+        if (strcmp(g_ui_asset_specs[i].name, name) == 0)
+            return i;
+    }
+    return -1;
+}
+
+static Texture2D load_compass_texture(const char *path) {
+    /* The OSRS client clips the rotating compass through sprite 1179 instead
+     * of drawing sprite 169 as an opaque square. Pre-applying that circular
+     * mask is equivalent because its shape is invariant under rotation. */
+    Image compass = fc_load_image_asset(path);
+    Image mask = fc_load_image_asset("data/sprites/ui/resize_compass_mask.png");
+    Texture2D texture = {0};
+
+    if (!compass.data || !mask.data) {
+        if (compass.data) UnloadImage(compass);
+        if (mask.data) UnloadImage(mask);
+        return texture;
+    }
+
+    ImageResizeNN(&mask, compass.width, compass.height);
+    ImageFormat(&compass, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+    ImageFormat(&mask, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+    Color *compass_pixels = compass.data;
+    const Color *mask_pixels = mask.data;
+    int pixel_count = compass.width * compass.height;
+    for (int i = 0; i < pixel_count; i++) {
+        if (mask_pixels[i].a != 0)
+            compass_pixels[i].a = 0;
+    }
+
+    texture = LoadTextureFromImage(compass);
+    UnloadImage(mask);
+    UnloadImage(compass);
+    return texture;
+}
+
+void runec_ui_assets_load(RuneCUiAssets *assets) {
+    memset(assets, 0, sizeof(*assets));
+
+    int count = ui_asset_count();
+    if (count > RUNEC_UI_ASSET_MAX)
+        count = RUNEC_UI_ASSET_MAX;
+
+    for (int i = 0; i < count; i++) {
+        char path[256];
+        snprintf(path, sizeof(path), "data/sprites/ui/%s", g_ui_asset_specs[i].file);
+        if (g_ui_asset_specs[i].required)
+            assets->required_count++;
+        if (!fc_asset_exists(path)) {
+            assets->missing_count++;
+            if (g_ui_asset_specs[i].required) {
+                assets->missing_required_count++;
+                fprintf(stderr, "ui_assets: missing required sprite %s (%s)\n",
+                        g_ui_asset_specs[i].name, path);
+            } else {
+                assets->missing_optional_count++;
+            }
+            continue;
+        }
+        Texture2D tex = strcmp(g_ui_asset_specs[i].name, "compass") == 0
+            ? load_compass_texture(path)
+            : fc_load_texture_asset(path);
+        if (tex.id == 0) {
+            assets->missing_count++;
+            if (g_ui_asset_specs[i].required) {
+                assets->missing_required_count++;
+                fprintf(stderr, "ui_assets: failed to load required sprite %s (%s)\n",
+                        g_ui_asset_specs[i].name, path);
+            } else {
+                assets->missing_optional_count++;
+            }
+            continue;
+        }
+        SetTextureFilter(tex, TEXTURE_FILTER_POINT);
+        assets->textures[i] = tex;
+        assets->loaded[i] = 1;
+        assets->loaded_count++;
+    }
+    fprintf(stderr,
+            "ui_assets: loaded %d/%d required sprites, %d optional sprites missing\n",
+            assets->required_count - assets->missing_required_count,
+            assets->required_count, assets->missing_optional_count);
+
+    const char *font_paths[] = {
+        "data/fonts/runescape.ttf",
+    };
+    for (int i = 0; i < (int)(sizeof(font_paths) / sizeof(font_paths[0])); i++) {
+        const char *font_path = font_paths[i];
+        if (!fc_asset_exists(font_path))
+            continue;
+        assets->font = fc_load_font_asset(font_path, 14);
+        if (assets->font.texture.id != 0) {
+            SetTextureFilter(assets->font.texture, TEXTURE_FILTER_POINT);
+            assets->font_loaded = 1;
+            fprintf(stderr, "ui_assets: loaded font %s\n", font_path);
+            break;
+        }
+    }
+    const char *small_font_paths[] = {
+        "data/fonts/runescape_small.ttf",
+    };
+    for (int i = 0; i < (int)(sizeof(small_font_paths) / sizeof(small_font_paths[0])); i++) {
+        const char *font_path = small_font_paths[i];
+        if (!fc_asset_exists(font_path))
+            continue;
+        assets->small_font = fc_load_font_asset(font_path, 12);
+        if (assets->small_font.texture.id != 0) {
+            SetTextureFilter(assets->small_font.texture, TEXTURE_FILTER_POINT);
+            assets->small_font_loaded = 1;
+            fprintf(stderr, "ui_assets: loaded small font %s\n", font_path);
+            break;
+        }
+    }
+}
+
+void runec_ui_assets_unload(RuneCUiAssets *assets) {
+    int count = ui_asset_count();
+    if (count > RUNEC_UI_ASSET_MAX)
+        count = RUNEC_UI_ASSET_MAX;
+
+    for (int i = 0; i < count; i++) {
+        if (assets->loaded[i]) {
+            UnloadTexture(assets->textures[i]);
+            assets->loaded[i] = 0;
+        }
+    }
+    if (assets->font_loaded) {
+        UnloadFont(assets->font);
+        assets->font_loaded = 0;
+    }
+    if (assets->small_font_loaded) {
+        UnloadFont(assets->small_font);
+        assets->small_font_loaded = 0;
+    }
+    assets->loaded_count = 0;
+    assets->missing_count = 0;
+    assets->required_count = 0;
+    assets->missing_required_count = 0;
+    assets->missing_optional_count = 0;
+}
+
+const Texture2D *runec_ui_asset(const RuneCUiAssets *assets, const char *name) {
+    int index = find_asset_index(name);
+    if (index < 0 || index >= RUNEC_UI_ASSET_MAX || !assets->loaded[index])
+        return NULL;
+    return &assets->textures[index];
+}
+
+int runec_ui_asset_ready(const RuneCUiAssets *assets, const char *name) {
+    return runec_ui_asset(assets, name) != NULL;
+}
+
+void runec_ui_draw_asset(const RuneCUiAssets *assets, const char *name,
+                         Rectangle dst, Color tint) {
+    const Texture2D *tex = runec_ui_asset(assets, name);
+    if (!tex)
+        return;
+    Rectangle src = {0, 0, (float)tex->width, (float)tex->height};
+    DrawTexturePro(*tex, src, dst, (Vector2){0, 0}, 0.0f, tint);
+}
+
+Font runec_ui_font(const RuneCUiAssets *assets) {
+    if (assets->font_loaded)
+        return assets->font;
+    if (assets->small_font_loaded)
+        return assets->small_font;
+    return (Font){0};
+}
+
+Font runec_ui_font_for_size(const RuneCUiAssets *assets, float size) {
+    if (size <= 12.0f && assets->small_font_loaded)
+        return assets->small_font;
+    return runec_ui_font(assets);
+}
+
+void runec_ui_draw_text_shadow(const RuneCUiAssets *assets, const char *text,
+                               float x, float y, float size, Color color) {
+    if (!text || !text[0])
+        return;
+    if (size < 12.0f)
+        size = 12.0f;
+    Font font = runec_ui_font_for_size(assets, size);
+    if (font.texture.id == 0)
+        return;
+    x = (float)((int)(x + 0.5f));
+    y = (float)((int)(y + 0.5f));
+    DrawTextEx(font, text, (Vector2){x + 1.0f, y + 1.0f}, size, 0.0f, BLACK);
+    DrawTextEx(font, text, (Vector2){x, y}, size, 0.0f, color);
+}
+
+#undef UI_ASSET
+#undef UI_OPTIONAL_ASSET
+
+/* Osrs Text */
+#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
+
+#define FC_OSRS_FONT_ASSET "data/fonts/p11_full.png"
+#define FC_OSRS_MENU_FONT_ASSET "data/fonts/runescape_bold.ttf"
+#define FC_OSRS_FONT_CELL_SIZE 20
+#define FC_OSRS_FONT_COLUMNS 16
+#define FC_OSRS_FONT_GLYPHS 256
+
+typedef struct {
+    Rectangle source;
+    int offset_x;
+    int offset_y;
+    int advance;
+    int drawable;
+} FcOsrsGlyph;
+
+static Texture2D g_font_texture;
+static Font g_menu_font;
+static FcOsrsGlyph g_glyphs[FC_OSRS_FONT_GLYPHS];
+static int g_font_height;
+static int g_font_ready;
+
+static int is_magenta(Color color) {
+    return color.r == 255 && color.g == 0 && color.b == 255;
+}
+
+static int glyph_pixel_set(const Color* pixels, int image_width,
+                           int cell_x, int cell_y, int x, int y) {
+    return !is_magenta(
+        pixels[(cell_y + y) * image_width + cell_x + x]);
+}
+
+static void build_glyph_metrics(const Color* pixels, int image_width,
+                                int codepoint) {
+    FcOsrsGlyph* glyph = &g_glyphs[codepoint];
+    int cell_x = (codepoint % FC_OSRS_FONT_COLUMNS) *
+        FC_OSRS_FONT_CELL_SIZE;
+    int cell_y = (codepoint / FC_OSRS_FONT_COLUMNS) *
+        FC_OSRS_FONT_CELL_SIZE;
+    int left = FC_OSRS_FONT_CELL_SIZE;
+    int top = FC_OSRS_FONT_CELL_SIZE;
+    int right = -1;
+    int bottom = -1;
+
+    for (int y = 0; y < FC_OSRS_FONT_CELL_SIZE; y++) {
+        for (int x = 0; x < FC_OSRS_FONT_CELL_SIZE; x++) {
+            if (!glyph_pixel_set(pixels, image_width,
+                                 cell_x, cell_y, x, y)) {
+                continue;
+            }
+            if (x < left) left = x;
+            if (x > right) right = x;
+            if (y < top) top = y;
+            if (y > bottom) bottom = y;
+        }
+    }
+
+    if (right < left || bottom < top) {
+        glyph->advance = 0;
+        return;
+    }
+
+    int width = right - left + 1;
+    int height = bottom - top + 1;
+    glyph->source = (Rectangle){
+        (float)(cell_x + left), (float)(cell_y + top),
+        (float)width, (float)height,
+    };
+    glyph->offset_x = 1;
+    glyph->offset_y = top;
+    glyph->advance = width + 2;
+    glyph->drawable = codepoint >= 33 && codepoint != 127;
+
+    /* Exact cache-client PixFont advance calculation. */
+    int edge_start = height / 7;
+    int edge_threshold = height / 7;
+    int edge_pixels = 0;
+    for (int y = edge_start; y < height; y++) {
+        edge_pixels += glyph_pixel_set(
+            pixels, image_width, cell_x, cell_y,
+            left, top + y);
+    }
+    if (edge_pixels <= edge_threshold) {
+        glyph->advance--;
+        glyph->offset_x = 0;
+    }
+
+    edge_pixels = 0;
+    for (int y = edge_start; y < height; y++) {
+        edge_pixels += glyph_pixel_set(
+            pixels, image_width, cell_x, cell_y,
+            right, top + y);
+    }
+    if (edge_pixels <= edge_threshold)
+        glyph->advance--;
+
+    if (codepoint < 128 && height > g_font_height)
+        g_font_height = height;
+}
+
+void fc_osrs_text_shutdown(void) {
+    if (g_menu_font.texture.id != 0)
+        UnloadFont(g_menu_font);
+    g_menu_font = (Font){0};
+    if (g_font_texture.id != 0)
+        UnloadTexture(g_font_texture);
+    g_font_texture = (Texture2D){0};
+    memset(g_glyphs, 0, sizeof(g_glyphs));
+    g_font_height = 0;
+    g_font_ready = 0;
+}
+
+static int init_menu_font(void) {
+    g_menu_font = fc_load_font_asset(FC_OSRS_MENU_FONT_ASSET,
+                                    (int)FC_OSRS_MENU_FONT_SIZE);
+    if (g_menu_font.texture.id == 0) return 0;
+    /* RuneC ui_assets.c:runec_make_font_texture_crisp. Rasterize at the
+     * displayed size, then threshold alpha and use point sampling. */
+    Image image = LoadImageFromTexture(g_menu_font.texture);
+    if (!image.data) return 0;
+    ImageFormat(&image, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+    Color *pixels = image.data;
+    for (int i = 0; i < image.width * image.height; i++)
+        pixels[i].a = pixels[i].a >= 160 ? 255 : 0;
+    Texture2D texture = LoadTextureFromImage(image);
+    UnloadImage(image);
+    if (texture.id == 0) return 0;
+    UnloadTexture(g_menu_font.texture);
+    g_menu_font.texture = texture;
+    SetTextureFilter(g_menu_font.texture, TEXTURE_FILTER_POINT);
+    return 1;
+}
+
+Font fc_osrs_menu_font(void) {
+    return g_menu_font;
+}
+
+int fc_osrs_text_init(void) {
+    fc_osrs_text_shutdown();
+    if (!init_menu_font()) {
+        fprintf(stderr, "error: failed to load required menu font %s\n",
+                FC_OSRS_MENU_FONT_ASSET);
+        fc_osrs_text_shutdown();
+        return 0;
+    }
+
+    Image image = fc_load_image_asset(FC_OSRS_FONT_ASSET);
+    if (!image.data || image.width != 320 || image.height != 320) {
+        if (image.data)
+            UnloadImage(image);
+        fc_osrs_text_shutdown();
+        return 0;
+    }
+    ImageFormat(&image, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+    Color* pixels = (Color*)image.data;
+
+    for (int codepoint = 0;
+         codepoint < FC_OSRS_FONT_GLYPHS; codepoint++) {
+        build_glyph_metrics(pixels, image.width, codepoint);
+    }
+    if (g_font_height <= 0) {
+        UnloadImage(image);
+        fc_osrs_text_shutdown();
+        return 0;
+    }
+    /* Native chat uses lowercase-i width for spaces and never blits the
+     * placeholder sprite stored in the source sheet. */
+    g_glyphs[' '].advance = g_glyphs['i'].advance;
+    g_glyphs[' '].drawable = 0;
+
+    for (int i = 0; i < image.width * image.height; i++) {
+        if (is_magenta(pixels[i]))
+            pixels[i] = BLANK;
+        else
+            pixels[i] = WHITE;
+    }
+
+    g_font_texture = LoadTextureFromImage(image);
+    UnloadImage(image);
+    if (g_font_texture.id == 0) {
+        fc_osrs_text_shutdown();
+        return 0;
+    }
+    SetTextureFilter(g_font_texture, TEXTURE_FILTER_POINT);
+    g_font_ready = 1;
+    return 1;
+}
+
+static unsigned char next_osrs_character(const unsigned char* text,
+                                         size_t remaining,
+                                         size_t* consumed) {
+    *consumed = 1;
+    if (text[0] < 0x80)
+        return text[0];
+
+    /* Cache fonts are 8-bit. Normalize the Unicode punctuation used by the
+     * viewer diagnostics to the client's supported character repertoire. */
+    if (remaining >= 3 && text[0] == 0xe2 && text[1] == 0x80 &&
+        (text[2] == 0x93 || text[2] == 0x94)) {
+        *consumed = 3;
+        return '-';
+    }
+    if (remaining >= 3 && text[0] == 0xe2 && text[1] == 0x86 &&
+        text[2] == 0x92) {
+        *consumed = 3;
+        return '>';
+    }
+
+    if ((text[0] & 0xe0) == 0xc0 && remaining >= 2)
+        *consumed = 2;
+    else if ((text[0] & 0xf0) == 0xe0 && remaining >= 3)
+        *consumed = 3;
+    else if ((text[0] & 0xf8) == 0xf0 && remaining >= 4)
+        *consumed = 4;
+    return '?';
+}
+
+void fc_osrs_draw_text(const char* text, int x, int y, int font_size,
+                       Color color) {
+    if (!text || !text[0] || font_size <= 0 || !g_font_ready)
+        return;
+
+    const unsigned char* bytes = (const unsigned char*)text;
+    size_t remaining = strlen(text);
+    while (remaining > 0) {
+        size_t consumed = 1;
+        unsigned char codepoint = next_osrs_character(
+            bytes, remaining, &consumed);
+        const FcOsrsGlyph* glyph = &g_glyphs[codepoint];
+        if (glyph->drawable) {
+            DrawTextureRec(g_font_texture, glyph->source,
+                           (Vector2){(float)(x + glyph->offset_x),
+                                     (float)(y + glyph->offset_y)},
+                           color);
+        }
+        x += glyph->advance;
+        bytes += consumed;
+        remaining -= consumed;
+    }
+}
+
+int fc_osrs_measure_text(const char* text, int font_size) {
+    if (!text || !text[0] || font_size <= 0 || !g_font_ready)
+        return 0;
+
+    int width = 0;
+    const unsigned char* bytes = (const unsigned char*)text;
+    size_t remaining = strlen(text);
+    while (remaining > 0) {
+        size_t consumed = 1;
+        unsigned char codepoint = next_osrs_character(
+            bytes, remaining, &consumed);
+        width += g_glyphs[codepoint].advance;
+        bytes += consumed;
+        remaining -= consumed;
+    }
+    return width;
+}
+
+#undef FC_OSRS_FONT_ASSET
+#undef FC_OSRS_MENU_FONT_ASSET
+#undef FC_OSRS_FONT_CELL_SIZE
+#undef FC_OSRS_FONT_COLUMNS
+#undef FC_OSRS_FONT_GLYPHS
+
+/* Minimap */
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+
+int fc_minimap_scene_load_pixels(FcMinimapScene* scene,
+                                 const Color* pixels, int width, int height) {
+    if (!scene || !pixels || width != FC_MINIMAP_SCENE_SIZE ||
+        height != FC_MINIMAP_SCENE_SIZE) {
+        return 0;
+    }
+
+    size_t count = (size_t)width * (size_t)height;
+    Color* copy = (Color*)malloc(count * sizeof(*copy));
+    if (!copy) return 0;
+    memcpy(copy, pixels, count * sizeof(*copy));
+
+    fc_minimap_scene_free(scene);
+    scene->pixels = copy;
+    scene->ready = 1;
+    return 1;
+}
+
+void fc_minimap_scene_free(FcMinimapScene* scene) {
+    if (!scene) return;
+    free(scene->pixels);
+    memset(scene, 0, sizeof(*scene));
+}
+
+Vector2 fc_minimap_rotate_offset(float dx, float dy, float camera_yaw) {
+    float sine = sinf(camera_yaw);
+    float cosine = cosf(camera_yaw);
+    return (Vector2){
+        dx * cosine + dy * sine,
+        -dx * sine + dy * cosine,
+    };
+}
+
+static Color sample_source(const FcMinimapScene* scene, float x, float y) {
+    const Color blank = {0, 0, 0, 0};
+    if (!scene || !scene->ready || !scene->pixels || x < 0.0f || y < 0.0f ||
+        x >= (float)FC_MINIMAP_SCENE_SIZE ||
+        y >= (float)FC_MINIMAP_SCENE_SIZE) {
+        return blank;
+    }
+
+    int source_x = (int)floorf(x);
+    int source_y = (int)floorf(y);
+    return scene->pixels[source_x + source_y * FC_MINIMAP_SCENE_SIZE];
+}
+
+void fc_minimap_render(const FcMinimapScene* scene, float player_x,
+                       float player_y, float camera_yaw, Color* output) {
+    if (!output) return;
+    const Color blank = {0, 0, 0, 0};
+    float sine = sinf(camera_yaw);
+    float cosine = cosf(camera_yaw);
+    float player_source_x = 0.0f;
+    float player_source_y = 0.0f;
+    float source_scale =
+        FC_MINIMAP_SCENE_PIXELS_PER_TILE /
+        FC_MINIMAP_DISPLAY_PIXELS_PER_TILE;
+    if (scene && scene->ready) {
+        player_source_x =
+            (player_x + FC_MINIMAP_SCENE_BORDER_TILES) *
+            FC_MINIMAP_SCENE_PIXELS_PER_TILE;
+        player_source_y =
+            (float)FC_MINIMAP_SCENE_SIZE -
+            (player_y + FC_MINIMAP_SCENE_BORDER_TILES) *
+            FC_MINIMAP_SCENE_PIXELS_PER_TILE;
+    }
+
+    for (int y = 0; y < FC_MINIMAP_DISPLAY_SIZE; y++) {
+        for (int x = 0; x < FC_MINIMAP_DISPLAY_SIZE; x++) {
+            float screen_x = (float)x - FC_MINIMAP_DISPLAY_CENTER;
+            float screen_y = (float)y - FC_MINIMAP_DISPLAY_CENTER;
+            int output_index = x + y * FC_MINIMAP_DISPLAY_SIZE;
+            if (screen_x * screen_x + screen_y * screen_y >
+                FC_MINIMAP_DISPLAY_RADIUS * FC_MINIMAP_DISPLAY_RADIUS) {
+                output[output_index] = blank;
+                continue;
+            }
+
+            float source_x = player_source_x +
+                (screen_x * cosine + screen_y * sine) * source_scale;
+            float source_y = player_source_y +
+                (-screen_x * sine + screen_y * cosine) * source_scale;
+            output[output_index] = sample_source(scene, source_x, source_y);
+        }
+    }
+}
+
+int fc_minimap_click_to_tile(float map_x, float map_y, float player_x,
+                             float player_y, float camera_yaw,
+                             int* tile_x, int* tile_y) {
+    if (!tile_x || !tile_y) return 0;
+    float screen_x = map_x - FC_MINIMAP_DISPLAY_CENTER;
+    float screen_y = map_y - FC_MINIMAP_DISPLAY_CENTER;
+    if (screen_x * screen_x + screen_y * screen_y >
+        FC_MINIMAP_DISPLAY_RADIUS * FC_MINIMAP_DISPLAY_RADIUS) {
+        return 0;
+    }
+
+    float sine = sinf(camera_yaw);
+    float cosine = cosf(camera_yaw);
+    float dx = (screen_x * cosine + screen_y * sine) /
+               FC_MINIMAP_DISPLAY_PIXELS_PER_TILE;
+    float dy = (screen_x * sine - screen_y * cosine) /
+               FC_MINIMAP_DISPLAY_PIXELS_PER_TILE;
+    int x = (int)floorf(player_x + dx);
+    int y = (int)floorf(player_y + dy);
+    if (x < 0 || y < 0 || x >= FC_ARENA_WIDTH || y >= FC_ARENA_HEIGHT)
+        return 0;
+    *tile_x = x;
+    *tile_y = y;
+    return 1;
+}
+
+
+/* Context Menu */
+FcNpcMenuInfo fc_menu_npc_info(int npc_type) {
+    /* Fight Cave NPC display levels, not attack-skill levels or Inferno healers. */
+    static const FcNpcMenuInfo npcs[] = {
+        {"", 0}, {"Tz-Kih", 22}, {"Tz-Kek", 45}, {"Tz-Kek", 22},
+        {"Tok-Xil", 90}, {"Yt-MejKot", 180}, {"Ket-Zek", 360},
+        {"TzTok-Jad", 702}, {"Yt-HurKot", 108}
+    };
+    if (npc_type < 0 || npc_type >= (int)(sizeof(npcs) / sizeof(npcs[0]))) npc_type = 0;
+    return npcs[npc_type];
+}
+
+uint32_t fc_menu_level_color(int player_level, int npc_level) {
+    /* Client3 entry/client.c:getCombatLevelColorTag and defines.h RGB ramps. */
+    int difference = player_level - npc_level;
+    if (difference < -9) return 0xff0000;
+    if (difference < -6) return 0xff3000;
+    if (difference < -3) return 0xff7000;
+    if (difference < 0) return 0xffb000;
+    if (difference > 9) return 0x00ff00;
+    if (difference > 6) return 0x40ff00;
+    if (difference > 3) return 0x80ff00;
+    if (difference > 0) return 0xc0ff00;
+    return 0xffff00;
+}
+
+FcMenuLayout fc_menu_layout(int x, int y, int screen_width, int screen_height,
+                             int text_width, int rows) {
+    if (rows < 0) rows = 0;
+    FcMenuLayout menu = {0, 0, text_width + 12,
+                         FC_MENU_HEADER_HEIGHT + rows * FC_MENU_ROW_HEIGHT + 4};
+    if (menu.width < 1) menu.width = 1;
+    if (screen_width > 0 && menu.width > screen_width) menu.width = screen_width;
+    menu.x = x - menu.width / 2;
+    menu.y = y;
+    if (menu.x + menu.width > screen_width) menu.x = screen_width - menu.width;
+    if (menu.y + menu.height > screen_height) menu.y = screen_height - menu.height;
+    if (menu.x < 0) menu.x = 0;
+    if (menu.y < 0) menu.y = 0;
+    return menu;
+}
+
+int fc_menu_contains(FcMenuLayout menu, int x, int y, int margin) {
+    return x >= menu.x - margin && x < menu.x + menu.width + margin &&
+           y >= menu.y - margin && y < menu.y + menu.height + margin;
+}
+
+int fc_menu_action_at(FcMenuLayout menu, int rows, int x, int y) {
+    if (!fc_menu_contains(menu, x, y, 0)) return -1;
+    int offset = y - menu.y - FC_MENU_HEADER_HEIGHT;
+    if (offset < 0) return -1;
+    int row = offset / FC_MENU_ROW_HEIGHT;
+    return row < rows ? row : -1;
+}
+
+
+/* Ui */
+#include <ctype.h>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define OSRS_ORANGE ((Color){255, 152, 31, 255})
+#define OSRS_YELLOW ((Color){255, 255, 0, 255})
+#define OSRS_GREEN  ((Color){0, 255, 0, 255})
+#define OSRS_RED    ((Color){255, 40, 25, 255})
+#define OSRS_BLUE   ((Color){90, 170, 255, 255})
+#define OSRS_PANEL  ((Color){31, 25, 18, 232})
+#define OSRS_TAB_PRESS_SECONDS 0.12f
+#define RUNEC_UI_SPELL_COUNT 80
+#define RUNEC_UI_SPELL_COLS 8
+#define RUNEC_UI_SPELL_X0 4
+#define RUNEC_UI_SPELL_Y0 6
+#define RUNEC_UI_SPELL_STEP_X 23
+#define RUNEC_UI_SPELL_STEP_Y 24
+#define RUNEC_UI_SPELL_ICON_SIZE 22
+
+typedef struct RuneCUiLayout {
+    Rectangle chat;
+    Rectangle chat_messages;
+    Rectangle chat_controls;
+    Rectangle map;
+    Rectangle minimap;
+    Rectangle compass;
+    Rectangle worldmap_button;
+    Rectangle hp_orb;
+    Rectangle prayer_orb;
+    Rectangle run_orb;
+    Rectangle spec_orb;
+    Rectangle side;
+    Rectangle side_bg;
+    Rectangle side_content;
+    Rectangle tab[RUNEC_UI_TAB_COUNT];
+} RuneCUiLayout;
+
+static const char *g_prayer_names[25] = {
+    "Thick Skin", "Burst of Strength", "Clarity of Thought", "Sharp Eye",
+    "Mystic Will", "Rock Skin", "Superhuman Strength", "Improved Reflexes",
+    "Rapid Restore", "Rapid Heal", "Protect Item", "Hawk Eye",
+    "Mystic Lore", "Steel Skin", "Ultimate Strength", "Incredible Reflexes",
+    "Protect from Magic", "Protect from Missiles", "Protect from Melee",
+    "Eagle Eye", "Mystic Might", "Retribution", "Redemption",
+    "Smite", "Preserve",
+};
+
+typedef struct RuneCUiSpellSlotRef {
+    const char *name;
+    int standard_icon_frame;
+} RuneCUiSpellSlotRef;
+
+static const RuneCUiSpellSlotRef g_standard_spell_slots[RUNEC_UI_SPELL_COUNT] = {
+    {"Lumbridge Home Teleport", 70},
+    {"Wind Strike", 0},
+    {"Confuse", 50},
+    {"Crossbow Bolt Enchantments", 65},
+    {"Water Strike", 1},
+    {"Lvl-1 Enchant", 33},
+    {"Earth Strike", 2},
+    {"Weaken", 51},
+    {"Fire Strike", 3},
+    {"Bones to Bananas", 45},
+    {"Wind Bolt", 4},
+    {"Curse", 52},
+    {"Bind", 56},
+    {"Low Level Alchemy", 48},
+    {"Water Bolt", 5},
+    {"Varrock Teleport", 20},
+    {"Lvl-2 Enchant", 34},
+    {"Earth Bolt", 6},
+    {"Lumbridge Teleport", 21},
+    {"Telekinetic Grab", 46},
+    {"Fire Bolt", 7},
+    {"Falador Teleport", 22},
+    {"Crumble Undead", 47},
+    {"Teleport to House", 23},
+    {"Wind Blast", 8},
+    {"Superheat Item", 68},
+    {"Camelot Teleport", 24},
+    {"Water Blast", 9},
+    {"Lvl-3 Enchant", 35},
+    {"Iban Blast", 40},
+    {"Snare", 57},
+    {"Magic Dart", 66},
+    {"Ardougne Teleport", 25},
+    {"Earth Blast", 10},
+    {"High Level Alchemy", 49},
+    {"Charge Water Orb", 61},
+    {"Lvl-4 Enchant", 36},
+    {"Watchtower Teleport", 26},
+    {"Fire Blast", 11},
+    {"Charge Earth Orb", 62},
+    {"Bones to Peaches", 69},
+    {"Saradomin Strike", 43},
+    {"Claws of Guthix", 42},
+    {"Flames of Zamorak", 41},
+    {"Trollheim Teleport", 27},
+    {"Wind Wave", 12},
+    {"Charge Fire Orb", 63},
+    {"Water Wave", 13},
+    {"Teleport to Ape Atoll", 28},
+    {"Earth Wave", 14},
+    {"Lvl-5 Enchant", 37},
+    {"Kourend Castle Teleport", 29},
+    {"Charge Air Orb", 64},
+    {"Vulnerability", 53},
+    {"Lvl-6 Enchant", 38},
+    {"Teleport to Target", 67},
+    {"Enfeeble", 54},
+    {"Teleother Lumbridge", 30},
+    {"Fire Wave", 15},
+    {"Entangle", 58},
+    {"Stun", 55},
+    {"Charge", 44},
+    {"Wind Surge", 16},
+    {"Teleother Falador", 31},
+    {"Water Surge", 17},
+    {"Tele Block", 60},
+    {"Lvl-7 Enchant", 39},
+    {"Earth Surge", 18},
+    {"Teleother Camelot", 32},
+    {"Fire Surge", 19},
+    {"Civitas illa Fortis Teleport", 72},
+    {"Jewellery Enchantments", 71},
+    {"Monster Inspect", 73},
+    {"Summon Boat", 75},
+    {"Teleport to Boat", 74},
+    {"Alchemic Divergence", 77},
+    {"Alchemic Convergence", 78},
+    {"Minigame Teleport", 76},
+    {"League Home Teleport", 79},
+    {NULL, -1},
+};
+
+static const char *spell_name(int slot) {
+    if (slot >= 0
+            && slot < (int)(sizeof(g_standard_spell_slots)
+                            / sizeof(g_standard_spell_slots[0]))
+            && g_standard_spell_slots[slot].name) {
+        return g_standard_spell_slots[slot].name;
+    }
+    return TextFormat("Spell %d", slot + 1);
+}
+
+static const char *g_equipment_names[RUNEC_UI_EQUIP_SLOT_COUNT] = {
+    "Head", "Cape", "Neck", "Weapon", "Body", "Shield", "Unused",
+    "Legs", "Unused", "Hands", "Feet", "Unused", "Ring", "Ammo",
+};
+
+static const Rectangle g_equipment_offsets[RUNEC_UI_EQUIP_SLOT_COUNT] = {
+    {77, 4, 36, 36},
+    {36, 43, 36, 36},
+    {77, 43, 36, 36},
+    {21, 82, 36, 36},
+    {77, 82, 36, 36},
+    {133, 82, 36, 36},
+    {-1000, -1000, 0, 0},
+    {77, 122, 36, 36},
+    {-1000, -1000, 0, 0},
+    {21, 162, 36, 36},
+    {77, 162, 36, 36},
+    {-1000, -1000, 0, 0},
+    {133, 162, 36, 36},
+    {133, 43, 36, 36},
+};
+
+static const char *g_worn_icon_names[RUNEC_UI_EQUIP_SLOT_COUNT] = {
+    "wornicons_0", "wornicons_1", "wornicons_2", "wornicons_3",
+    "wornicons_4", "wornicons_5", "wornicons_10", "wornicons_6",
+    NULL, "wornicons_7", "wornicons_8", NULL, "wornicons_9", "wornicons_11",
+};
+
+typedef struct RuneCUiCombatStyleDef {
+    int visible;
+    int style_index;
+    const char *label;
+    const char *mode;
+    const char *icon_asset;
+} RuneCUiCombatStyleDef;
+
+typedef struct RuneCUiCombatProfile {
+    int osrs_category;
+    const RuneCUiCombatStyleDef styles[RUNEC_UI_COMBAT_STYLE_COUNT];
+} RuneCUiCombatProfile;
+
+#define COMBAT_STYLE(style_index, label, mode, icon_asset) \
+    {1, style_index, label, mode, icon_asset}
+#define COMBAT_STYLE_HIDDEN \
+    {0, 0, "", "", ""}
+
+/*
+ * Exact b237 combat_interface_weapon_category DB rows from the local
+ * Joshua-F dump. Core owns the selected style; the viewer owns this
+ * presentation mapping so weapon tabs use the same labels/icons as OSRS.
+ */
+static const RuneCUiCombatProfile g_combat_profiles[] = {
+    {0, {
+        COMBAT_STYLE(0, "Punch", "Accurate", "combaticons_14"),
+        COMBAT_STYLE(1, "Kick", "Aggressive", "combaticons_15"),
+        COMBAT_STYLE(3, "Block", "Defensive", "combaticons_16"),
+        COMBAT_STYLE_HIDDEN,
+    }},
+    {1, {
+        COMBAT_STYLE(0, "Chop", "Accurate", "combaticons_1"),
+        COMBAT_STYLE(1, "Hack", "Aggressive", "combaticons_2"),
+        COMBAT_STYLE(2, "Smash", "Aggressive", "combaticons_3"),
+        COMBAT_STYLE(3, "Block", "Defensive", "combaticons_0"),
+    }},
+    {2, {
+        COMBAT_STYLE(0, "Pound", "Accurate", "combaticons2_2"),
+        COMBAT_STYLE(1, "Pummel", "Aggressive", "combaticons2_3"),
+        COMBAT_STYLE(3, "Block", "Defensive", "combaticons2_0"),
+        COMBAT_STYLE_HIDDEN,
+    }},
+    {3, {
+        COMBAT_STYLE(0, "Accurate", "Accurate", "combaticons2_15"),
+        COMBAT_STYLE(1, "Rapid", "Rapid", "combaticons2_16"),
+        COMBAT_STYLE(3, "Longrange", "Longrange", "combaticons2_17"),
+        COMBAT_STYLE_HIDDEN,
+    }},
+    {4, {
+        COMBAT_STYLE(0, "Chop", "Accurate", "combaticons3_6"),
+        COMBAT_STYLE(1, "Slash", "Aggressive", "combaticons3_5"),
+        COMBAT_STYLE(2, "Lunge", "Controlled", "combaticons3_4"),
+        COMBAT_STYLE(3, "Block", "Defensive", "combaticons3_7"),
+    }},
+    {5, {
+        COMBAT_STYLE(0, "Accurate", "Accurate", "combaticons2_5"),
+        COMBAT_STYLE(1, "Rapid", "Rapid", "combaticons2_6"),
+        COMBAT_STYLE(3, "Longrange", "Longrange", "combaticons2_7"),
+        COMBAT_STYLE_HIDDEN,
+    }},
+    {6, {
+        COMBAT_STYLE(0, "Scorch", "Accurate", "combaticons3_16"),
+        COMBAT_STYLE(1, "Flare", "Aggressive", "combaticons3_17"),
+        COMBAT_STYLE(2, "Blaze", "Defensive", "combaticons3_18"),
+        COMBAT_STYLE_HIDDEN,
+    }},
+    {7, {
+        COMBAT_STYLE(0, "Short fuse", "Accurate", "combaticons3_15"),
+        COMBAT_STYLE(1, "Medium fuse", "Rapid", "combaticons3_9"),
+        COMBAT_STYLE(3, "Long fuse", "Longrange", "combaticons3_8"),
+        COMBAT_STYLE_HIDDEN,
+    }},
+    {8, {
+        COMBAT_STYLE(0, "Aim and Fire", "Accurate", "prayeron_13"),
+        COMBAT_STYLE(1, "Kick", "Aggressive", "combaticons_15"),
+        COMBAT_STYLE_HIDDEN,
+        COMBAT_STYLE_HIDDEN,
+    }},
+    {9, {
+        COMBAT_STYLE(0, "Chop", "Accurate", "combaticons_6"),
+        COMBAT_STYLE(1, "Slash", "Aggressive", "combaticons_5"),
+        COMBAT_STYLE(2, "Lunge", "Controlled", "combaticons_7"),
+        COMBAT_STYLE(3, "Block", "Defensive", "combaticons_4"),
+    }},
+    {10, {
+        COMBAT_STYLE(0, "Chop", "Accurate", "combaticons_6"),
+        COMBAT_STYLE(1, "Slash", "Aggressive", "combaticons_5"),
+        COMBAT_STYLE(2, "Smash", "Aggressive", "combaticons_5"),
+        COMBAT_STYLE(3, "Block", "Defensive", "combaticons_4"),
+    }},
+    {11, {
+        COMBAT_STYLE(0, "Spike", "Accurate", "combaticons3_1"),
+        COMBAT_STYLE(1, "Impale", "Aggressive", "combaticons3_3"),
+        COMBAT_STYLE(2, "Smash", "Aggressive", "combaticons3_2"),
+        COMBAT_STYLE(3, "Block", "Defensive", "combaticons3_0"),
+    }},
+    {12, {
+        COMBAT_STYLE(0, "Jab", "Controlled", "combaticons3_11"),
+        COMBAT_STYLE(1, "Swipe", "Aggressive", "combaticons3_12"),
+        COMBAT_STYLE(3, "Fend", "Defensive", "combaticons3_10"),
+        COMBAT_STYLE_HIDDEN,
+    }},
+    {13, {
+        COMBAT_STYLE(0, "Bash", "Accurate", "combaticons2_13"),
+        COMBAT_STYLE(1, "Pound", "Aggressive", "combaticons2_14"),
+        COMBAT_STYLE(3, "Block", "Defensive", "combaticons_19"),
+        COMBAT_STYLE_HIDDEN,
+    }},
+    {14, {
+        COMBAT_STYLE(0, "Reap", "Accurate", "combaticons2_19"),
+        COMBAT_STYLE(1, "Chop", "Aggressive", "combaticons2_9"),
+        COMBAT_STYLE(2, "Jab", "Controlled", "combaticons2_18"),
+        COMBAT_STYLE(3, "Block", "Defensive", "combaticons2_8"),
+    }},
+    {15, {
+        COMBAT_STYLE(0, "Lunge", "Controlled", "combaticons_8"),
+        COMBAT_STYLE(1, "Swipe", "Controlled", "combaticons_18"),
+        COMBAT_STYLE(2, "Pound", "Controlled", "combaticons_9"),
+        COMBAT_STYLE(3, "Block", "Defensive", "combaticons_17"),
+    }},
+    {16, {
+        COMBAT_STYLE(0, "Pound", "Accurate", "combaticons_13"),
+        COMBAT_STYLE(1, "Pummel", "Aggressive", "combaticons_11"),
+        COMBAT_STYLE(2, "Spike", "Controlled", "combaticons_12"),
+        COMBAT_STYLE(3, "Block", "Defensive", "combaticons_10"),
+    }},
+    {17, {
+        COMBAT_STYLE(0, "Stab", "Accurate", "combaticons_7"),
+        COMBAT_STYLE(1, "Lunge", "Aggressive", "combaticons_6"),
+        COMBAT_STYLE(2, "Slash", "Controlled", "combaticons_5"),
+        COMBAT_STYLE(3, "Block", "Defensive", "combaticons_4"),
+    }},
+    {18, {
+        COMBAT_STYLE(0, "Bash", "Accurate", "combaticons2_13"),
+        COMBAT_STYLE(1, "Pound", "Aggressive", "combaticons2_14"),
+        COMBAT_STYLE(3, "Focus", "Defensive", "combaticons_19"),
+        COMBAT_STYLE_HIDDEN,
+    }},
+    {19, {
+        COMBAT_STYLE(0, "Accurate", "Accurate", "combaticons2_10"),
+        COMBAT_STYLE(1, "Rapid", "Rapid", "combaticons2_11"),
+        COMBAT_STYLE(3, "Longrange", "Longrange", "combaticons2_12"),
+        COMBAT_STYLE_HIDDEN,
+    }},
+    {20, {
+        COMBAT_STYLE(0, "Flick", "Accurate", "combaticons3_13"),
+        COMBAT_STYLE(1, "Lash", "Controlled", "combaticons3_14"),
+        COMBAT_STYLE(3, "Deflect", "Defensive", "combaticons3_13"),
+        COMBAT_STYLE_HIDDEN,
+    }},
+    {21, {
+        COMBAT_STYLE(0, "Jab", "Accurate", "combaticons2_13"),
+        COMBAT_STYLE(1, "Swipe", "Aggressive", "combaticons2_14"),
+        COMBAT_STYLE(3, "Fend", "Defensive", "combaticons_19"),
+        COMBAT_STYLE_HIDDEN,
+    }},
+    {22, {
+        COMBAT_STYLE(0, "Jab", "Accurate", "combaticons2_13"),
+        COMBAT_STYLE(1, "Swipe", "Aggressive", "combaticons2_14"),
+        COMBAT_STYLE(3, "Fend", "Defensive", "combaticons_19"),
+        COMBAT_STYLE_HIDDEN,
+    }},
+    {24, {
+        COMBAT_STYLE(0, "Accurate", "Accurate", "combaticons2_10"),
+        COMBAT_STYLE(1, "Accurate", "Accurate", "combaticons2_10"),
+        COMBAT_STYLE(3, "Longrange", "Longrange", "combaticons2_12"),
+        COMBAT_STYLE_HIDDEN,
+    }},
+    {25, {
+        COMBAT_STYLE(0, "Lunge", "Controlled", "combaticons_8"),
+        COMBAT_STYLE(1, "Swipe", "Controlled", "combaticons_18"),
+        COMBAT_STYLE(2, "Pound", "Controlled", "combaticons_9"),
+        COMBAT_STYLE(3, "Block", "Defensive", "combaticons_17"),
+    }},
+    {26, {
+        COMBAT_STYLE(0, "Jab", "Controlled", "combaticons3_11"),
+        COMBAT_STYLE(1, "Swipe", "Aggressive", "combaticons3_12"),
+        COMBAT_STYLE(3, "Fend", "Defensive", "combaticons3_10"),
+        COMBAT_STYLE_HIDDEN,
+    }},
+    {27, {
+        COMBAT_STYLE(0, "Pound", "Accurate", "combaticons2_2"),
+        COMBAT_STYLE(1, "Pummel", "Aggressive", "combaticons2_3"),
+        COMBAT_STYLE(2, "Smash", "Aggressive", "combaticons2_0"),
+        COMBAT_STYLE_HIDDEN,
+    }},
+    {28, {
+        COMBAT_STYLE(1, "Pummel", "Aggressive", "combaticons2_1"),
+        COMBAT_STYLE(3, "Block", "Defensive", "combaticons2_0"),
+        COMBAT_STYLE_HIDDEN,
+        COMBAT_STYLE_HIDDEN,
+    }},
+    {29, {
+        COMBAT_STYLE(0, "Accurate", "Accurate", "combaticons2_10"),
+        COMBAT_STYLE(1, "Accurate", "Accurate", "combaticons2_10"),
+        COMBAT_STYLE(3, "Longrange", "Longrange", "combaticons2_12"),
+        COMBAT_STYLE_HIDDEN,
+    }},
+    {30, {
+        COMBAT_STYLE(0, "Stab", "Accurate", "combaticons_7"),
+        COMBAT_STYLE(1, "Lunge", "Aggressive", "combaticons_6"),
+        COMBAT_STYLE(2, "Pound", "Controlled", "combaticons_5"),
+        COMBAT_STYLE(3, "Block", "Defensive", "combaticons_4"),
+    }},
+};
+
+#undef COMBAT_STYLE
+#undef COMBAT_STYLE_HIDDEN
+
+static void copy_text(char *dst, size_t cap, const char *src) {
+    if (cap == 0)
+        return;
+    if (!src)
+        src = "";
+    snprintf(dst, cap, "%s", src);
+}
+
+static const RuneCUiCombatProfile *combat_profile_for_osrs_category(int category) {
+    int count = (int)(sizeof(g_combat_profiles) / sizeof(g_combat_profiles[0]));
+    for (int i = 0; i < count; i++) {
+        if (g_combat_profiles[i].osrs_category == category)
+            return &g_combat_profiles[i];
+    }
+    return &g_combat_profiles[0];
+}
+
+static int osrs_combat_category_from_core_weapon(int core_weapon_category) {
+    switch (core_weapon_category) {
+    case 0: return 0;   /* unarmed */
+    case 1: return 10;  /* 2h sword */
+    case 2: return 1;   /* axe */
+    case 4: return 2;   /* blunt */
+    case 5: return 27;  /* bludgeon */
+    case 6: return 28;  /* bulwark */
+    case 7: return 7;   /* chinchompa/grenade */
+    case 8: return 4;   /* claw */
+    case 9: return 5;   /* crossbow */
+    case 10: return 20; /* whip */
+    case 11: return 6;  /* fixed device */
+    case 12: return 8;  /* gun */
+    case 13: return 11; /* pickaxe */
+    case 14: return 12; /* polearm */
+    case 15: return 13; /* polestaff */
+    case 16: return 24; /* powered staff */
+    case 17: return 14; /* scythe */
+    case 18: return 9;  /* slash sword */
+    case 19: return 15; /* spear */
+    case 20: return 16; /* spiked */
+    case 21: return 17; /* stab sword */
+    case 22: return 18; /* staff */
+    case 23: return 19; /* thrown */
+    case 24: return 10; /* two-handed sword */
+    case 25: return 3;  /* bow */
+    case 26: return 6;  /* salamander */
+    case 27: return 6;  /* multi-style fallback */
+    case 28: return 29; /* powered wand */
+    case 29: return 21; /* bladed staff */
+    case 30: return 30; /* partisan */
+    default: return 0;
+    }
+}
+
+static const RuneCUiCombatStyleOption *combat_style_option_by_index(
+    const RuneCUiState *ui,
+    int style_index) {
+    if (!ui)
+        return NULL;
+    for (int i = 0; i < RUNEC_UI_COMBAT_STYLE_COUNT; i++) {
+        const RuneCUiCombatStyleOption *option = &ui->combat_styles[i];
+        if (option->visible && option->style_index == style_index)
+            return option;
+    }
+    return NULL;
+}
+
+static const RuneCUiCombatStyleOption *selected_combat_style_option(
+    const RuneCUiState *ui) {
+    const RuneCUiCombatStyleOption *option =
+        combat_style_option_by_index(ui, ui ? ui->selected_combat_style : 0);
+    if (option)
+        return option;
+    if (ui && ui->selected_combat_style == 2)
+        option = combat_style_option_by_index(ui, 3);
+    if (option)
+        return option;
+    if (!ui)
+        return NULL;
+    for (int i = 0; i < RUNEC_UI_COMBAT_STYLE_COUNT; i++) {
+        if (ui->combat_styles[i].visible)
+            return &ui->combat_styles[i];
+    }
+    return NULL;
+}
+
+static int combat_style_option_selected(const RuneCUiState *ui,
+                                        const RuneCUiCombatStyleOption *option) {
+    if (!ui || !option || !option->visible)
+        return 0;
+    if (ui->selected_combat_style == option->style_index)
+        return 1;
+    return ui->selected_combat_style == 2
+        && option->style_index == 3
+        && combat_style_option_by_index(ui, 2) == NULL;
+}
+
+void runec_ui_set_combat_weapon_name(RuneCUiState *ui, const char *name) {
+    if (!ui)
+        return;
+    copy_text(ui->combat_weapon_name, sizeof(ui->combat_weapon_name),
+              name && name[0] ? name : "Unarmed");
+}
+
+void runec_ui_set_combat_style_profile(RuneCUiState *ui, int core_weapon_category) {
+    if (!ui)
+        return;
+    ui->combat_weapon_category = core_weapon_category;
+    int osrs_category = osrs_combat_category_from_core_weapon(core_weapon_category);
+    const RuneCUiCombatProfile *profile =
+        combat_profile_for_osrs_category(osrs_category);
+    for (int i = 0; i < RUNEC_UI_COMBAT_STYLE_COUNT; i++) {
+        const RuneCUiCombatStyleDef *src = &profile->styles[i];
+        RuneCUiCombatStyleOption *dst = &ui->combat_styles[i];
+        dst->visible = src->visible;
+        dst->style_index = src->style_index;
+        copy_text(dst->label, sizeof(dst->label), src->label);
+        copy_text(dst->mode, sizeof(dst->mode), src->mode);
+        copy_text(dst->icon_asset, sizeof(dst->icon_asset), src->icon_asset);
+    }
+    if (!selected_combat_style_option(ui)) {
+        for (int i = 0; i < RUNEC_UI_COMBAT_STYLE_COUNT; i++) {
+            if (ui->combat_styles[i].visible) {
+                ui->selected_combat_style = ui->combat_styles[i].style_index;
+                break;
+            }
+        }
+    }
+}
+
+static float fmin2(float a, float b) {
+    return a < b ? a : b;
+}
+
+const char *runec_ui_tab_name(RuneCUiTab tab) {
+    switch (tab) {
+    case RUNEC_UI_TAB_COMBAT: return "Combat";
+    case RUNEC_UI_TAB_SKILLS: return "Skills";
+    case RUNEC_UI_TAB_QUESTS: return "Quests";
+    case RUNEC_UI_TAB_INVENTORY: return "Inventory";
+    case RUNEC_UI_TAB_EQUIPMENT: return "Equipment";
+    case RUNEC_UI_TAB_PRAYER: return "Prayer";
+    case RUNEC_UI_TAB_SPELLBOOK: return "Spellbook";
+    case RUNEC_UI_TAB_SETTINGS: return "Settings";
+    case RUNEC_UI_TAB_CLAN_CHAT: return "Clan Chat";
+    case RUNEC_UI_TAB_FRIENDS: return "Friends";
+    default: return "Unknown";
+    }
+}
+
+static void ui_layout(int screen_w, int screen_h, RuneCUiLayout *out) {
+    memset(out, 0, sizeof(*out));
+
+    out->chat = (Rectangle){0, (float)screen_h - RUNEC_OSRS_CHAT_H,
+                            RUNEC_OSRS_CHAT_W, RUNEC_OSRS_CHAT_H};
+    out->chat_messages = (Rectangle){7, out->chat.y + 7, 506, 126};
+    out->chat_controls = (Rectangle){0, out->chat.y + 142, 519, 23};
+
+    out->map = (Rectangle){(float)screen_w - RUNEC_OSRS_MAP_CONTAINER_W, 0,
+                           RUNEC_OSRS_MAP_CONTAINER_W, RUNEC_OSRS_MAP_CONTAINER_H};
+    out->minimap = (Rectangle){out->map.x + RUNEC_OSRS_MINIMAP_X,
+                               out->map.y + RUNEC_OSRS_MINIMAP_Y,
+                               RUNEC_OSRS_MINIMAP_W, RUNEC_OSRS_MINIMAP_H};
+    out->compass = (Rectangle){out->map.x + RUNEC_OSRS_COMPASS_X,
+                               out->map.y + RUNEC_OSRS_COMPASS_Y,
+                               RUNEC_OSRS_COMPASS_W, RUNEC_OSRS_COMPASS_H};
+    out->hp_orb = (Rectangle){out->map.x + RUNEC_OSRS_ORBS_X + RUNEC_OSRS_HP_X,
+                              out->map.y + RUNEC_OSRS_ORBS_Y + RUNEC_OSRS_HP_Y, 57, 34};
+    out->prayer_orb = (Rectangle){out->map.x + RUNEC_OSRS_ORBS_X + RUNEC_OSRS_PRAYER_X,
+                                  out->map.y + RUNEC_OSRS_ORBS_Y + RUNEC_OSRS_PRAYER_Y, 57, 34};
+    out->run_orb = (Rectangle){out->map.x + RUNEC_OSRS_ORBS_X + RUNEC_OSRS_RUN_X,
+                               out->map.y + RUNEC_OSRS_ORBS_Y + RUNEC_OSRS_RUN_Y, 57, 34};
+    out->spec_orb = (Rectangle){out->map.x + RUNEC_OSRS_ORBS_X + RUNEC_OSRS_SPEC_X,
+                                out->map.y + RUNEC_OSRS_ORBS_Y + RUNEC_OSRS_SPEC_Y, 57, 34};
+    out->worldmap_button = (Rectangle){out->map.x + RUNEC_OSRS_ORBS_X + RUNEC_OSRS_WORLDMAP_X,
+                                       out->map.y + RUNEC_OSRS_ORBS_Y + RUNEC_OSRS_WORLDMAP_Y,
+                                       30, 30};
+
+    out->side = (Rectangle){(float)screen_w - RUNEC_OSRS_SIDE_MENU_W,
+                            (float)screen_h - RUNEC_OSRS_SIDE_MENU_H,
+                            RUNEC_OSRS_SIDE_MENU_W, RUNEC_OSRS_SIDE_MENU_H};
+    out->side_bg = out->side;
+    out->side_content = (Rectangle){out->side.x + RUNEC_OSRS_SIDE_CONTENT_X,
+                                    out->side.y + RUNEC_OSRS_SIDE_CONTENT_Y,
+                                    RUNEC_OSRS_SIDE_CONTENT_W,
+                                    RUNEC_OSRS_SIDE_CONTENT_H};
+
+    for (int i = 0; i < (int)(sizeof(RUNEC_OSRS_SIDE_STONES) / sizeof(RUNEC_OSRS_SIDE_STONES[0])); i++) {
+        const RuneCUiStoneRef *ref = &RUNEC_OSRS_SIDE_STONES[i];
+        if (ref->logical_tab < 0 || ref->logical_tab >= RUNEC_UI_TAB_COUNT)
+            continue;
+        float row_y = out->side.y + (i < 7 ? RUNEC_OSRS_SIDE_TOP_Y : RUNEC_OSRS_SIDE_BOTTOM_Y);
+        out->tab[ref->logical_tab] =
+            (Rectangle){out->side.x + ref->rect.x, row_y + ref->rect.y,
+                        ref->rect.width, ref->rect.height};
+    }
+}
+
+static int mouse_over_ui(const RuneCUiLayout *layout, Vector2 mouse) {
+    if (CheckCollisionPointRec(mouse, layout->chat)
+        || CheckCollisionPointRec(mouse, layout->side)
+        || CheckCollisionPointRec(mouse, layout->map))
+        return 1;
+    for (int i = 0; i < RUNEC_UI_TAB_COUNT; i++) {
+        if (CheckCollisionPointRec(mouse, layout->tab[i]))
+            return 1;
+    }
+    return 0;
+}
+
+static void clear_intent(RuneCUiState *ui) {
+    memset(&ui->last_intent, 0, sizeof(ui->last_intent));
+}
+
+static void set_context(RuneCUiState *ui, Vector2 pos, const char *title,
+                        const char **actions, int action_count) {
+    ui->context_open = 1;
+    ui->context_pos = pos;
+    ui->context_target_color = OSRS_ORANGE;
+    ui->context_combat_level = 0;
+    ui->drag.active = 0;
+    copy_text(ui->context_title, sizeof(ui->context_title), title);
+    ui->context_source_kind = RUNEC_UI_CONTEXT_NONE;
+    ui->context_source_slot = -1;
+    ui->context_source_item_id = 0;
+    if (action_count > RUNEC_UI_CONTEXT_ACTIONS)
+        action_count = RUNEC_UI_CONTEXT_ACTIONS;
+    if (action_count < 0) action_count = 0;
+    ui->context_action_count = action_count;
+    for (int i = 0; i < action_count; i++) {
+        copy_text(ui->context_actions[i], sizeof(ui->context_actions[i]), actions[i]);
+    }
+}
+
+static void set_context_source(RuneCUiState *ui,
+                               RuneCUiContextSourceKind source_kind,
+                               int source_slot,
+                               uint32_t source_item_id) {
+    ui->context_source_kind = source_kind;
+    ui->context_source_slot = source_slot;
+    ui->context_source_item_id = source_item_id;
+}
+
+void runec_ui_close_context(RuneCUiState *ui) {
+    ui->context_open = 0;
+    ui->context_source_kind = RUNEC_UI_CONTEXT_NONE;
+    ui->context_source_slot = -1;
+    ui->context_source_item_id = 0;
+}
+
+void runec_ui_open_world_context(RuneCUiState *ui, Vector2 pos, int npc_type, int can_walk) {
+    FcNpcMenuInfo npc = fc_menu_npc_info(npc_type);
+    const char *actions[4];
+    int count = 0;
+    if (npc.level) actions[count++] = "Attack";
+    if (can_walk) actions[count++] = "Walk here";
+    if (npc.level) actions[count++] = "Examine";
+    actions[count++] = "Cancel";
+    set_context(ui, pos, npc.name, actions, count);
+    ui->context_combat_level = npc.level;
+    ui->context_source_kind = RUNEC_UI_CONTEXT_WORLD;
+    ui->context_target_color = OSRS_YELLOW;
+    runec_ui_clear_selected_target(ui);
+}
+
+void runec_ui_open_prayer_context(RuneCUiState *ui, Vector2 pos, int slot) {
+    if (slot < 0 || slot >= 25) return;
+    const char *actions[] = {ui->active_prayers & (1u << slot) ? "Deactivate" : "Activate", "Cancel"};
+    set_context(ui, pos, g_prayer_names[slot], actions, 2);
+    set_context_source(ui, RUNEC_UI_CONTEXT_PRAYER, slot, 0);
+}
+
+static int context_has_target(const RuneCUiState *ui, const char *action) {
+    return ui->context_title[0] && strcmp(action, "Cancel") && strcmp(action, "Walk here");
+}
+
+static void context_level_suffix(const RuneCUiState *ui, char suffix[32]) {
+    suffix[0] = '\0';
+    if (ui->context_combat_level > 0)
+        snprintf(suffix, 32, " (level-%d)", ui->context_combat_level);
+}
+
+static FcMenuLayout context_layout(const RuneCUiState *ui) {
+    Font font = fc_osrs_menu_font();
+    float width = MeasureTextEx(font, "Choose Option", FC_OSRS_MENU_FONT_SIZE, 0).x;
+    char suffix[32];
+    context_level_suffix(ui, suffix);
+    for (int i = 0; i < ui->context_action_count; i++) {
+        char text[128];
+        const char *action = ui->context_actions[i];
+        snprintf(text, sizeof(text), "%s%s%s%s", action,
+                 context_has_target(ui, action) ? " " : "",
+                 context_has_target(ui, action) ? ui->context_title : "",
+                 context_has_target(ui, action) ? suffix : "");
+        float row_width = MeasureTextEx(font, text, FC_OSRS_MENU_FONT_SIZE, 0).x;
+        if (row_width > width) width = row_width;
+    }
+    return fc_menu_layout((int)ui->context_pos.x, (int)ui->context_pos.y,
+        GetScreenWidth(), GetScreenHeight(), (int)ceilf(width), ui->context_action_count);
+}
+
+void runec_ui_clear_selected_target(RuneCUiState *ui) {
+    if (!ui)
+        return;
+    memset(&ui->selected_target, 0, sizeof(ui->selected_target));
+    ui->selected_target.source_slot = -1;
+}
+
+static void set_selected_item_target(RuneCUiState *ui, int slot) {
+    if (!ui || slot < 0 || slot >= RUNEC_UI_INV_SLOT_COUNT
+            || !ui->inventory[slot].enabled)
+        return;
+    ui->selected_target.kind = RUNEC_UI_SELECTED_ITEM;
+    ui->selected_target.source_slot = slot;
+    ui->selected_target.source_item_id = ui->inventory[slot].item_id;
+    copy_text(ui->selected_target.label, sizeof(ui->selected_target.label),
+              ui->inventory[slot].label);
+    copy_text(ui->selected_target.verb, sizeof(ui->selected_target.verb), "Use");
+}
+
+static void set_selected_spell_target(RuneCUiState *ui, int slot,
+                                      const char *name) {
+    if (!ui || slot < 0)
+        return;
+    ui->selected_target.kind = RUNEC_UI_SELECTED_SPELL;
+    ui->selected_target.source_slot = slot;
+    ui->selected_target.source_item_id = 0;
+    copy_text(ui->selected_target.label, sizeof(ui->selected_target.label), name);
+    copy_text(ui->selected_target.verb, sizeof(ui->selected_target.verb), "Cast");
+}
+
+void runec_ui_init(RuneCUiState *ui) {
+    memset(ui, 0, sizeof(*ui));
+    ui->active_tab = RUNEC_UI_TAB_SKILLS;
+    ui->context_source_slot = -1;
+    ui->selected_target.source_slot = -1;
+    ui->drag.source_slot = -1;
+    ui->selected_combat_style = 0;
+    ui->auto_retaliate = 1;
+    ui->special_attack_enabled = 0;
+    ui->special_attack_energy = 100;
+    runec_ui_set_combat_weapon_name(ui, "Abyssal whip");
+    runec_ui_set_combat_style_profile(ui, 10);
+    ui->hitpoints = 99;
+    ui->hitpoints_max = 99;
+    ui->prayer_points = 77;
+    ui->prayer_points_max = 77;
+    ui->run_energy = 100;
+    ui->run_enabled = 1;
+    ui->combat_level = 126;
+    for (int i = 0; i < RUNEC_UI_SKILL_COUNT; i++) {
+        ui->skill_current[i] = 1;
+        ui->skill_base[i] = 1;
+    }
+    ui->skill_current[8] = 10;
+    ui->skill_base[8] = 10;
+    ui->skill_total = 33;
+    const char *start_tab = getenv("RUNEC_UI_START_TAB");
+    if (start_tab && start_tab[0]) {
+        for (int i = 0; i < RUNEC_UI_TAB_COUNT; i++) {
+            if (strcmp(start_tab, runec_ui_tab_name((RuneCUiTab)i)) == 0) {
+                ui->active_tab = (RuneCUiTab)i;
+                break;
+            }
+        }
+        if (start_tab[0] >= '0' && start_tab[0] <= '9') {
+            int tab_index = atoi(start_tab);
+            if (tab_index >= 0 && tab_index < RUNEC_UI_TAB_COUNT)
+                ui->active_tab = (RuneCUiTab)tab_index;
+        }
+    }
+
+    runec_ui_assets_load(&ui->assets);
+    Image minimap = GenImageColor(152, 152, BLANK);
+    ui->minimap_texture = LoadTextureFromImage(minimap);
+    UnloadImage(minimap);
+    if (ui->minimap_texture.id != 0) {
+        SetTextureFilter(ui->minimap_texture, TEXTURE_FILTER_POINT);
+        ui->minimap_texture_ready = 1;
+    }
+
+
+}
+
+void runec_ui_shutdown(RuneCUiState *ui) {
+    if (ui->minimap_texture_ready) {
+        UnloadTexture(ui->minimap_texture);
+        ui->minimap_texture_ready = 0;
+    }
+    for (int i = 0; i < ui->item_icon_count; i++) {
+        if (ui->item_icons[i].ready && ui->item_icons[i].texture.id != 0)
+            UnloadTexture(ui->item_icons[i].texture);
+    }
+    ui->item_icon_count = 0;
+    runec_ui_assets_unload(&ui->assets);
+}
+
+void runec_ui_clear_minimap(RuneCUiState *ui) {
+    ui->minimap_dot_count = 0;
+}
+
+void runec_ui_add_minimap_dot(RuneCUiState *ui, float dx, float dy,
+                              RuneCUiMinimapDotKind kind) {
+    if (ui->minimap_dot_count >= RUNEC_UI_MINIMAP_DOTS)
+        return;
+    ui->minimap_dots[ui->minimap_dot_count++] =
+        (RuneCUiMinimapDot){dx, dy, kind};
+}
+
+void runec_ui_update_minimap(RuneCUiState *ui, const Color *pixels,
+                             int width, int height) {
+    if (!ui->minimap_texture_ready || !pixels || width != 152 || height != 152)
+        return;
+    UpdateTexture(ui->minimap_texture, pixels);
+}
+
+void runec_ui_set_minimap_rotation(RuneCUiState *ui, float radians) {
+    if (!ui) return;
+    ui->minimap_rotation = radians;
+}
+
+void runec_ui_set_item_icon(RuneCUiState *ui, uint32_t icon_item_id, Texture2D texture) {
+    if (!ui || icon_item_id == 0 || texture.id == 0)
+        return;
+    for (int i = 0; i < ui->item_icon_count; i++) {
+        if (ui->item_icons[i].item_id == icon_item_id) {
+            if (ui->item_icons[i].ready && ui->item_icons[i].texture.id != 0)
+                UnloadTexture(ui->item_icons[i].texture);
+            ui->item_icons[i].texture = texture;
+            ui->item_icons[i].ready = 1;
+            return;
+        }
+    }
+    if (ui->item_icon_count >= RUNEC_UI_ITEM_ICON_CACHE) {
+        UnloadTexture(texture);
+        return;
+    }
+    ui->item_icons[ui->item_icon_count++] =
+        (RuneCUiItemIcon){icon_item_id, texture, 1};
+}
+
+static int handle_context_click(RuneCUiState *ui, Vector2 mouse) {
+    if (!ui->context_open)
+        return 0;
+
+    FcMenuLayout menu = context_layout(ui);
+    if (!fc_menu_contains(menu, (int)mouse.x, (int)mouse.y, 0)) {
+        runec_ui_close_context(ui);
+        return 1; /* Dismissal must not click through into the scene/UI. */
+    }
+
+    for (int i = 0; i < ui->context_action_count; i++) {
+        if (fc_menu_action_at(menu, ui->context_action_count, (int)mouse.x, (int)mouse.y) == i) {
+            const char *action = ui->context_actions[i];
+            if (strcmp(action, "Cancel") == 0) {
+                runec_ui_close_context(ui);
+                return 1;
+            }
+            /* Do not act on a different item if the original slot changed
+             * while its menu was open (consumption, ammo depletion, etc.). */
+            if ((ui->context_source_kind == RUNEC_UI_CONTEXT_INVENTORY &&
+                 ui->inventory[ui->context_source_slot].item_id != ui->context_source_item_id) ||
+                (ui->context_source_kind == RUNEC_UI_CONTEXT_EQUIPMENT &&
+                 ui->equipment[ui->context_source_slot].item_id != ui->context_source_item_id)) {
+                runec_ui_close_context(ui);
+                return 1;
+            }
+            if (ui->context_source_kind == RUNEC_UI_CONTEXT_WORLD) {
+                ui->last_intent.kind = RUNEC_UI_INTENT_WORLD_ACTION;
+                ui->last_intent.primary = i;
+            } else if (ui->context_source_kind == RUNEC_UI_CONTEXT_INVENTORY) {
+                if (strcmp(action, "Use") == 0) {
+                    set_selected_item_target(ui, ui->context_source_slot);
+                    ui->last_intent.kind = RUNEC_UI_INTENT_SELECTED_ITEM;
+                    ui->last_intent.primary = ui->context_source_slot;
+                    ui->last_intent.secondary = (int)ui->context_source_item_id;
+                } else {
+                    ui->last_intent.kind = RUNEC_UI_INTENT_INVENTORY_ACTION;
+                    ui->last_intent.primary = ui->context_source_slot;
+                    ui->last_intent.secondary = i;
+                }
+            } else if (ui->context_source_kind == RUNEC_UI_CONTEXT_EQUIPMENT) {
+                ui->last_intent.kind = RUNEC_UI_INTENT_EQUIPMENT_ACTION;
+                ui->last_intent.primary = ui->context_source_slot;
+                ui->last_intent.secondary = i;
+            } else if (ui->context_source_kind == RUNEC_UI_CONTEXT_PRAYER) {
+                if (strcmp(action, "Activate") == 0 || strcmp(action, "Deactivate") == 0) {
+                    ui->last_intent.kind = RUNEC_UI_INTENT_PRAYER_SLOT;
+                    ui->last_intent.primary = ui->context_source_slot;
+                    ui->last_intent.secondary = strcmp(action, "Deactivate") == 0 ? -1 : 1;
+                    copy_text(ui->last_intent.text,
+                              sizeof(ui->last_intent.text),
+                              ui->context_title);
+                } else if (strcmp(action, "Quick-prayer") == 0) {
+                    ui->last_intent.kind = RUNEC_UI_INTENT_QUICK_PRAYER_SLOT;
+                    ui->last_intent.primary = ui->context_source_slot;
+                    copy_text(ui->last_intent.text,
+                              sizeof(ui->last_intent.text),
+                              ui->context_title);
+                } else {
+                    ui->last_intent.kind = RUNEC_UI_INTENT_CONTEXT_ACTION;
+                    ui->last_intent.primary = i;
+                    ui->last_intent.secondary = ui->context_source_slot;
+                }
+            } else if (ui->context_source_kind == RUNEC_UI_CONTEXT_SPELL
+                    && strcmp(action, "Cast") == 0) {
+                set_selected_spell_target(ui, ui->context_source_slot,
+                                          ui->context_title);
+                ui->last_intent.kind = RUNEC_UI_INTENT_SELECTED_SPELL;
+                ui->last_intent.primary = ui->context_source_slot;
+                ui->last_intent.secondary = 0;
+            } else if (ui->context_source_kind == RUNEC_UI_CONTEXT_SPELL
+                    && strcmp(action, "Autocast") == 0) {
+                ui->last_intent.kind = RUNEC_UI_INTENT_AUTOCAST_SPELL;
+                ui->last_intent.primary = ui->context_source_slot;
+                ui->last_intent.secondary = 0;
+                copy_text(ui->last_intent.text,
+                          sizeof(ui->last_intent.text),
+                          ui->context_title);
+            } else {
+                ui->last_intent.kind = RUNEC_UI_INTENT_CONTEXT_ACTION;
+                ui->last_intent.primary = i;
+                ui->last_intent.secondary = ui->context_source_slot;
+            }
+            ui->last_intent.position = mouse;
+            if (!ui->last_intent.text[0])
+                copy_text(ui->last_intent.text, sizeof(ui->last_intent.text),
+                          action);
+            runec_ui_close_context(ui);
+            return 1;
+        }
+    }
+
+    return 1;
+}
+
+static Rectangle inv_slot_rect(const RuneCUiLayout *layout, int slot) {
+    int col = slot % 4;
+    int row = slot / 4;
+    return (Rectangle){
+        layout->side_content.x + RUNEC_OSRS_INVENTORY_SLOT_X + col * RUNEC_OSRS_INVENTORY_SLOT_STEP_X,
+        layout->side_content.y + RUNEC_OSRS_INVENTORY_SLOT_Y + row * RUNEC_OSRS_INVENTORY_SLOT_STEP_Y,
+        RUNEC_OSRS_INVENTORY_SLOT_W,
+        RUNEC_OSRS_INVENTORY_SLOT_H,
+    };
+}
+
+static int inv_slot_at(const RuneCUiLayout *layout, Vector2 mouse) {
+    for (int i = 0; i < RUNEC_UI_INV_SLOT_COUNT; i++) {
+        if (CheckCollisionPointRec(mouse, inv_slot_rect(layout, i)))
+            return i;
+    }
+    return -1;
+}
+
+static Rectangle equip_slot_rect(const RuneCUiLayout *layout, int slot) {
+    if (slot < 0 || slot >= RUNEC_UI_EQUIP_SLOT_COUNT)
+        return (Rectangle){0, 0, 0, 0};
+    Rectangle off = g_equipment_offsets[slot];
+    if (off.width <= 0 || off.height <= 0)
+        return off;
+    return (Rectangle){
+        layout->side_content.x + off.x,
+        layout->side_content.y + off.y,
+        off.width,
+        off.height,
+    };
+}
+
+static int equipment_slot_at(const RuneCUiLayout *layout, Vector2 mouse) {
+    for (int i = 0; i < RUNEC_UI_EQUIP_SLOT_COUNT; i++) {
+        Rectangle r = equip_slot_rect(layout, i);
+        if (r.width > 0 && CheckCollisionPointRec(mouse, r))
+            return i;
+    }
+    return -1;
+}
+
+static int ui_inventory_slot_at(const RuneCUiLayout *layout,
+                                Vector2 mouse) {
+    return inv_slot_at(layout, mouse);
+}
+
+static int ui_equipment_slot_at(const RuneCUiLayout *layout,
+                                Vector2 mouse) {
+    return equipment_slot_at(layout, mouse);
+}
+
+static Rectangle skill_slot_rect(const RuneCUiLayout *layout, int slot) {
+    if (slot < 0 || slot >= (int)(sizeof(RUNEC_OSRS_SKILLS) / sizeof(RUNEC_OSRS_SKILLS[0])))
+        return (Rectangle){0, 0, 0, 0};
+    Rectangle r = RUNEC_OSRS_SKILLS[slot].rect;
+    return (Rectangle){layout->side_content.x + r.x, layout->side_content.y + r.y,
+                       r.width, r.height};
+}
+
+static int skill_slot_at(const RuneCUiLayout *layout, Vector2 mouse) {
+    int count = (int)(sizeof(RUNEC_OSRS_SKILLS) / sizeof(RUNEC_OSRS_SKILLS[0]));
+    for (int i = 0; i < count; i++) {
+        if (CheckCollisionPointRec(mouse, skill_slot_rect(layout, i)))
+            return i;
+    }
+    Rectangle total = {layout->side_content.x + RUNEC_OSRS_STATS_TOTAL.x,
+                       layout->side_content.y + RUNEC_OSRS_STATS_TOTAL.y,
+                       RUNEC_OSRS_STATS_TOTAL.width, RUNEC_OSRS_STATS_TOTAL.height};
+    if (CheckCollisionPointRec(mouse, total))
+        return count;
+    return -1;
+}
+
+static Rectangle side_ref_rect(const RuneCUiLayout *layout, Rectangle ref) {
+    return (Rectangle){layout->side_content.x + ref.x, layout->side_content.y + ref.y,
+                       ref.width, ref.height};
+}
+
+static const RuneCUiCombatStyleOption *combat_style_at(
+    const RuneCUiState *ui,
+    const RuneCUiLayout *layout,
+    Vector2 mouse) {
+    if (!ui)
+        return NULL;
+    int visible_slot = 0;
+    int layout_count = (int)(sizeof(RUNEC_OSRS_COMBAT_STYLES)
+        / sizeof(RUNEC_OSRS_COMBAT_STYLES[0]));
+    for (int i = 0; i < RUNEC_UI_COMBAT_STYLE_COUNT && visible_slot < layout_count; i++) {
+        const RuneCUiCombatStyleOption *option = &ui->combat_styles[i];
+        if (!option->visible)
+            continue;
+        const RuneCUiCombatStyleRef *slot =
+            &RUNEC_OSRS_COMBAT_STYLES[visible_slot++];
+        if (CheckCollisionPointRec(mouse, side_ref_rect(layout, slot->rect)))
+            return option;
+    }
+    return NULL;
+}
+
+static Rectangle grid_cell_rect(const RuneCUiLayout *layout, int index,
+                                int cols, float x0, float y0,
+                                float step_x, float step_y,
+                                float w, float h) {
+    int col = index % cols;
+    int row = index / cols;
+    return (Rectangle){
+        layout->side_content.x + x0 + col * step_x,
+        layout->side_content.y + y0 + row * step_y,
+        w,
+        h,
+    };
+}
+
+static int grid_index_at(const RuneCUiLayout *layout, Vector2 mouse,
+                         int count, int cols, float x0, float y0,
+                         float step_x, float step_y, float w, float h) {
+    for (int i = 0; i < count; i++) {
+        if (CheckCollisionPointRec(mouse,
+                grid_cell_rect(layout, i, cols, x0, y0, step_x, step_y, w, h)))
+            return i;
+    }
+    return -1;
+}
+
+static void update_tab_press_timers(RuneCUiState *ui, float dt) {
+    for (int i = 0; i < RUNEC_UI_TAB_COUNT; i++) {
+        if (ui->tab_press_timer[i] <= 0.0f)
+            continue;
+        ui->tab_press_timer[i] -= dt;
+        if (ui->tab_press_timer[i] < 0.0f)
+            ui->tab_press_timer[i] = 0.0f;
+    }
+}
+
+static int handle_selected_target_cancel(RuneCUiState *ui) {
+    if (ui->selected_target.kind == RUNEC_UI_SELECTED_NONE ||
+        !IsKeyPressed(KEY_ESCAPE))
+        return 0;
+    runec_ui_clear_selected_target(ui);
+    ui->last_intent.kind = RUNEC_UI_INTENT_SELECTED_TARGET_CANCEL;
+    return 1;
+}
+
+static int handle_drag_release(RuneCUiState *ui,
+                               const RuneCUiLayout *layout,
+                               Vector2 mouse) {
+    if (!ui->drag.active || !IsMouseButtonReleased(MOUSE_BUTTON_LEFT))
+        return 0;
+
+    RuneCUiDragState drag = ui->drag;
+    ui->drag.active = 0;
+    ui->drag.source_kind = RUNEC_UI_CONTEXT_NONE;
+    ui->drag.source_slot = -1;
+
+    if (drag.source_kind == RUNEC_UI_CONTEXT_INVENTORY) {
+        int target = ui_inventory_slot_at(layout, mouse);
+        float dx = mouse.x - drag.start.x;
+        float dy = mouse.y - drag.start.y;
+        int moved = fabsf(dx) > 3.0f || fabsf(dy) > 3.0f;
+        if (target >= 0 && moved) {
+            ui->last_intent.kind = RUNEC_UI_INTENT_INVENTORY_DRAG;
+            ui->last_intent.primary = drag.source_slot;
+            ui->last_intent.secondary = target;
+            ui->last_intent.position = mouse;
+            return 1;
+        }
+        ui->last_intent.kind = RUNEC_UI_INTENT_INVENTORY_SLOT;
+        ui->last_intent.primary = drag.source_slot;
+        ui->last_intent.position = mouse;
+        return 1;
+    }
+
+    if (drag.source_kind == RUNEC_UI_CONTEXT_EQUIPMENT) {
+        ui->last_intent.kind = RUNEC_UI_INTENT_EQUIPMENT_SLOT;
+        ui->last_intent.primary = drag.source_slot;
+        ui->last_intent.position = mouse;
+        return 1;
+    }
+    return 0;
+}
+
+static int handle_tab_click(RuneCUiState *ui,
+                            const RuneCUiLayout *layout,
+                            Vector2 mouse) {
+    for (int i = 0; i < RUNEC_UI_TAB_COUNT; i++) {
+        if (!CheckCollisionPointRec(mouse, layout->tab[i]))
+            continue;
+        ui->active_tab = (RuneCUiTab)i;
+        ui->tab_press_timer[i] = OSRS_TAB_PRESS_SECONDS;
+        ui->last_intent.kind = RUNEC_UI_INTENT_TAB;
+        ui->last_intent.primary = i;
+        ui->last_intent.position = mouse;
+        return 1;
+    }
+    return 0;
+}
+
+static int handle_orb_or_minimap_click(RuneCUiState *ui,
+                                       const RuneCUiLayout *layout,
+                                       Vector2 mouse) {
+    Rectangle run_button = {
+        layout->run_orb.x + 3,
+        layout->run_orb.y + 5,
+        50,
+        26,
+    };
+    if (CheckCollisionPointRec(mouse, run_button)) {
+        ui->last_intent.kind = RUNEC_UI_INTENT_RUN_TOGGLE;
+        ui->last_intent.position = mouse;
+        return 1;
+    }
+    if (CheckCollisionPointRec(mouse, layout->prayer_orb)) {
+        ui->last_intent.kind = RUNEC_UI_INTENT_QUICK_PRAYER_TOGGLE;
+        ui->last_intent.primary = 1;
+        ui->last_intent.position = mouse;
+        copy_text(ui->last_intent.text, sizeof(ui->last_intent.text),
+                  "Quick-prayer");
+        return 1;
+    }
+    if (CheckCollisionPointRec(mouse, layout->spec_orb)) {
+        ui->special_attack_enabled = !ui->special_attack_enabled;
+        ui->last_intent.kind = RUNEC_UI_INTENT_SPECIAL_ATTACK;
+        ui->last_intent.primary = ui->special_attack_enabled;
+        ui->last_intent.secondary = ui->special_attack_energy;
+        ui->last_intent.position = mouse;
+        return 1;
+    }
+
+    Vector2 center = {
+        layout->minimap.x + layout->minimap.width * 0.5f,
+        layout->minimap.y + layout->minimap.height * 0.5f,
+    };
+    float dx = mouse.x - center.x;
+    float dy = mouse.y - center.y;
+    if (!CheckCollisionPointRec(mouse, layout->minimap) ||
+        dx * dx + dy * dy > 75.0f * 75.0f)
+        return 0;
+    ui->last_intent.kind = RUNEC_UI_INTENT_MINIMAP_CLICK;
+    ui->last_intent.primary = (int)(mouse.x - layout->minimap.x);
+    ui->last_intent.secondary = (int)(mouse.y - layout->minimap.y);
+    ui->last_intent.position = mouse;
+    return 1;
+}
+
+static int handle_combat_click(RuneCUiState *ui,
+                               const RuneCUiLayout *layout,
+                               Vector2 mouse) {
+    const RuneCUiCombatStyleOption *style =
+        combat_style_at(ui, layout, mouse);
+    if (style) {
+        ui->selected_combat_style = style->style_index;
+        ui->last_intent.kind = RUNEC_UI_INTENT_COMBAT_STYLE;
+        ui->last_intent.primary = style->style_index;
+        ui->last_intent.position = mouse;
+        copy_text(ui->last_intent.text, sizeof(ui->last_intent.text),
+                  style->label);
+        return 1;
+    }
+    if (CheckCollisionPointRec(mouse,
+            side_ref_rect(layout, RUNEC_OSRS_COMBAT_RETALIATE))) {
+        ui->auto_retaliate = !ui->auto_retaliate;
+        ui->last_intent.kind = RUNEC_UI_INTENT_AUTO_RETALIATE;
+        ui->last_intent.primary = ui->auto_retaliate;
+        ui->last_intent.position = mouse;
+        return 1;
+    }
+    if (CheckCollisionPointRec(mouse,
+            side_ref_rect(layout, RUNEC_OSRS_COMBAT_SPECIAL_BAR))) {
+        ui->special_attack_enabled = !ui->special_attack_enabled;
+        ui->last_intent.kind = RUNEC_UI_INTENT_SPECIAL_ATTACK;
+        ui->last_intent.primary = ui->special_attack_enabled;
+        ui->last_intent.secondary = ui->special_attack_energy;
+        ui->last_intent.position = mouse;
+        return 1;
+    }
+    return 0;
+}
+
+static int handle_inventory_click(RuneCUiState *ui,
+                                  const RuneCUiLayout *layout,
+                                  Vector2 mouse) {
+    int slot = ui_inventory_slot_at(layout, mouse);
+    if (slot < 0)
+        return 0;
+    if (ui->selected_target.kind == RUNEC_UI_SELECTED_ITEM ||
+        ui->selected_target.kind == RUNEC_UI_SELECTED_SPELL) {
+        ui->last_intent.kind = ui->selected_target.kind == RUNEC_UI_SELECTED_ITEM
+            ? RUNEC_UI_INTENT_SELECTED_ITEM_ON_ITEM
+            : RUNEC_UI_INTENT_SELECTED_SPELL_ON_ITEM;
+        ui->last_intent.primary = ui->selected_target.source_slot;
+        ui->last_intent.secondary = slot;
+        ui->last_intent.position = mouse;
+        snprintf(ui->last_intent.text, sizeof(ui->last_intent.text),
+                 "%s -> %s", ui->selected_target.label,
+                 ui->inventory[slot].enabled
+                    ? ui->inventory[slot].label : "slot");
+        runec_ui_clear_selected_target(ui);
+        return 1;
+    }
+    ui->drag.active = 1;
+    ui->drag.source_kind = RUNEC_UI_CONTEXT_INVENTORY;
+    ui->drag.source_slot = slot;
+    ui->drag.start = mouse;
+    return 1;
+}
+
+static int handle_equipment_click(RuneCUiState *ui,
+                                  const RuneCUiLayout *layout,
+                                  Vector2 mouse) {
+    int slot = ui_equipment_slot_at(layout, mouse);
+    if (slot < 0)
+        return 0;
+    ui->drag.active = 1;
+    ui->drag.source_kind = RUNEC_UI_CONTEXT_EQUIPMENT;
+    ui->drag.source_slot = slot;
+    ui->drag.start = mouse;
+    return 1;
+}
+
+static int handle_prayer_click(RuneCUiState *ui,
+                               const RuneCUiLayout *layout,
+                               Vector2 mouse) {
+    int slot = grid_index_at(layout, mouse, 25, 5, 8, 8, 36, 36, 34, 34);
+    if (slot < 0)
+        return 0;
+    ui->last_intent.kind = RUNEC_UI_INTENT_PRAYER_SLOT;
+    ui->last_intent.primary = slot;
+    ui->last_intent.position = mouse;
+    copy_text(ui->last_intent.text, sizeof(ui->last_intent.text),
+              g_prayer_names[slot]);
+    return 1;
+}
+
+static int handle_spellbook_click(RuneCUiState *ui,
+                                  const RuneCUiLayout *layout,
+                                  Vector2 mouse) {
+    int slot = grid_index_at(layout, mouse, RUNEC_UI_SPELL_COUNT,
+        RUNEC_UI_SPELL_COLS, RUNEC_UI_SPELL_X0, RUNEC_UI_SPELL_Y0,
+        RUNEC_UI_SPELL_STEP_X, RUNEC_UI_SPELL_STEP_Y,
+        RUNEC_UI_SPELL_ICON_SIZE, RUNEC_UI_SPELL_ICON_SIZE);
+    if (slot < 0)
+        return 0;
+    set_selected_spell_target(ui, slot, spell_name(slot));
+    ui->last_intent.kind = RUNEC_UI_INTENT_SELECTED_SPELL;
+    ui->last_intent.primary = slot;
+    ui->last_intent.position = mouse;
+    copy_text(ui->last_intent.text, sizeof(ui->last_intent.text),
+              spell_name(slot));
+    return 1;
+}
+
+static int handle_skills_click(RuneCUiState *ui,
+                               const RuneCUiLayout *layout,
+                               Vector2 mouse) {
+    int slot = skill_slot_at(layout, mouse);
+    if (slot < 0)
+        return 0;
+    ui->last_intent.kind = RUNEC_UI_INTENT_SKILL_SLOT;
+    ui->last_intent.primary = slot;
+    ui->last_intent.position = mouse;
+    copy_text(ui->last_intent.text, sizeof(ui->last_intent.text),
+              slot < (int)(sizeof(RUNEC_OSRS_SKILLS) /
+                           sizeof(RUNEC_OSRS_SKILLS[0]))
+                ? RUNEC_OSRS_SKILLS[slot].name : "Total level");
+    return 1;
+}
+
+static int handle_active_tab_click(RuneCUiState *ui,
+                                   const RuneCUiLayout *layout,
+                                   Vector2 mouse) {
+    switch (ui->active_tab) {
+    case RUNEC_UI_TAB_COMBAT:
+        return handle_combat_click(ui, layout, mouse);
+    case RUNEC_UI_TAB_INVENTORY:
+        return handle_inventory_click(ui, layout, mouse);
+    case RUNEC_UI_TAB_EQUIPMENT:
+        return handle_equipment_click(ui, layout, mouse);
+    case RUNEC_UI_TAB_PRAYER:
+        return handle_prayer_click(ui, layout, mouse);
+    case RUNEC_UI_TAB_SPELLBOOK:
+        return handle_spellbook_click(ui, layout, mouse);
+    case RUNEC_UI_TAB_SKILLS:
+        return handle_skills_click(ui, layout, mouse);
+    default:
+        return 0;
+    }
+}
+
+static int handle_primary_click(RuneCUiState *ui,
+                                const RuneCUiLayout *layout,
+                                Vector2 mouse) {
+    if (!IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
+        return 0;
+    if (handle_tab_click(ui, layout, mouse) ||
+        handle_orb_or_minimap_click(ui, layout, mouse) ||
+        handle_active_tab_click(ui, layout, mouse))
+        return 1;
+    return 0;
+}
+
+static int handle_context_menu_open(RuneCUiState *ui,
+                                    const RuneCUiLayout *layout,
+                                    Vector2 mouse) {
+    if (!IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) ||
+        !mouse_over_ui(layout, mouse))
+        return 0;
+    runec_ui_clear_selected_target(ui);
+
+    if (ui->active_tab == RUNEC_UI_TAB_COMBAT) {
+        const RuneCUiCombatStyleOption *style =
+            combat_style_at(ui, layout, mouse);
+        if (style) {
+            static const char *actions[] = {"Select", "Examine"};
+            set_context(ui, mouse, style->label, actions, 2);
+            return 1;
+        }
+        if (CheckCollisionPointRec(mouse,
+                side_ref_rect(layout, RUNEC_OSRS_COMBAT_RETALIATE))) {
+            static const char *actions[] = {"Toggle", "Examine"};
+            set_context(ui, mouse, "Auto Retaliate", actions, 2);
+            return 1;
+        }
+        if (CheckCollisionPointRec(mouse,
+                side_ref_rect(layout, RUNEC_OSRS_COMBAT_SPECIAL_BAR))) {
+            static const char *actions[] = {"Use", "Examine"};
+            set_context(ui, mouse, "Special Attack", actions, 2);
+            return 1;
+        }
+    }
+    if (ui->active_tab == RUNEC_UI_TAB_INVENTORY) {
+        int slot = ui_inventory_slot_at(layout, mouse);
+        if (slot >= 0) {
+            const char *actions[] = {ui->inventory[slot].action ?
+                ui->inventory[slot].action : "Use", "Examine", "Cancel"};
+            static const char *empty_actions[] = {"Cancel"};
+            const char *title = ui->inventory[slot].enabled
+                ? ui->inventory[slot].label : "Empty inventory slot";
+            if (ui->inventory[slot].enabled) {
+                set_context(ui, mouse, title, actions, 3);
+                set_context_source(ui, RUNEC_UI_CONTEXT_INVENTORY, slot,
+                                   ui->inventory[slot].item_id);
+            } else {
+                set_context(ui, mouse, title, empty_actions, 1);
+            }
+            return 1;
+        }
+    }
+    if (ui->active_tab == RUNEC_UI_TAB_EQUIPMENT) {
+        int slot = ui_equipment_slot_at(layout, mouse);
+        if (slot >= 0) {
+            static const char *actions[] = {"Remove", "Examine", "Cancel"};
+            static const char *empty_actions[] = {"Cancel"};
+            if (ui->equipment[slot].enabled) {
+                set_context(ui, mouse, ui->equipment[slot].label, actions, 3);
+                set_context_source(ui, RUNEC_UI_CONTEXT_EQUIPMENT, slot,
+                                   ui->equipment[slot].item_id);
+            } else {
+                set_context(ui, mouse, "", empty_actions, 1);
+            }
+            return 1;
+        }
+    }
+    if (ui->active_tab == RUNEC_UI_TAB_PRAYER) {
+        int slot = grid_index_at(layout, mouse, 25, 5,
+                                 8, 8, 36, 36, 34, 34);
+        if (slot >= 0) {
+            static const char *actions[] = {
+                "Activate", "Quick-prayer", "Examine"
+            };
+            set_context(ui, mouse, g_prayer_names[slot], actions, 3);
+            set_context_source(ui, RUNEC_UI_CONTEXT_PRAYER, slot, 0);
+            return 1;
+        }
+    }
+    if (ui->active_tab == RUNEC_UI_TAB_SPELLBOOK) {
+        int slot = grid_index_at(layout, mouse, RUNEC_UI_SPELL_COUNT,
+            RUNEC_UI_SPELL_COLS, RUNEC_UI_SPELL_X0, RUNEC_UI_SPELL_Y0,
+            RUNEC_UI_SPELL_STEP_X, RUNEC_UI_SPELL_STEP_Y,
+            RUNEC_UI_SPELL_ICON_SIZE, RUNEC_UI_SPELL_ICON_SIZE);
+        if (slot >= 0) {
+            static const char *actions[] = {"Cast", "Autocast", "Examine"};
+            set_context(ui, mouse, spell_name(slot), actions, 3);
+            set_context_source(ui, RUNEC_UI_CONTEXT_SPELL, slot, 0);
+            return 1;
+        }
+    }
+
+    static const char *actions[] = {"Cancel"};
+    set_context(ui, mouse, "RuneC", actions, 1);
+    return 1;
+}
+
+int runec_ui_handle_input(RuneCUiState *ui, int screen_w, int screen_h) {
+    RuneCUiLayout layout;
+    ui_layout(screen_w, screen_h, &layout);
+    Vector2 mouse = GetMousePosition();
+    clear_intent(ui);
+    update_tab_press_timers(ui, GetFrameTime());
+
+    if (ui->context_open) {
+        if (IsKeyPressed(KEY_ESCAPE)) {
+            runec_ui_close_context(ui);
+        } else if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            handle_context_click(ui, mouse);
+        } else if (!fc_menu_contains(context_layout(ui), (int)mouse.x, (int)mouse.y,
+                                      FC_MENU_DISMISS_MARGIN)) {
+            runec_ui_close_context(ui);
+        }
+        return 1;
+    }
+
+    if (handle_selected_target_cancel(ui) ||
+        handle_drag_release(ui, &layout, mouse) ||
+        handle_primary_click(ui, &layout, mouse) ||
+        handle_context_menu_open(ui, &layout, mouse))
+        return 1;
+
+    if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT) && !ui->context_open)
+        return 0;
+    return mouse_over_ui(&layout, mouse);
+}
+
+static void draw_text_shadow(const RuneCUiState *ui, const char *text,
+                             float x, float y, float size, Color color) {
+    runec_ui_draw_text_shadow(&ui->assets, text, x, y, size, color);
+}
+
+static void draw_centered_text(const RuneCUiState *ui, const char *text,
+                               Rectangle rect, float size, Color color) {
+    if (size < 12.0f)
+        size = 12.0f;
+    Font font = runec_ui_font_for_size(&ui->assets, size);
+    Vector2 m = MeasureTextEx(font, text, size, 0);
+    draw_text_shadow(ui, text, rect.x + (rect.width - m.x) * 0.5f,
+                     rect.y + (rect.height - m.y) * 0.5f, size, color);
+}
+
+static int draw_asset_centered(const RuneCUiState *ui, const char *name,
+                               Rectangle rect, float max_w, float max_h, Color tint) {
+    const Texture2D *tex = runec_ui_asset(&ui->assets, name);
+    if (!tex)
+        return 0;
+    float scale = fmin2(max_w / (float)tex->width, max_h / (float)tex->height);
+    if (scale > 1.0f)
+        scale = 1.0f;
+    Rectangle dst = {
+        rect.x + (rect.width - tex->width * scale) * 0.5f,
+        rect.y + (rect.height - tex->height * scale) * 0.5f,
+        tex->width * scale,
+        tex->height * scale,
+    };
+    runec_ui_draw_asset(&ui->assets, name, dst, tint);
+    return 1;
+}
+
+static void draw_asset_tiled(const RuneCUiState *ui, const char *name,
+                             Rectangle dst, Color tint) {
+    const Texture2D *tex = runec_ui_asset(&ui->assets, name);
+    if (!tex) {
+        DrawRectangleRec(dst, OSRS_PANEL);
+        return;
+    }
+    for (float y = dst.y; y < dst.y + dst.height; y += (float)tex->height) {
+        for (float x = dst.x; x < dst.x + dst.width; x += (float)tex->width) {
+            float w = fmin2((float)tex->width, dst.x + dst.width - x);
+            float h = fmin2((float)tex->height, dst.y + dst.height - y);
+            DrawTexturePro(*tex, (Rectangle){0, 0, w, h},
+                           (Rectangle){x, y, w, h}, (Vector2){0, 0}, 0, tint);
+        }
+    }
+}
+
+static void draw_side_chrome(const RuneCUiState *ui, const RuneCUiLayout *layout) {
+    Rectangle backing = {layout->side.x + 20, layout->side.y + 27, 200, 281};
+    draw_asset_tiled(ui, "tradebacking_dark", backing, WHITE);
+    if (!runec_ui_asset_ready(&ui->assets, "tradebacking_dark"))
+        DrawRectangleRec(backing, OSRS_PANEL);
+
+    runec_ui_draw_asset(&ui->assets, "osrs_stretch_side_topbottom_0",
+                        (Rectangle){layout->side.x, layout->side.y + RUNEC_OSRS_SIDE_TOP_Y,
+                                    241, 37}, WHITE);
+    runec_ui_draw_asset(&ui->assets, "osrs_stretch_side_topbottom_1",
+                        (Rectangle){layout->side.x, layout->side.y + RUNEC_OSRS_SIDE_BOTTOM_Y,
+                                    241, 37}, WHITE);
+    runec_ui_draw_asset(&ui->assets, "osrs_stretch_side_columns_0",
+                        (Rectangle){layout->side.x + 2, layout->side.y + 37, 26, 261}, WHITE);
+    runec_ui_draw_asset(&ui->assets, "osrs_stretch_side_columns_1",
+                        (Rectangle){layout->side.x + 212, layout->side.y + 37, 26, 261}, WHITE);
+
+    for (int i = 0; i < (int)(sizeof(RUNEC_OSRS_SIDE_STONES) / sizeof(RUNEC_OSRS_SIDE_STONES[0])); i++) {
+        const RuneCUiStoneRef *ref = &RUNEC_OSRS_SIDE_STONES[i];
+        if (ref->logical_tab != ui->active_tab)
+            continue;
+        float row_y = layout->side.y + (i < 7 ? RUNEC_OSRS_SIDE_TOP_Y : RUNEC_OSRS_SIDE_BOTTOM_Y);
+        float pressed = ui->tab_press_timer[ui->active_tab] > 0.0f ? 1.0f : 0.0f;
+        Rectangle stone = {layout->side.x + ref->rect.x,
+                           row_y + ref->rect.y + pressed,
+                           ref->rect.width, ref->rect.height};
+        draw_asset_tiled(ui, ref->stone_asset, stone, WHITE);
+        DrawRectangleRec(stone, (Color){145, 22, 18, pressed > 0.0f ? 72 : 44});
+        break;
+    }
+
+    for (int i = 0; i < (int)(sizeof(RUNEC_OSRS_SIDE_STONES) / sizeof(RUNEC_OSRS_SIDE_STONES[0])); i++) {
+        const RuneCUiStoneRef *ref = &RUNEC_OSRS_SIDE_STONES[i];
+        float row_y = layout->side.y + (i < 7 ? RUNEC_OSRS_SIDE_TOP_Y : RUNEC_OSRS_SIDE_BOTTOM_Y);
+        float pressed = ref->logical_tab == ui->active_tab
+            && ui->tab_press_timer[ui->active_tab] > 0.0f ? 1.0f : 0.0f;
+        Rectangle icon = {layout->side.x + ref->icon_rect.x, row_y + ref->icon_rect.y,
+                          ref->icon_rect.width, ref->icon_rect.height};
+        icon.y += pressed;
+        runec_ui_draw_asset(&ui->assets, ref->icon_asset, icon, WHITE);
+    }
+}
+
+static void draw_orb(const RuneCUiState *ui, Rectangle rect, const char *filler,
+                     const char *icon, int value, int max_value, Color color) {
+    runec_ui_draw_asset(&ui->assets, "orb_frame_0", rect, WHITE);
+    if (!runec_ui_asset_ready(&ui->assets, "orb_frame_0"))
+        DrawRectangleRounded((Rectangle){rect.x + 0, rect.y + 7, 34, 20}, 0.22f, 5,
+                             (Color){50, 46, 37, 235});
+    Rectangle fill = {rect.x + 27, rect.y + 4, 26, 26};
+    runec_ui_draw_asset(&ui->assets, "orb_filler_0", fill, WHITE);
+    runec_ui_draw_asset(&ui->assets, filler, fill, WHITE);
+    if (!runec_ui_asset_ready(&ui->assets, filler))
+        DrawCircle((int)(fill.x + 14), (int)(fill.y + 14), 12, color);
+    draw_asset_centered(ui, icon, fill, 22, 22, WHITE);
+
+    char text[16];
+    snprintf(text, sizeof(text), "%d", value);
+    Color text_color = max_value > 0 && value < max_value / 3 ? OSRS_RED : OSRS_GREEN;
+    draw_centered_text(ui, text, (Rectangle){rect.x + 3, rect.y + 14, 24, 13}, 12, text_color);
+}
+
+static Color orb_value_color(int value, int max_value) {
+    if (max_value <= 0)
+        max_value = 1;
+    if (value < 0)
+        value = 0;
+    if (value > max_value)
+        value = max_value;
+
+    int half = max_value / 2;
+    if (half <= 0)
+        return value >= max_value ? (Color){0, 255, 0, 255}
+                                  : (Color){255, 0, 0, 255};
+    if (value > half) {
+        int red = 255 - 255 * (value - half) / half;
+        return (Color){(unsigned char)red, 255, 0, 255};
+    }
+    int green = 255 * value / half;
+    return (Color){255, (unsigned char)green, 0, 255};
+}
+
+static void draw_run_orb(const RuneCUiState *ui, Rectangle rect) {
+    Rectangle button = {rect.x + 3, rect.y + 5, 50, 26};
+    const char *frame = CheckCollisionPointRec(GetMousePosition(), button)
+        ? "orb_frame_1" : "orb_frame_0";
+    runec_ui_draw_asset(&ui->assets, frame, rect, WHITE);
+
+    Rectangle fill = {rect.x + 27, rect.y + 4, 26, 26};
+    const char *filler = ui->run_enabled ? "orb_filler_6" : "orb_filler_5";
+    const char *icon = ui->run_enabled ? "orb_icon_3" : "orb_icon_2";
+    runec_ui_draw_asset(&ui->assets, filler, fill,
+                        (Color){255, 255, 255, 230});
+
+    int energy = ui->run_energy;
+    if (energy < 0) energy = 0;
+    if (energy > 100) energy = 100;
+    int empty_height = 26 * (100 - energy) / 100;
+    const Texture2D *empty = runec_ui_asset(&ui->assets, "orb_filler_0");
+    if (empty && empty_height > 0) {
+        float source_height = (float)empty->height * (float)empty_height /
+                              fill.height;
+        DrawTexturePro(*empty,
+                       (Rectangle){0, 0, (float)empty->width, source_height},
+                       (Rectangle){fill.x, fill.y, fill.width,
+                                   (float)empty_height},
+                       (Vector2){0, 0}, 0.0f, WHITE);
+    }
+    draw_asset_centered(ui, icon, fill, 26, 26, WHITE);
+
+    char text[16];
+    snprintf(text, sizeof(text), "%d", energy);
+    draw_centered_text(ui, text,
+                       (Rectangle){rect.x + 3, rect.y + 14, 24, 13},
+                       12, orb_value_color(energy, 100));
+}
+
+static void draw_minimap(const RuneCUiState *ui, const RuneCUiLayout *layout) {
+    Vector2 center = {layout->minimap.x + layout->minimap.width * 0.5f,
+                      layout->minimap.y + layout->minimap.height * 0.5f};
+    if (ui->minimap_texture_ready) {
+        DrawTexturePro(ui->minimap_texture,
+                       (Rectangle){0, 0, 152, 152},
+                       layout->minimap, (Vector2){0, 0}, 0, WHITE);
+    } else {
+        DrawCircle((int)center.x, (int)center.y, 72.0f, (Color){85, 124, 52, 255});
+    }
+
+    for (int i = 0; i < ui->minimap_dot_count; i++) {
+        const RuneCUiMinimapDot *dot = &ui->minimap_dots[i];
+        float px = center.x +
+            dot->dx * FC_MINIMAP_DISPLAY_PIXELS_PER_TILE;
+        float py = center.y -
+            dot->dy * FC_MINIMAP_DISPLAY_PIXELS_PER_TILE;
+        float dx = px - center.x;
+        float dy = py - center.y;
+        if (dx * dx + dy * dy > 68.0f * 68.0f)
+            continue;
+        Color c = OSRS_YELLOW;
+        float radius = 2.0f;
+        if (dot->kind == RUNEC_UI_MINIMAP_DOT_PLAYER) {
+            c = WHITE;
+            radius = 3.0f;
+        } else if (dot->kind == RUNEC_UI_MINIMAP_DOT_DESTINATION) {
+            c = OSRS_RED;
+            radius = 3.0f;
+        }
+        DrawCircle((int)px, (int)py, radius, c);
+    }
+
+    const Texture2D *compass = runec_ui_asset(&ui->assets, "compass");
+    if (compass) {
+        Rectangle source = {0, 0, (float)compass->width,
+                            (float)compass->height};
+        Rectangle destination = {
+            layout->compass.x + layout->compass.width * 0.5f,
+            layout->compass.y + layout->compass.height * 0.5f,
+            layout->compass.width,
+            layout->compass.height,
+        };
+        Vector2 origin = {layout->compass.width * 0.5f,
+                          layout->compass.height * 0.5f};
+        DrawTexturePro(*compass, source, destination, origin,
+                       ui->minimap_rotation *
+                           (180.0f / 3.14159265358979323846f),
+                       WHITE);
+    } else {
+        runec_ui_draw_asset(&ui->assets, "resize_compass_mask", layout->compass, WHITE);
+        draw_text_shadow(ui, "N", layout->compass.x + 16, layout->compass.y + 12, 14, OSRS_ORANGE);
+    }
+
+    Rectangle cover = {layout->map.x + RUNEC_OSRS_MAP_SURROUND_X,
+                       layout->map.y + RUNEC_OSRS_MAP_SURROUND_Y,
+                       RUNEC_OSRS_MAP_SURROUND_W, RUNEC_OSRS_MAP_SURROUND_H};
+    runec_ui_draw_asset(&ui->assets, "osrs_stretch_mapsurround", cover, WHITE);
+    if (!runec_ui_asset_ready(&ui->assets, "osrs_stretch_mapsurround")) {
+        DrawCircleLines((int)center.x, (int)center.y, 73.0f, (Color){51, 48, 35, 255});
+        DrawCircleLines((int)center.x, (int)center.y, 70.0f, (Color){180, 166, 104, 255});
+    }
+
+    draw_orb(ui, layout->hp_orb, "orb_filler_1", "orb_icon_0",
+             ui->hitpoints, ui->hitpoints_max, OSRS_RED);
+    draw_orb(ui, layout->prayer_orb, "orb_filler_4", "orb_icon_1",
+             ui->prayer_points, ui->prayer_points_max, OSRS_BLUE);
+    draw_run_orb(ui, layout->run_orb);
+    draw_orb(ui, layout->spec_orb, "orb_filler_9", "orb_icon_6",
+             ui->special_attack_energy, 100, OSRS_YELLOW);
+
+    runec_ui_draw_asset(&ui->assets, "ring_30", layout->worldmap_button, WHITE);
+    draw_asset_centered(ui, "worldmap_icon_0", layout->worldmap_button, 22, 22, WHITE);
+    if (!runec_ui_asset_ready(&ui->assets, "worldmap_icon_0"))
+        draw_centered_text(ui, "?", layout->worldmap_button, 14, OSRS_YELLOW);
+}
+
+static void draw_chat_panel_chrome(const RuneCUiState *ui,
+                                   const RuneCUiLayout *layout) {
+    runec_ui_draw_asset(&ui->assets, "chatbox_bg", layout->chat, WHITE);
+    if (!runec_ui_asset_ready(&ui->assets, "chatbox_bg"))
+        DrawRectangleRec(layout->chat, (Color){22, 19, 15, 235});
+
+    DrawRectangleRec(layout->chat_messages, (Color){0, 0, 0, 104});
+    runec_ui_draw_asset(&ui->assets, "main_stones_bottom",
+                        layout->chat_controls, WHITE);
+    if (!runec_ui_asset_ready(&ui->assets, "main_stones_bottom"))
+        DrawRectangleRec(layout->chat_controls, (Color){74, 62, 48, 235});
+}
+
+static Color item_color(uint32_t item_id) {
+    switch (item_id) {
+    case 4151: return (Color){176, 178, 164, 255};
+    case 385: return (Color){80, 154, 178, 255};
+    case 2434: return (Color){110, 190, 70, 255};
+    case 995: return (Color){228, 188, 58, 255};
+    default: return (Color){128, 92, 52, 255};
+    }
+}
+
+static int coin_stack_visual_quantity(int quantity) {
+    if (quantity <= 1) return 1;
+    if (quantity == 2) return 2;
+    if (quantity == 3) return 3;
+    if (quantity == 4) return 4;
+    if (quantity < 25) return 5;
+    if (quantity < 100) return 25;
+    if (quantity < 250) return 100;
+    if (quantity < 1000) return 250;
+    if (quantity < 10000) return 1000;
+    return 10000;
+}
+
+static void item_icon_asset_name(const RuneCUiSlot *slot, char *dst, size_t cap) {
+    uint32_t icon_item_id = slot->icon_item_id ? slot->icon_item_id : slot->item_id;
+    if (icon_item_id != slot->item_id) {
+        snprintf(dst, cap, "item_%u", icon_item_id);
+        return;
+    }
+    if (slot->item_id == 995) {
+        snprintf(dst, cap, "item_995_%d", coin_stack_visual_quantity(slot->quantity));
+        return;
+    }
+    snprintf(dst, cap, "item_%u", slot->item_id);
+}
+
+static int label_word_is_filler(const char *word, int len) {
+    return (len == 2 && strncmp(word, "of", 2) == 0) ||
+           (len == 3 && strncmp(word, "the", 3) == 0) ||
+           (len == 3 && strncmp(word, "and", 3) == 0);
+}
+
+static void slot_label_abbrev(const RuneCUiSlot *slot, char *dst, size_t cap) {
+    if (!dst || cap == 0)
+        return;
+    dst[0] = '\0';
+    if (!slot || !slot->label[0])
+        return;
+
+    int out = 0;
+    const char *p = slot->label;
+    while (*p && out < (int)cap - 1) {
+        while (*p && !isalnum((unsigned char)*p))
+            p++;
+        if (!*p)
+            break;
+
+        char word[16];
+        int len = 0;
+        unsigned char first = (unsigned char)*p;
+        while (*p && isalnum((unsigned char)*p)) {
+            if (len < (int)sizeof(word) - 1)
+                word[len++] = (char)tolower((unsigned char)*p);
+            p++;
+        }
+        word[len] = '\0';
+        if (len > 0 && !label_word_is_filler(word, len))
+            dst[out++] = (char)toupper(first);
+    }
+    dst[out] = '\0';
+}
+
+static void draw_slot_label_fallback(const RuneCUiState *ui, const RuneCUiSlot *slot,
+                                     Rectangle r) {
+    char abbr[4];
+    slot_label_abbrev(slot, abbr, sizeof(abbr));
+    if (!abbr[0])
+        return;
+
+    float size = 10.0f;
+    Font font = runec_ui_font_for_size(&ui->assets, size);
+    Vector2 m = MeasureTextEx(font, abbr, size, 0);
+    if (m.x > r.width - 4.0f) {
+        size = 8.0f;
+        font = runec_ui_font_for_size(&ui->assets, size);
+        m = MeasureTextEx(font, abbr, size, 0);
+    }
+    draw_text_shadow(ui, abbr, r.x + (r.width - m.x) * 0.5f,
+                     r.y + (r.height - m.y) * 0.5f, size,
+                     (Color){238, 218, 162, 245});
+}
+
+static Color stack_text_color(int quantity) {
+    if (quantity >= 10000000)
+        return OSRS_GREEN;
+    if (quantity >= 100000)
+        return WHITE;
+    return OSRS_YELLOW;
+}
+
+static void format_stack_quantity(int quantity, char *dst, size_t cap) {
+    if (quantity >= 10000000) {
+        snprintf(dst, cap, "%dM", quantity / 1000000);
+    } else if (quantity >= 100000) {
+        snprintf(dst, cap, "%dK", quantity / 1000);
+    } else {
+        snprintf(dst, cap, "%d", quantity);
+    }
+}
+
+static const Texture2D *ui_item_icon_texture(const RuneCUiState *ui,
+                                             uint32_t icon_item_id) {
+    for (int i = 0; i < ui->item_icon_count; i++) {
+        if (ui->item_icons[i].ready && ui->item_icons[i].item_id == icon_item_id)
+            return &ui->item_icons[i].texture;
+    }
+    return NULL;
+}
+
+static void draw_inventory_item(const RuneCUiState *ui, const RuneCUiSlot *slot, Rectangle r) {
+    uint32_t icon_item_id = slot->icon_item_id ? slot->icon_item_id : slot->item_id;
+    const Texture2D *runtime_icon = ui_item_icon_texture(ui, icon_item_id);
+    if (runtime_icon && runtime_icon->id != 0) {
+        float sx = r.width / (float)runtime_icon->width;
+        float sy = r.height / (float)runtime_icon->height;
+        float scale = sx < sy ? sx : sy;
+        Rectangle dst = {
+            r.x + (r.width - (float)runtime_icon->width * scale) * 0.5f,
+            r.y + (r.height - (float)runtime_icon->height * scale) * 0.5f,
+            (float)runtime_icon->width * scale,
+            (float)runtime_icon->height * scale
+        };
+        DrawTexturePro(*runtime_icon,
+                       (Rectangle){0, 0, (float)runtime_icon->width,
+                                   (float)runtime_icon->height},
+                       dst, (Vector2){0, 0}, 0.0f, WHITE);
+        return;
+    }
+
+    char icon_name[32];
+    item_icon_asset_name(slot, icon_name, sizeof(icon_name));
+    if (draw_asset_centered(ui, icon_name, r, RUNEC_OSRS_INVENTORY_SLOT_W,
+                            RUNEC_OSRS_INVENTORY_SLOT_H, WHITE))
+        return;
+
+    Color c = item_color(slot->item_id);
+    if (slot->item_id == 4151) {
+        DrawLineEx((Vector2){r.x + 9, r.y + 25}, (Vector2){r.x + 24, r.y + 6}, 4.0f,
+                   (Color){42, 40, 38, 255});
+        DrawLineEx((Vector2){r.x + 11, r.y + 23}, (Vector2){r.x + 25, r.y + 7}, 2.0f, c);
+        DrawCircle((int)(r.x + 9), (int)(r.y + 25), 4.0f, (Color){83, 50, 38, 255});
+    } else if (slot->item_id == 385) {
+        DrawEllipse((int)(r.x + 16), (int)(r.y + 17), 12.0f, 7.0f, c);
+        DrawTriangle((Vector2){r.x + 5, r.y + 17}, (Vector2){r.x + 1, r.y + 11},
+                     (Vector2){r.x + 1, r.y + 23}, c);
+        DrawCircle((int)(r.x + 23), (int)(r.y + 15), 1.5f, BLACK);
+    } else if (slot->item_id == 2434) {
+        DrawRectangleRounded((Rectangle){r.x + 11, r.y + 5, 10, 22}, 0.35f, 4,
+                             (Color){52, 42, 34, 255});
+        DrawRectangleRounded((Rectangle){r.x + 12, r.y + 10, 8, 15}, 0.35f, 4, c);
+        DrawRectangleRec((Rectangle){r.x + 11, r.y + 4, 10, 4}, (Color){196, 196, 182, 255});
+    } else if (slot->item_id == 995) {
+        DrawCircle((int)(r.x + 14), (int)(r.y + 14), 7.0f, c);
+        DrawCircle((int)(r.x + 19), (int)(r.y + 18), 7.0f, (Color){210, 156, 40, 255});
+        DrawCircle((int)(r.x + 13), (int)(r.y + 21), 6.0f, (Color){238, 204, 72, 255});
+    } else {
+        DrawRectangleRounded((Rectangle){r.x + 6, r.y + 6, 20, 20}, 0.22f, 4, c);
+        draw_slot_label_fallback(ui, slot, r);
+    }
+    (void)ui;
+}
+
+static void draw_inventory(const RuneCUiState *ui, const RuneCUiLayout *layout) {
+    for (int i = 0; i < RUNEC_UI_INV_SLOT_COUNT; i++) {
+        Rectangle r = inv_slot_rect(layout, i);
+        if (ui->inventory[i].enabled) {
+            draw_inventory_item(ui, &ui->inventory[i], r);
+            if (ui->inventory[i].quantity > 1) {
+                char q[16];
+                format_stack_quantity(ui->inventory[i].quantity, q, sizeof(q));
+                draw_text_shadow(ui, q, r.x + 1, r.y - 1, 10,
+                                 stack_text_color(ui->inventory[i].quantity));
+            }
+        }
+    }
+}
+
+static void draw_equipment(const RuneCUiState *ui, const RuneCUiLayout *layout) {
+    draw_asset_tiled(ui, "miscgraphics_2",
+                     side_ref_rect(layout, (Rectangle){77, 39, 36, 124}), WHITE);
+    draw_asset_tiled(ui, "miscgraphics_2",
+                     side_ref_rect(layout, (Rectangle){21, 118, 36, 45}), WHITE);
+    draw_asset_tiled(ui, "miscgraphics_2",
+                     side_ref_rect(layout, (Rectangle){133, 118, 36, 45}), WHITE);
+    draw_asset_tiled(ui, "miscgraphics_3",
+                     side_ref_rect(layout, (Rectangle){56, 81, 78, 36}), WHITE);
+    draw_asset_tiled(ui, "miscgraphics_3",
+                     side_ref_rect(layout, (Rectangle){71, 42, 48, 36}), WHITE);
+
+    for (int i = 0; i < RUNEC_UI_EQUIP_SLOT_COUNT; i++) {
+        Rectangle r = equip_slot_rect(layout, i);
+        if (r.width <= 0)
+            continue;
+        if (ui->equipment[i].enabled) {
+            draw_inventory_item(ui, &ui->equipment[i], r);
+            if (ui->equipment[i].quantity > 1) {
+                char q[16];
+                format_stack_quantity(ui->equipment[i].quantity, q, sizeof(q));
+                draw_text_shadow(ui, q, r.x + 1, r.y - 1, 10,
+                                 stack_text_color(ui->equipment[i].quantity));
+            }
+        } else if (g_worn_icon_names[i]) {
+            draw_asset_centered(ui, g_worn_icon_names[i], r, 28, 28, (Color){190, 178, 150, 175});
+        }
+    }
+
+    for (int i = 0; i < (int)(sizeof(RUNEC_OSRS_WORN_BUTTONS) / sizeof(RUNEC_OSRS_WORN_BUTTONS[0])); i++) {
+        const RuneCUiWornButtonRef *ref = &RUNEC_OSRS_WORN_BUTTONS[i];
+        Rectangle b = {layout->side_content.x + ref->rect.x,
+                       layout->side_content.y + ref->rect.y,
+                       ref->rect.width, ref->rect.height};
+        Rectangle icon = {layout->side_content.x + ref->icon_rect.x,
+                          layout->side_content.y + ref->icon_rect.y,
+                          ref->icon_rect.width, ref->icon_rect.height};
+        runec_ui_draw_asset(&ui->assets, "combatboxes_0", b, WHITE);
+        if (!runec_ui_asset_ready(&ui->assets, "combatboxes_0")) {
+            DrawRectangleRounded(b, 0.18f, 5, (Color){54, 46, 35, 235});
+            DrawRectangleLinesEx(b, 1, (Color){119, 99, 68, 255});
+        }
+        draw_asset_centered(ui, ref->asset, icon, icon.width, icon.height, WHITE);
+    }
+}
+
+static void draw_prayer(const RuneCUiState *ui, const RuneCUiLayout *layout) {
+    for (int i = 0; i < 25; i++) {
+        Rectangle r = grid_cell_rect(layout, i, 5, 8, 8, 36, 36, 34, 34);
+        DrawRectangleRec(r, (Color){16, 13, 10, 95});
+        char name[32];
+        snprintf(name, sizeof(name), "prayer%s_%d",
+                 (ui->active_prayers & (1u << i)) ? "on" : "off", i);
+        if (!draw_asset_centered(ui, name, r, 30, 30, WHITE))
+            draw_centered_text(ui, TextFormat("%d", i + 1), r, 10, OSRS_ORANGE);
+    }
+}
+
+static void draw_spellbook(const RuneCUiState *ui, const RuneCUiLayout *layout) {
+    for (int i = 0; i < RUNEC_UI_SPELL_COUNT; i++) {
+        Rectangle r = grid_cell_rect(layout, i, RUNEC_UI_SPELL_COLS,
+                                     RUNEC_UI_SPELL_X0, RUNEC_UI_SPELL_Y0,
+                                     RUNEC_UI_SPELL_STEP_X,
+                                     RUNEC_UI_SPELL_STEP_Y,
+                                     RUNEC_UI_SPELL_ICON_SIZE,
+                                     RUNEC_UI_SPELL_ICON_SIZE);
+        if (!g_standard_spell_slots[i].name)
+            continue;
+        DrawRectangleRec(r, (Color){12, 12, 28, 105});
+        char name[32];
+        snprintf(name, sizeof(name), "standard_spell_on_%d",
+                 g_standard_spell_slots[i].standard_icon_frame);
+        int drew = draw_asset_centered(ui, name, r, RUNEC_UI_SPELL_ICON_SIZE,
+                                       RUNEC_UI_SPELL_ICON_SIZE, WHITE);
+        if (!drew)
+            draw_centered_text(ui, TextFormat("%d", i + 1), r, 10, OSRS_ORANGE);
+    }
+}
+
+static void draw_skills(const RuneCUiState *ui, const RuneCUiLayout *layout) {
+    int count = (int)(sizeof(RUNEC_OSRS_SKILLS) / sizeof(RUNEC_OSRS_SKILLS[0]));
+    for (int i = 0; i < count; i++) {
+        Rectangle r = skill_slot_rect(layout, i);
+        DrawRectangleRec(r, (Color){72, 70, 60, 232});
+        DrawLineEx((Vector2){r.x, r.y}, (Vector2){r.x + r.width - 1, r.y}, 1,
+                   (Color){139, 130, 104, 255});
+        DrawLineEx((Vector2){r.x, r.y}, (Vector2){r.x, r.y + r.height - 1}, 1,
+                   (Color){139, 130, 104, 255});
+        DrawLineEx((Vector2){r.x, r.y + r.height - 1},
+                   (Vector2){r.x + r.width - 1, r.y + r.height - 1}, 1,
+                   (Color){28, 25, 21, 255});
+        DrawLineEx((Vector2){r.x + r.width - 1, r.y},
+                   (Vector2){r.x + r.width - 1, r.y + r.height - 1}, 1,
+                   (Color){28, 25, 21, 255});
+        char icon[32];
+        snprintf(icon, sizeof(icon), "skill_icon_%d", RUNEC_OSRS_SKILLS[i].icon_index);
+        draw_asset_centered(ui, icon, (Rectangle){r.x + 3, r.y + 3, 24, 24}, 24, 24, WHITE);
+        int current_level = i < RUNEC_UI_SKILL_COUNT && ui->skill_current[i] > 0
+                          ? ui->skill_current[i] : 1;
+        int base_level = i < RUNEC_UI_SKILL_COUNT && ui->skill_base[i] > 0
+                       ? ui->skill_base[i] : current_level;
+        char cur[16];
+        char base[16];
+        snprintf(cur, sizeof(cur), "%d", current_level);
+        snprintf(base, sizeof(base), "%d", base_level);
+        Color cur_color = current_level < base_level ? (Color){220, 45, 31, 255}
+                        : current_level > base_level ? OSRS_GREEN : OSRS_YELLOW;
+        draw_text_shadow(ui, cur, r.x + 39, r.y + 2, 10, cur_color);
+        draw_text_shadow(ui, base, r.x + 39, r.y + 17, 9, OSRS_GREEN);
+    }
+
+    Rectangle total = {layout->side_content.x + RUNEC_OSRS_STATS_TOTAL.x,
+                       layout->side_content.y + RUNEC_OSRS_STATS_TOTAL.y,
+                       RUNEC_OSRS_STATS_TOTAL.width, RUNEC_OSRS_STATS_TOTAL.height};
+    DrawRectangleRec(total, (Color){7, 7, 7, 238});
+    DrawRectangleLinesEx(total, 1, (Color){99, 91, 68, 255});
+    char total_text[32];
+    snprintf(total_text, sizeof(total_text), "Total level: %d",
+             ui->skill_total > 0 ? ui->skill_total : 0);
+    draw_centered_text(ui, total_text, total, 10, OSRS_YELLOW);
+}
+
+static void draw_combat_box(const RuneCUiState *ui, Rectangle r, int selected) {
+    const char *asset = selected ? "combatboxes_1" : "combatboxes_0";
+    runec_ui_draw_asset(&ui->assets, asset, r, WHITE);
+    if (!runec_ui_asset_ready(&ui->assets, asset)) {
+        DrawRectangleRec(r, selected ? (Color){83, 61, 43, 245} : (Color){45, 39, 31, 235});
+        DrawRectangleLinesEx(r, 1, selected ? OSRS_YELLOW : (Color){103, 89, 63, 255});
+    }
+    if (selected)
+        DrawRectangleRec(r, (Color){120, 27, 20, 54});
+}
+
+static void draw_combat(const RuneCUiState *ui, const RuneCUiLayout *layout) {
+    Rectangle header = side_ref_rect(layout, RUNEC_OSRS_COMBAT_HEADER);
+    const char *weapon_name = ui->combat_weapon_name[0]
+        ? ui->combat_weapon_name : "Unarmed";
+    draw_centered_text(ui, weapon_name, side_ref_rect(layout, RUNEC_OSRS_COMBAT_TITLE),
+                       13, OSRS_ORANGE);
+    char level[32];
+    snprintf(level, sizeof(level), "Combat Lvl: %d", ui->combat_level);
+    draw_centered_text(ui, level, side_ref_rect(layout, RUNEC_OSRS_COMBAT_LEVEL),
+                       12, OSRS_ORANGE);
+    DrawLineEx((Vector2){header.x + 10, header.y + 42},
+               (Vector2){header.x + header.width - 10, header.y + 42}, 1,
+               (Color){75, 64, 45, 180});
+
+    int visible_slot = 0;
+    int layout_count = (int)(sizeof(RUNEC_OSRS_COMBAT_STYLES)
+        / sizeof(RUNEC_OSRS_COMBAT_STYLES[0]));
+    for (int i = 0; i < RUNEC_UI_COMBAT_STYLE_COUNT && visible_slot < layout_count; i++) {
+        const RuneCUiCombatStyleOption *option = &ui->combat_styles[i];
+        if (!option->visible)
+            continue;
+        const RuneCUiCombatStyleRef *style =
+            &RUNEC_OSRS_COMBAT_STYLES[visible_slot++];
+        int selected = combat_style_option_selected(ui, option);
+        Rectangle button = side_ref_rect(layout, style->rect);
+        draw_combat_box(ui, button, selected);
+        draw_asset_centered(ui, option->icon_asset, side_ref_rect(layout, style->icon_rect),
+                            34, 24, WHITE);
+        draw_centered_text(ui, option->label, side_ref_rect(layout, style->text_rect),
+                           10, selected ? OSRS_YELLOW : OSRS_ORANGE);
+    }
+
+    Rectangle retaliate = side_ref_rect(layout, RUNEC_OSRS_COMBAT_RETALIATE);
+    draw_combat_box(ui, retaliate, ui->auto_retaliate);
+    draw_asset_centered(ui, "combat_shield", side_ref_rect(layout, RUNEC_OSRS_COMBAT_RETALIATE_ICON),
+                        26, 39, WHITE);
+    draw_centered_text(ui, ui->auto_retaliate ? "Auto Retaliate" : "Retaliate Off",
+                       side_ref_rect(layout, RUNEC_OSRS_COMBAT_RETALIATE_TEXT), 11, OSRS_ORANGE);
+
+    Rectangle spec = side_ref_rect(layout, RUNEC_OSRS_COMBAT_SPECIAL_BAR);
+    runec_ui_draw_asset(&ui->assets, "combatboxes_special_attack", spec, WHITE);
+    if (!runec_ui_asset_ready(&ui->assets, "combatboxes_special_attack"))
+        DrawRectangleRec(spec, (Color){32, 28, 22, 235});
+    Rectangle empty = {spec.x + 2, spec.y + 7, spec.width - 4, 12};
+    DrawRectangleRec(empty, (Color){115, 6, 6, 255});
+    Rectangle fill = empty;
+    fill.width *= (float)ui->special_attack_energy / 100.0f;
+    DrawRectangleRec(fill, ui->special_attack_enabled ? OSRS_GREEN : (Color){57, 125, 59, 255});
+    DrawRectangleLinesEx((Rectangle){spec.x + 2, spec.y + 6, spec.width - 4, 14}, 1,
+                         (Color){44, 42, 35, 255});
+    char spec_text[32];
+    snprintf(spec_text, sizeof(spec_text), "Special Attack: %d%%", ui->special_attack_energy);
+    draw_centered_text(ui, spec_text, spec, 10, OSRS_YELLOW);
+
+    const RuneCUiCombatStyleOption *selected_style =
+        selected_combat_style_option(ui);
+    const char *mode = selected_style ? selected_style->mode : "Accurate";
+    char category[64];
+    snprintf(category, sizeof(category), "Attack style: %s", mode);
+    draw_centered_text(ui, category, side_ref_rect(layout, RUNEC_OSRS_COMBAT_CATEGORY),
+                       12, OSRS_ORANGE);
+}
+
+static void draw_placeholder_tab(const RuneCUiState *ui, const RuneCUiLayout *layout,
+                                 const char *title, const char *body) {
+    draw_centered_text(ui, title, (Rectangle){layout->side_content.x, layout->side_content.y + 26, 190, 20},
+                       15, OSRS_YELLOW);
+    draw_centered_text(ui, body, (Rectangle){layout->side_content.x + 10, layout->side_content.y + 105, 170, 36},
+                       12, OSRS_ORANGE);
+}
+
+static void draw_side(RuneCUiState *ui, const RuneCUiLayout *layout) {
+    draw_side_chrome(ui, layout);
+
+    if (ui->active_tab == RUNEC_UI_TAB_COMBAT) {
+        draw_combat(ui, layout);
+        return;
+    }
+
+    switch (ui->active_tab) {
+    case RUNEC_UI_TAB_INVENTORY:
+        draw_inventory(ui, layout);
+        break;
+    case RUNEC_UI_TAB_EQUIPMENT:
+        draw_equipment(ui, layout);
+        break;
+    case RUNEC_UI_TAB_PRAYER:
+        draw_prayer(ui, layout);
+        break;
+    case RUNEC_UI_TAB_SPELLBOOK:
+        draw_spellbook(ui, layout);
+        break;
+    case RUNEC_UI_TAB_SKILLS:
+        draw_skills(ui, layout);
+        break;
+    case RUNEC_UI_TAB_COMBAT:
+        draw_combat(ui, layout);
+        break;
+    case RUNEC_UI_TAB_QUESTS:
+        draw_placeholder_tab(ui, layout, "Quest List", "Quest journal surface.");
+        break;
+    case RUNEC_UI_TAB_SETTINGS:
+        draw_placeholder_tab(ui, layout, "Settings", "Viewer options surface.");
+        break;
+    case RUNEC_UI_TAB_CLAN_CHAT:
+        break;
+    case RUNEC_UI_TAB_FRIENDS:
+        break;
+    default:
+        break;
+    }
+}
+
+void runec_ui_draw_context(const RuneCUiState *ui) {
+    if (!ui->context_open)
+        return;
+    FcMenuLayout menu = context_layout(ui);
+    Color brown = {93, 84, 71, 255};
+    DrawRectangle(menu.x, menu.y, menu.width, menu.height, brown);
+    DrawRectangle(menu.x + 1, menu.y + 1, menu.width - 2, FC_MENU_HEADER_HEIGHT - 3, BLACK);
+    DrawRectangleLinesEx((Rectangle){menu.x + 1, menu.y + FC_MENU_HEADER_HEIGHT - 1,
+                         menu.width - 2, menu.height - FC_MENU_HEADER_HEIGHT}, 1, BLACK);
+    Font font = fc_osrs_menu_font();
+    DrawTextEx(font, "Choose Option", (Vector2){menu.x + 4, menu.y + 2},
+               FC_OSRS_MENU_FONT_SIZE, 0, brown);
+    Vector2 mouse = GetMousePosition();
+    int hovered = fc_menu_action_at(menu, ui->context_action_count, (int)mouse.x, (int)mouse.y);
+    BeginScissorMode(menu.x, menu.y, menu.width, menu.height);
+    for (int i = 0; i < ui->context_action_count; i++) {
+        float x = menu.x + 4;
+        float y = menu.y + FC_MENU_HEADER_HEIGHT + i * FC_MENU_ROW_HEIGHT + 1;
+        const char *action = ui->context_actions[i];
+        DrawTextEx(font, action, (Vector2){x + 1, y + 1}, FC_OSRS_MENU_FONT_SIZE, 0, BLACK);
+        DrawTextEx(font, action, (Vector2){x, y}, FC_OSRS_MENU_FONT_SIZE, 0,
+                   hovered == i ? OSRS_YELLOW : WHITE);
+        if (context_has_target(ui, action)) {
+            char target[52];
+            snprintf(target, sizeof(target), " %s", ui->context_title);
+            x += MeasureTextEx(font, action, FC_OSRS_MENU_FONT_SIZE, 0).x;
+            DrawTextEx(font, target, (Vector2){x + 1, y + 1}, FC_OSRS_MENU_FONT_SIZE, 0, BLACK);
+            DrawTextEx(font, target, (Vector2){x, y}, FC_OSRS_MENU_FONT_SIZE, 0, ui->context_target_color);
+            if (ui->context_combat_level > 0) {
+                char suffix[32];
+                context_level_suffix(ui, suffix);
+                x += MeasureTextEx(font, target, FC_OSRS_MENU_FONT_SIZE, 0).x;
+                Color color = GetColor((fc_menu_level_color(ui->combat_level,
+                    ui->context_combat_level) << 8) | 0xffu);
+                DrawTextEx(font, suffix, (Vector2){x + 1, y + 1}, FC_OSRS_MENU_FONT_SIZE, 0, BLACK);
+                DrawTextEx(font, suffix, (Vector2){x, y}, FC_OSRS_MENU_FONT_SIZE, 0, color);
+            }
+        }
+    }
+    EndScissorMode();
+}
+
+static void draw_selected_target(const RuneCUiState *ui) {
+    if (ui->drag.active && ui->drag.source_kind == RUNEC_UI_CONTEXT_INVENTORY
+            && ui->drag.source_slot >= 0
+            && ui->drag.source_slot < RUNEC_UI_INV_SLOT_COUNT
+            && ui->inventory[ui->drag.source_slot].enabled) {
+        Vector2 mouse = GetMousePosition();
+        Rectangle r = {mouse.x - 16, mouse.y - 16,
+                       RUNEC_OSRS_INVENTORY_SLOT_W,
+                       RUNEC_OSRS_INVENTORY_SLOT_H};
+        DrawRectangleRec(r, (Color){0, 0, 0, 80});
+        draw_inventory_item(ui, &ui->inventory[ui->drag.source_slot], r);
+    }
+    if (ui->selected_target.kind == RUNEC_UI_SELECTED_NONE)
+        return;
+    Vector2 mouse = GetMousePosition();
+    char text[96];
+    snprintf(text, sizeof(text), "%s %s ->", ui->selected_target.verb,
+             ui->selected_target.label);
+    Font font = runec_ui_font_for_size(&ui->assets, 12.0f);
+    int width = (int)ceilf(MeasureTextEx(
+        font, text, 12.0f, 0.0f).x) + 10;
+    Rectangle box = {mouse.x + 12, mouse.y + 12, (float)width, 20};
+    DrawRectangleRec(box, (Color){28, 23, 17, 230});
+    DrawRectangleLinesEx(box, 1, (Color){170, 137, 72, 255});
+    draw_text_shadow(ui, text, box.x + 5, box.y + 4, 11, OSRS_YELLOW);
+}
+
+void runec_ui_draw(RuneCUiState *ui, int screen_w, int screen_h) {
+    RuneCUiLayout layout;
+    ui_layout(screen_w, screen_h, &layout);
+
+    draw_chat_panel_chrome(ui, &layout);
+    draw_minimap(ui, &layout);
+    draw_side(ui, &layout);
+    draw_selected_target(ui);
+}
+
+Rectangle runec_ui_chat_panel_rect(int screen_w, int screen_h) {
+    RuneCUiLayout layout;
+    ui_layout(screen_w, screen_h, &layout);
+    return layout.chat;
+}
+
+#undef OSRS_ORANGE
+#undef OSRS_YELLOW
+#undef OSRS_GREEN
+#undef OSRS_RED
+#undef OSRS_BLUE
+#undef OSRS_PANEL
+#undef OSRS_TAB_PRESS_SECONDS
+#undef RUNEC_UI_SPELL_COUNT
+#undef RUNEC_UI_SPELL_COLS
+#undef RUNEC_UI_SPELL_X0
+#undef RUNEC_UI_SPELL_Y0
+#undef RUNEC_UI_SPELL_STEP_X
+#undef RUNEC_UI_SPELL_STEP_Y
+#undef RUNEC_UI_SPELL_ICON_SIZE
+#undef COMBAT_STYLE
+#undef COMBAT_STYLE_HIDDEN
+
+/* ===================== 3D rendering and debug overlays ===================== */
+
+/* Actor Visual */
+
+#define FC_VISUAL_LOCAL_UNITS 128.0f
+#define FC_VISUAL_CLIENT_TICK_SECONDS 0.02f
+#define FC_VISUAL_PATH_CAPACITY 10
+#define FC_VISUAL_ACTIVE_PATH_MAX 9
+
+typedef enum {
+    FC_VISUAL_LOCOMOTION_IDLE = 0,
+    FC_VISUAL_LOCOMOTION_TURN,
+    FC_VISUAL_LOCOMOTION_WALK_FORWARD,
+    FC_VISUAL_LOCOMOTION_WALK_BACK,
+    FC_VISUAL_LOCOMOTION_WALK_LEFT,
+    FC_VISUAL_LOCOMOTION_WALK_RIGHT,
+    FC_VISUAL_LOCOMOTION_RUN,
+} FcVisualLocomotion;
+
+typedef enum {
+    FC_VISUAL_TARGET_NONE = 0,
+    FC_VISUAL_TARGET_PLAYER,
+    FC_VISUAL_TARGET_NPC,
+} FcVisualTargetKind;
+
+typedef struct {
+    int active;
+    int size;
+    int server_tile_x;
+    int server_tile_y;
+
+    /* Persistent client-local position, in 1/128-tile RuneScape units. */
+    float local_x;
+    float local_y;
+    float previous_local_x;
+    float previous_local_y;
+
+    int path_x[FC_VISUAL_PATH_CAPACITY];
+    int path_y[FC_VISUAL_PATH_CAPACITY];
+    unsigned char path_running[FC_VISUAL_PATH_CAPACITY];
+    int path_count;
+
+    float yaw_degrees;
+    float desired_yaw_degrees;
+    FcVisualTargetKind target_kind;
+    int target_slot;
+    int movement_blocked;
+    int moving;
+    FcVisualLocomotion locomotion;
+} FcVisualActor;
+
+typedef struct {
+    FcVisualActor player;
+    FcVisualActor npcs[FC_MAX_NPCS];
+    float client_tick_accumulator;
+    float render_alpha;
+} FcVisualScene;
+
+typedef struct {
+    float x;
+    float y;
+    float yaw_degrees;
+    int moving;
+    FcVisualLocomotion locomotion;
+} FcVisualPose;
+
+void fc_visual_scene_init(FcVisualScene* scene);
+void fc_visual_scene_reset_player(FcVisualScene* scene, int tile_x, int tile_y,
+                                  int size, float yaw_degrees);
+void fc_visual_scene_reset_npc(FcVisualScene* scene, int slot, int tile_x,
+                               int tile_y, int size, float yaw_degrees);
+void fc_visual_scene_deactivate_npc(FcVisualScene* scene, int slot);
+
+void fc_visual_actor_enqueue_tile(FcVisualActor* actor, int tile_x, int tile_y,
+                                  int running);
+void fc_visual_actor_enqueue_transition(FcVisualActor* actor, int from_x,
+                                        int from_y, int to_x, int to_y,
+                                        int running);
+void fc_visual_actor_set_target(FcVisualActor* actor,
+                                FcVisualTargetKind target_kind,
+                                int target_slot);
+void fc_visual_actor_set_movement_blocked(FcVisualActor* actor, int blocked);
+
+void fc_visual_scene_update(FcVisualScene* scene, float elapsed_seconds);
+FcVisualPose fc_visual_actor_pose(const FcVisualScene* scene,
+                                  const FcVisualActor* actor);
+FcVisualPose fc_visual_scene_player_pose(const FcVisualScene* scene);
+FcVisualPose fc_visual_scene_npc_pose(const FcVisualScene* scene, int slot);
+
+
+/* Actor Animation */
+
+#include "raylib.h"
+
+#include <stdint.h>
+
+typedef struct {
+    uint16_t idle_anim;
+    uint16_t walk_anim;
+    uint16_t walk_back_anim;
+    uint16_t walk_left_anim;
+    uint16_t walk_right_anim;
+    uint16_t turn_anim;
+    uint16_t run_anim;
+    uint16_t attack_anim;
+    uint32_t projectile_travel_spot;
+    uint32_t projectile_launch_spot;
+    uint32_t projectile_impact_spot;
+    Color projectile_color;
+    float projectile_radius;
+    float projectile_start_height;
+    float projectile_end_height;
+    float projectile_launch_delay_client_ticks;
+    float projectile_angle;
+    float projectile_length_adjustment;
+    float projectile_progress;
+    float projectile_step_multiplier;
+} FcPlayerVisualProfile;
+
+typedef struct {
+    FcVisualScene scene;
+    AnimModelState *player_state;
+    uint16_t player_sequence;
+    int player_frame;
+    float player_timer;
+    uint16_t player_pose_sequence;
+    int player_pose_frame;
+    float player_pose_timer;
+    uint16_t player_action_sequence;
+    int player_action_frame;
+    float player_action_timer;
+    uint16_t player_lock_sequence;
+    float player_lock_timer;
+    int player_attack_target;
+    float prayer_flick_timer;
+    AnimModelState *npc_states[FC_MAX_NPCS];
+    uint16_t npc_sequences[FC_MAX_NPCS];
+    int npc_frames[FC_MAX_NPCS];
+    float npc_timers[FC_MAX_NPCS];
+    uint16_t npc_action_sequences[FC_MAX_NPCS];
+    int npc_action_frames[FC_MAX_NPCS];
+    float npc_action_timers[FC_MAX_NPCS];
+    int npc_attack_styles[FC_MAX_NPCS];
+    float npc_attack_timers[FC_MAX_NPCS];
+    float npc_prayer_indicator_timers[FC_MAX_NPCS];
+    int npc_prayer_lock_ticks[FC_MAX_NPCS];
+    int previous_npc_x[FC_MAX_NPCS];
+    int previous_npc_y[FC_MAX_NPCS];
+    int previous_npc_active[FC_MAX_NPCS];
+} FcActorAnimation;
+
+void fc_actor_animation_init(FcActorAnimation *animation);
+void fc_actor_animation_reset(FcActorAnimation *animation,
+                              const FcState *state,
+                              NpcModelSet *player_models,
+                              int active_loadout);
+void fc_actor_animation_shutdown(FcActorAnimation *animation);
+
+void fc_actor_animation_capture_tick_start(FcActorAnimation *animation,
+                                           const FcState *state);
+void fc_actor_animation_ingest_tick(FcActorAnimation *animation,
+                                    const FcState *state,
+                                    const FcRenderEvents *events);
+void fc_actor_animation_ingest_events(FcActorAnimation *animation,
+                                      const FcRenderEvents *events,
+                                      AnimCache *cache,
+                                      int active_loadout,
+                                      float tps);
+void fc_actor_animation_update_scene(FcActorAnimation *animation,
+                                     const FcState *state,
+                                     AnimCache *cache,
+                                     float tps,
+                                     float dt,
+                                     int advance_scene,
+                                     const unsigned char deferred_deaths[FC_MAX_NPCS]);
+void fc_actor_animation_update_models(FcActorAnimation *animation,
+                                      const FcState *state,
+                                      NpcModelSet *player_models,
+                                      NpcModelSet *npc_models,
+                                      AnimCache *cache,
+                                      int active_loadout,
+                                      float tps,
+                                      float dt,
+                                      const unsigned char deferred_deaths[FC_MAX_NPCS]);
+
+const FcPlayerVisualProfile *fc_player_visual_profile(int active_loadout);
+int fc_player_equipment_visual_profile(const FcPlayer *player);
+NpcModelEntry *fc_actor_player_model_entry(NpcModelSet *player_models,
+                                           int active_loadout);
+void fc_actor_animation_upload_npc(FcActorAnimation *animation,
+                                   int npc_slot,
+                                   NpcModelEntry *entry);
+float fc_actor_animation_scaled_dt(float tps, float dt);
+float fc_actor_animation_scaled_duration(float tps, float seconds);
+int fc_actor_animation_render_prayer(const FcActorAnimation *animation,
+                                     const FcState *state);
+int fc_actor_animation_prayer_window_active(const FcActorAnimation *animation,
+                                            int npc_slot,
+                                            int current_tick);
+int fc_actor_animation_previous_npc_active(const FcActorAnimation *animation,
+                                           int npc_slot);
+
+
+/* Projectile Visual */
+
+typedef struct {
+    float source_x;
+    float source_y;
+    float source_z;
+    float target_x;
+    float target_y;
+    float target_z;
+    float duration;
+    float angle;
+    float progress;
+} FcProjectilePath;
+
+typedef struct {
+    float x;
+    float y;
+    float z;
+    float velocity_x;
+    float velocity_y;
+    float velocity_z;
+} FcProjectileSample;
+
+typedef struct {
+    float launch_delay;
+    float flight_duration;
+    float total_duration;
+} FcProjectileTiming;
+
+float fc_projectile_profile_end_cycle(float launch_cycle,
+                                      float length_adjustment,
+                                      float step_multiplier,
+                                      int tile_distance);
+
+/* Convert the client's 30-cycle-per-game-tick projectile profile to viewer
+ * seconds. The extra client cycle in flight_duration matches the client
+ * endpoint convention used by RuneC's projectile sampler. */
+int fc_projectile_timing_from_client_cycles(float launch_cycle,
+                                            float end_cycle,
+                                            float ticks_per_second,
+                                            FcProjectileTiming* timing);
+
+/* Effects are retained only until either their animation ends or the client
+ * retention window closes. This prevents short spot animations from looping. */
+float fc_projectile_effect_duration_seconds(float animation_client_cycles,
+                                            float retain_client_cycles,
+                                            float ticks_per_second);
+
+/* Sample the client projectile curve at an absolute point in its flight.
+ * The target may be replaced on every render frame to reproduce the client's
+ * actor-targeted homing behavior without frame-rate-dependent integration. */
+int fc_projectile_path_sample(const FcProjectilePath* path,
+                              float elapsed,
+                              FcProjectileSample* sample);
+
+
+/* Click Feedback */
+
+#define FC_CLICK_CROSS_FRAME_COUNT 4
+#define FC_CLICK_CROSS_FRAME_SECONDS 0.10f
+
+typedef enum {
+    FC_CLICK_CROSS_NONE = 0,
+    FC_CLICK_CROSS_MOVE,
+    FC_CLICK_CROSS_INTERACTION,
+} FcClickCrossKind;
+
+typedef struct {
+    int destination_active;
+    int destination_x;
+    int destination_y;
+
+    int preview_pending;
+    int preview_route_x[FC_MAX_ROUTE];
+    int preview_route_y[FC_MAX_ROUTE];
+    int preview_route_len;
+
+    FcClickCrossKind cross_kind;
+    float cross_screen_x;
+    float cross_screen_y;
+    float cross_elapsed;
+} FcClickFeedback;
+
+void fc_click_feedback_reset(FcClickFeedback* feedback);
+
+/* Build a read-only preview with the same move-near pathfinder used by
+ * fc_step(). The simulation state itself is never modified. */
+void fc_click_feedback_select_move(FcClickFeedback* feedback,
+                                   const FcState* state,
+                                   int tile_x, int tile_y,
+                                   float screen_x, float screen_y);
+
+void fc_click_feedback_select_interaction(FcClickFeedback* feedback,
+                                          float screen_x, float screen_y);
+
+/* Hand the preview over to the route produced by the authoritative tick. */
+void fc_click_feedback_accept_move_tick(FcClickFeedback* feedback,
+                                        const FcState* state);
+
+/* Clear a completed or cancelled authoritative destination. */
+void fc_click_feedback_sync(FcClickFeedback* feedback,
+                            const FcState* state);
+
+void fc_click_feedback_update(FcClickFeedback* feedback,
+                              float elapsed_seconds);
+
+int fc_click_feedback_cross_frame(const FcClickFeedback* feedback);
+
+/* Return the immediate preview while the click is buffered, then the live
+ * core route after the next simulation tick accepts it. */
+int fc_click_feedback_route(const FcClickFeedback* feedback,
+                            const FcState* state,
+                            const int** out_x, const int** out_y,
+                            int* out_start, int* out_len);
+
+
+/* Combat Presentation */
+
+typedef struct FcCombatPresentation FcCombatPresentation;
+
+typedef struct {
+    const FcState *state;
+    const FcRenderEvents *events;
+    const FcVisualScene *scene;
+    TerrainMesh *terrain;
+    AnimCache *anim_cache;
+    const FcPlayerVisualProfile *player_profile;
+    float tps;
+} FcCombatPresentationContext;
+
+typedef struct {
+    FcCombatPresentationContext presentation;
+    const FcRenderEntity *entities;
+    int entity_count;
+    NpcModelSet *player_models;
+    NpcModelSet *npc_models;
+    int active_loadout;
+    const RuneCUiAssets *ui_assets;
+    Camera3D camera;
+} FcCombatPresentationDrawContext;
+
+FcCombatPresentation *fc_combat_presentation_create(Texture2D shared_atlas);
+int fc_combat_presentation_ready(
+    const FcCombatPresentation *presentation);
+void fc_combat_presentation_destroy(FcCombatPresentation *presentation);
+void fc_combat_presentation_reset(FcCombatPresentation *presentation);
+void fc_combat_presentation_clear_npc_healthbar(
+    FcCombatPresentation *presentation, int npc_slot);
+
+void fc_combat_presentation_ingest_tick(
+    FcCombatPresentation *presentation,
+    const FcCombatPresentationContext *context);
+void fc_combat_presentation_update(
+    FcCombatPresentation *presentation,
+    const FcCombatPresentationContext *context,
+    float dt);
+void fc_combat_presentation_draw_world(
+    FcCombatPresentation *presentation,
+    const FcCombatPresentationContext *context,
+    float dt);
+void fc_combat_presentation_draw_healthbars(
+    const FcCombatPresentation *presentation,
+    const FcCombatPresentationDrawContext *context);
+void fc_combat_presentation_draw_hitsplats(
+    const FcCombatPresentation *presentation,
+    const FcCombatPresentationDrawContext *context);
+
+int fc_combat_presentation_npc_death_deferred(
+    const FcCombatPresentation *presentation,
+    const FcState *state,
+    int npc_slot);
+void fc_combat_presentation_deferred_deaths(
+    const FcCombatPresentation *presentation,
+    const FcState *state,
+    unsigned char deferred_deaths[FC_MAX_NPCS]);
+
+
+/* Debug Overlay */
+
+#include "raylib.h"
+
+#define DBG_COLLISION (1 << 0)
+#define DBG_LOS (1 << 1)
+#define DBG_PATH (1 << 2)
+#define DBG_RANGE (1 << 3)
+#define DBG_ALL (DBG_COLLISION | DBG_LOS | DBG_PATH | DBG_RANGE)
+
+void dbg_log_clear(void);
+void dbg_log_tick(const FcState *state);
+void debug_overlay_3d(const FcState *state, int dbg_flags);
+void debug_overlay_screen(const FcState *state, Camera3D cam, int dbg_flags);
+void dbg_draw_prayer_window_indicator(Vector3 world_anchor, Camera3D cam);
+int dbg_draw_panel_tabs(const FcState *state,
+                        const FcRewardBreakdown *reward_breakdown,
+                        const FcRewardRuntime *reward_runtime,
+                        int reward_config_loaded,
+                        const char *reward_config_path,
+                        int px, int x, int by, int pw, int dbg_tab,
+                        int draw_tabs, int content_height);
+
+
+/* Actor Visual */
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define FC_VISUAL_WALK_UNITS_PER_TICK 4.0f
+#define FC_VISUAL_TURN_DEGREES_PER_TICK 5.625f
+
+static float normalize_degrees(float degrees) {
+    while (degrees >= 180.0f) degrees -= 360.0f;
+    while (degrees < -180.0f) degrees += 360.0f;
+    return degrees;
+}
+
+static float face_angle(float ax, float ay, float bx, float by) {
+    float dx = bx - ax;
+    float dy = by - ay;
+    if (fabsf(dx) < 0.0001f && fabsf(dy) < 0.0001f) return 0.0f;
+    return normalize_degrees(atan2f(dx, -dy) * (180.0f / 3.14159265358979323846f));
+}
+
+static void reset_actor(FcVisualActor* actor, int tile_x, int tile_y,
+                        int size, float yaw_degrees) {
+    if (!actor) return;
+    memset(actor, 0, sizeof(*actor));
+    actor->active = 1;
+    actor->size = size > 0 ? size : 1;
+    actor->server_tile_x = tile_x;
+    actor->server_tile_y = tile_y;
+    actor->local_x = (float)tile_x * FC_VISUAL_LOCAL_UNITS +
+                     (float)actor->size * (FC_VISUAL_LOCAL_UNITS * 0.5f);
+    actor->local_y = (float)tile_y * FC_VISUAL_LOCAL_UNITS +
+                     (float)actor->size * (FC_VISUAL_LOCAL_UNITS * 0.5f);
+    actor->previous_local_x = actor->local_x;
+    actor->previous_local_y = actor->local_y;
+    actor->yaw_degrees = normalize_degrees(yaw_degrees);
+    actor->desired_yaw_degrees = actor->yaw_degrees;
+    actor->target_kind = FC_VISUAL_TARGET_NONE;
+    actor->target_slot = -1;
+    actor->locomotion = FC_VISUAL_LOCOMOTION_IDLE;
+}
+
+void fc_visual_scene_init(FcVisualScene* scene) {
+    if (!scene) return;
+    memset(scene, 0, sizeof(*scene));
+    scene->player.target_slot = -1;
+    for (int i = 0; i < FC_MAX_NPCS; i++) scene->npcs[i].target_slot = -1;
+    scene->render_alpha = 1.0f;
+}
+
+void fc_visual_scene_reset_player(FcVisualScene* scene, int tile_x, int tile_y,
+                                  int size, float yaw_degrees) {
+    if (!scene) return;
+    reset_actor(&scene->player, tile_x, tile_y, size, yaw_degrees);
+    scene->client_tick_accumulator = 0.0f;
+    scene->render_alpha = 1.0f;
+}
+
+void fc_visual_scene_reset_npc(FcVisualScene* scene, int slot, int tile_x,
+                               int tile_y, int size, float yaw_degrees) {
+    if (!scene || slot < 0 || slot >= FC_MAX_NPCS) return;
+    reset_actor(&scene->npcs[slot], tile_x, tile_y, size, yaw_degrees);
+}
+
+void fc_visual_scene_deactivate_npc(FcVisualScene* scene, int slot) {
+    if (!scene || slot < 0 || slot >= FC_MAX_NPCS) return;
+    memset(&scene->npcs[slot], 0, sizeof(scene->npcs[slot]));
+    scene->npcs[slot].target_slot = -1;
+}
+
+void fc_visual_actor_enqueue_tile(FcVisualActor* actor, int tile_x, int tile_y,
+                                  int running) {
+    if (!actor || !actor->active) return;
+    actor->server_tile_x = tile_x;
+    actor->server_tile_y = tile_y;
+
+    if (actor->path_count > 0) {
+        int last = actor->path_count - 1;
+        if (actor->path_x[last] == tile_x && actor->path_y[last] == tile_y) {
+            actor->path_running[last] = running ? 1u : 0u;
+            return;
+        }
+    }
+
+    if (actor->path_count >= FC_VISUAL_ACTIVE_PATH_MAX) {
+        /* Native actor queues store ten entries but keep at most nine active
+         * route points. A new server step drops the oldest visual waypoint. */
+        memmove(actor->path_x, actor->path_x + 1,
+                (FC_VISUAL_ACTIVE_PATH_MAX - 1) * sizeof(actor->path_x[0]));
+        memmove(actor->path_y, actor->path_y + 1,
+                (FC_VISUAL_ACTIVE_PATH_MAX - 1) * sizeof(actor->path_y[0]));
+        memmove(actor->path_running, actor->path_running + 1,
+                (FC_VISUAL_ACTIVE_PATH_MAX - 1) * sizeof(actor->path_running[0]));
+        actor->path_count = FC_VISUAL_ACTIVE_PATH_MAX - 1;
+    }
+
+    int next = actor->path_count++;
+    actor->path_x[next] = tile_x;
+    actor->path_y[next] = tile_y;
+    actor->path_running[next] = running ? 1u : 0u;
+}
+
+void fc_visual_actor_enqueue_transition(FcVisualActor* actor, int from_x,
+                                        int from_y, int to_x, int to_y,
+                                        int running) {
+    if (!actor || !actor->active) return;
+    int x = from_x;
+    int y = from_y;
+    int dx = to_x - from_x;
+    int dy = to_y - from_y;
+    int steps = abs(dx) > abs(dy) ? abs(dx) : abs(dy);
+    int sx = (dx > 0) - (dx < 0);
+    int sy = (dy > 0) - (dy < 0);
+
+    /* Large transitions are resets/teleports, not ordinary route updates. */
+    if (steps > FC_VISUAL_PATH_CAPACITY) {
+        reset_actor(actor, to_x, to_y, actor->size, actor->yaw_degrees);
+        return;
+    }
+
+    for (int i = 0; i < steps; i++) {
+        if (x != to_x) x += sx;
+        if (y != to_y) y += sy;
+        fc_visual_actor_enqueue_tile(actor, x, y, running);
+    }
+    if (steps == 0) {
+        actor->server_tile_x = to_x;
+        actor->server_tile_y = to_y;
+    }
+}
+
+void fc_visual_actor_set_target(FcVisualActor* actor,
+                                FcVisualTargetKind target_kind,
+                                int target_slot) {
+    if (!actor) return;
+    actor->target_kind = target_kind;
+    actor->target_slot = target_slot;
+}
+
+void fc_visual_actor_set_movement_blocked(FcVisualActor* actor, int blocked) {
+    if (!actor) return;
+    actor->movement_blocked = blocked ? 1 : 0;
+}
+
+static const FcVisualActor* target_actor(const FcVisualScene* scene,
+                                         const FcVisualActor* actor) {
+    if (!scene || !actor) return NULL;
+    if (actor->target_kind == FC_VISUAL_TARGET_PLAYER)
+        return scene->player.active ? &scene->player : NULL;
+    if (actor->target_kind == FC_VISUAL_TARGET_NPC &&
+        actor->target_slot >= 0 && actor->target_slot < FC_MAX_NPCS &&
+        scene->npcs[actor->target_slot].active)
+        return &scene->npcs[actor->target_slot];
+    return NULL;
+}
+
+static void pop_path_front(FcVisualActor* actor) {
+    if (!actor || actor->path_count <= 0) return;
+    actor->path_count--;
+    if (actor->path_count > 0) {
+        memmove(actor->path_x, actor->path_x + 1,
+                actor->path_count * sizeof(actor->path_x[0]));
+        memmove(actor->path_y, actor->path_y + 1,
+                actor->path_count * sizeof(actor->path_y[0]));
+        memmove(actor->path_running, actor->path_running + 1,
+                actor->path_count * sizeof(actor->path_running[0]));
+    }
+}
+
+static void move_toward(float* value, float destination, float speed) {
+    if (*value < destination) {
+        *value += speed;
+        if (*value > destination) *value = destination;
+    } else if (*value > destination) {
+        *value -= speed;
+        if (*value < destination) *value = destination;
+    }
+}
+
+static FcVisualLocomotion directional_locomotion(float movement_yaw,
+                                                  float actor_yaw,
+                                                  int fast_movement) {
+    float relative = normalize_degrees(movement_yaw - actor_yaw);
+    if (relative >= -45.0f && relative <= 45.0f) {
+        return fast_movement ? FC_VISUAL_LOCOMOTION_RUN
+                             : FC_VISUAL_LOCOMOTION_WALK_FORWARD;
+    }
+    if (relative > 45.0f && relative < 135.0f)
+        return FC_VISUAL_LOCOMOTION_WALK_RIGHT;
+    if (relative < -45.0f && relative > -135.0f)
+        return FC_VISUAL_LOCOMOTION_WALK_LEFT;
+    return FC_VISUAL_LOCOMOTION_WALK_BACK;
+}
+
+static void update_actor_movement(FcVisualActor* actor) {
+    actor->moving = 0;
+    actor->locomotion = FC_VISUAL_LOCOMOTION_IDLE;
+    if (!actor->active || actor->path_count <= 0 || actor->movement_blocked)
+        return;
+
+    float dst_x = (float)actor->path_x[0] * FC_VISUAL_LOCAL_UNITS +
+                  (float)actor->size * (FC_VISUAL_LOCAL_UNITS * 0.5f);
+    float dst_y = (float)actor->path_y[0] * FC_VISUAL_LOCAL_UNITS +
+                  (float)actor->size * (FC_VISUAL_LOCAL_UNITS * 0.5f);
+
+    /* The native client snaps to a queued waypoint when local prediction is
+     * more than two tiles out of sync, rather than gliding across the gap. */
+    if (fabsf(actor->local_x - dst_x) > 256.0f ||
+        fabsf(actor->local_y - dst_y) > 256.0f) {
+        actor->local_x = dst_x;
+        actor->local_y = dst_y;
+        actor->previous_local_x = dst_x;
+        actor->previous_local_y = dst_y;
+        return;
+    }
+
+    float movement_yaw = face_angle(actor->local_x, actor->local_y, dst_x, dst_y);
+    int running = actor->path_running[0] != 0;
+    float speed = FC_VISUAL_WALK_UNITS_PER_TICK;
+    if (actor->target_kind == FC_VISUAL_TARGET_NONE &&
+        fabsf(normalize_degrees(movement_yaw - actor->yaw_degrees)) > 0.01f)
+        speed = 2.0f;
+    if (actor->path_count > 2) speed = 6.0f;
+    if (actor->path_count > 3) speed = 8.0f;
+    if (running) speed *= 2.0f;
+
+    actor->desired_yaw_degrees = movement_yaw;
+    actor->locomotion = directional_locomotion(
+        movement_yaw, actor->yaw_degrees, running || speed >= 8.0f);
+    actor->moving = 1;
+    move_toward(&actor->local_x, dst_x, speed);
+    move_toward(&actor->local_y, dst_y, speed);
+    if (fabsf(actor->local_x - dst_x) < 0.001f &&
+        fabsf(actor->local_y - dst_y) < 0.001f)
+        pop_path_front(actor);
+}
+
+static void update_actor_facing(const FcVisualScene* scene,
+                                FcVisualActor* actor) {
+    if (!actor->active) return;
+    const FcVisualActor* target = target_actor(scene, actor);
+    if (target) {
+        actor->desired_yaw_degrees = face_angle(
+            actor->local_x, actor->local_y, target->local_x, target->local_y);
+    }
+
+    float delta = normalize_degrees(actor->desired_yaw_degrees -
+                                    actor->yaw_degrees);
+    if (fabsf(delta) <= FC_VISUAL_TURN_DEGREES_PER_TICK) {
+        actor->yaw_degrees = actor->desired_yaw_degrees;
+    } else {
+        actor->yaw_degrees = normalize_degrees(
+            actor->yaw_degrees +
+            (delta > 0.0f ? FC_VISUAL_TURN_DEGREES_PER_TICK
+                          : -FC_VISUAL_TURN_DEGREES_PER_TICK));
+    }
+
+    if (!actor->moving && fabsf(delta) > 0.01f)
+        actor->locomotion = FC_VISUAL_LOCOMOTION_TURN;
+}
+
+static void update_client_tick(FcVisualScene* scene) {
+    scene->player.previous_local_x = scene->player.local_x;
+    scene->player.previous_local_y = scene->player.local_y;
+    for (int i = 0; i < FC_MAX_NPCS; i++) {
+        scene->npcs[i].previous_local_x = scene->npcs[i].local_x;
+        scene->npcs[i].previous_local_y = scene->npcs[i].local_y;
+    }
+
+    update_actor_movement(&scene->player);
+    for (int i = 0; i < FC_MAX_NPCS; i++)
+        update_actor_movement(&scene->npcs[i]);
+
+    update_actor_facing(scene, &scene->player);
+    for (int i = 0; i < FC_MAX_NPCS; i++)
+        update_actor_facing(scene, &scene->npcs[i]);
+}
+
+void fc_visual_scene_update(FcVisualScene* scene, float elapsed_seconds) {
+    if (!scene || elapsed_seconds <= 0.0f) return;
+    scene->client_tick_accumulator += elapsed_seconds;
+    /* Avoid an unbounded catch-up loop after a debugger stop or window drag. */
+    if (scene->client_tick_accumulator > 0.25f)
+        scene->client_tick_accumulator = 0.25f;
+    while (scene->client_tick_accumulator >= FC_VISUAL_CLIENT_TICK_SECONDS) {
+        update_client_tick(scene);
+        scene->client_tick_accumulator -= FC_VISUAL_CLIENT_TICK_SECONDS;
+    }
+    scene->render_alpha = scene->client_tick_accumulator /
+                          FC_VISUAL_CLIENT_TICK_SECONDS;
+}
+
+FcVisualPose fc_visual_actor_pose(const FcVisualScene* scene,
+                                  const FcVisualActor* actor) {
+    FcVisualPose pose = {0};
+    if (!scene || !actor || !actor->active) return pose;
+    float alpha = scene->render_alpha;
+    if (alpha < 0.0f) alpha = 0.0f;
+    if (alpha > 1.0f) alpha = 1.0f;
+    float local_x = actor->previous_local_x +
+                    (actor->local_x - actor->previous_local_x) * alpha;
+    float local_y = actor->previous_local_y +
+                    (actor->local_y - actor->previous_local_y) * alpha;
+    pose.x = local_x / FC_VISUAL_LOCAL_UNITS;
+    pose.y = local_y / FC_VISUAL_LOCAL_UNITS;
+    pose.yaw_degrees = actor->yaw_degrees;
+    pose.moving = actor->moving;
+    pose.locomotion = actor->locomotion;
+    return pose;
+}
+
+FcVisualPose fc_visual_scene_player_pose(const FcVisualScene* scene) {
+    return scene ? fc_visual_actor_pose(scene, &scene->player)
+                 : (FcVisualPose){0};
+}
+
+FcVisualPose fc_visual_scene_npc_pose(const FcVisualScene* scene, int slot) {
+    if (!scene || slot < 0 || slot >= FC_MAX_NPCS)
+        return (FcVisualPose){0};
+    return fc_visual_actor_pose(scene, &scene->npcs[slot]);
+}
+
+#undef FC_VISUAL_WALK_UNITS_PER_TICK
+#undef FC_VISUAL_TURN_DEGREES_PER_TICK
+
+/* Actor Animation */
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+
+#define POLICY_REPLAY_BASE_TPS (5.0f / 3.0f)
+
+#define PLAYER_ANIM_HUMAN_IDLE 808
+#define PLAYER_ANIM_HUMAN_WALK 819
+#define PLAYER_ANIM_HUMAN_WALK_BACK 820
+#define PLAYER_ANIM_HUMAN_WALK_RIGHT 821
+#define PLAYER_ANIM_HUMAN_WALK_LEFT 822
+#define PLAYER_ANIM_HUMAN_TURN 823
+#define PLAYER_ANIM_HUMAN_RUN 824
+#define PLAYER_ANIM_BOW_ATTACK 426
+#define PLAYER_ANIM_XBOW_IDLE 4591
+#define PLAYER_ANIM_XBOW_WALK 4226
+#define PLAYER_ANIM_XBOW_RUN 4228
+#define PLAYER_ANIM_XBOW_ATTACK 7552
+#define PLAYER_ANIM_BLOWPIPE_ATTACK 5061
+#define PLAYER_ANIM_EAT 829
+#define PLAYER_ANIM_DEATH 836
+
+#define JAD_ANIM_RANGED 2652
+#define JAD_ANIM_MELEE 2655
+#define JAD_ANIM_MAGIC 2656
+
+static const FcPlayerVisualProfile PLAYER_VISUALS[FC_NUM_LOADOUTS] = {
+    [FC_LOADOUT_BLACK_DHIDE_RCB] = {
+        PLAYER_ANIM_XBOW_IDLE, PLAYER_ANIM_XBOW_WALK,
+        PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
+        PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
+        PLAYER_ANIM_XBOW_RUN, PLAYER_ANIM_XBOW_ATTACK,
+        27, 0, 0, {200, 200, 50, 255}, 0.12f,
+        155.0f, 146.0f, 41.0f, 5.0f, 5.0f, 11.0f, 5.0f,
+    },
+    [FC_LOADOUT_SOTA_TBOW] = {
+        PLAYER_ANIM_HUMAN_IDLE, PLAYER_ANIM_HUMAN_WALK,
+        PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
+        PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
+        PLAYER_ANIM_HUMAN_RUN, PLAYER_ANIM_BOW_ATTACK,
+        1120, 1116, 0, {190, 120, 55, 255}, 0.13f,
+        163.0f, 146.0f, 41.0f, 15.0f, 5.0f, 11.0f, 5.0f,
+    },
+    [FC_LOADOUT_LOW_DEF_RCB] = {
+        PLAYER_ANIM_XBOW_IDLE, PLAYER_ANIM_XBOW_WALK,
+        PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
+        PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
+        PLAYER_ANIM_XBOW_RUN, PLAYER_ANIM_XBOW_ATTACK,
+        27, 0, 0, {200, 200, 50, 255}, 0.12f,
+        155.0f, 146.0f, 41.0f, 5.0f, 5.0f, 11.0f, 5.0f,
+    },
+    [FC_LOADOUT_RCB_PURE] = {
+        PLAYER_ANIM_XBOW_IDLE, PLAYER_ANIM_XBOW_WALK,
+        PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
+        PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
+        PLAYER_ANIM_XBOW_RUN, PLAYER_ANIM_XBOW_ATTACK,
+        27, 0, 0, {200, 200, 50, 255}, 0.12f,
+        155.0f, 146.0f, 41.0f, 5.0f, 5.0f, 11.0f, 5.0f,
+    },
+    [FC_LOADOUT_MSBI_PURE] = {
+        PLAYER_ANIM_HUMAN_IDLE, PLAYER_ANIM_HUMAN_WALK,
+        PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
+        PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
+        PLAYER_ANIM_HUMAN_RUN, PLAYER_ANIM_BOW_ATTACK,
+        15, 24, 0, {145, 155, 165, 255}, 0.10f,
+        163.0f, 146.0f, 41.0f, 15.0f, 5.0f, 11.0f, 5.0f,
+    },
+    [FC_LOADOUT_BLOWPIPE_PURE] = {
+        PLAYER_ANIM_HUMAN_IDLE, PLAYER_ANIM_HUMAN_WALK,
+        PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
+        PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
+        PLAYER_ANIM_HUMAN_RUN, PLAYER_ANIM_BLOWPIPE_ATTACK,
+        230, 236, 0, {115, 175, 85, 255}, 0.09f,
+        163.0f, 146.0f, 32.0f, 15.0f, 0.0f, 11.0f, 5.0f,
+    },
+    [FC_LOADOUT_ACB_ARMADYL] = {
+        PLAYER_ANIM_XBOW_IDLE, PLAYER_ANIM_XBOW_WALK,
+        PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
+        PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
+        PLAYER_ANIM_XBOW_RUN, PLAYER_ANIM_XBOW_ATTACK,
+        1468, 0, 0, {165, 210, 240, 255}, 0.12f,
+        155.0f, 146.0f, 41.0f, 5.0f, 5.0f, 11.0f, 5.0f,
+    },
+    [FC_LOADOUT_BOWFA_CRYSTAL] = {
+        PLAYER_ANIM_HUMAN_IDLE, PLAYER_ANIM_HUMAN_WALK,
+        PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
+        PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
+        PLAYER_ANIM_HUMAN_RUN, PLAYER_ANIM_BOW_ATTACK,
+        1922, 1923, 0, {120, 235, 225, 255}, 0.13f,
+        163.0f, 146.0f, 41.0f, 15.0f, 5.0f, 11.0f, 5.0f,
+    },
+    [FC_LOADOUT_TBOW_MASORI] = {
+        PLAYER_ANIM_HUMAN_IDLE, PLAYER_ANIM_HUMAN_WALK,
+        PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
+        PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
+        PLAYER_ANIM_HUMAN_RUN, PLAYER_ANIM_BOW_ATTACK,
+        1120, 1116, 0, {190, 120, 55, 255}, 0.13f,
+        163.0f, 146.0f, 41.0f, 15.0f, 5.0f, 11.0f, 5.0f,
+    },
+};
+
+static const uint16_t NPC_ANIM_IDLE[] = {
+    0, 2618, 2624, 2624, 2631, 2636, 2642, 2650, 2636
+};
+static const uint16_t NPC_ANIM_WALK[] = {
+    0, 2619, 2623, 2623, 2632, 2634, 2643, 2651, 2634
+};
+static const uint16_t NPC_ANIM_ATTACK[] = {
+    0, 2621, 2625, 2625, 2628, 2637, 2644, 2655, 2637
+};
+static const uint16_t NPC_ANIM_DEATH[] = {
+    0, 2620, 2627, 2627, 2630, 2638, 2646, 2654, 2638
+};
+
+const FcPlayerVisualProfile *fc_player_visual_profile(int active_loadout) {
+    static const FcPlayerVisualProfile unarmed = {
+        .idle_anim=808, .walk_anim=819, .walk_back_anim=820,
+        .walk_left_anim=822, .walk_right_anim=821, .turn_anim=823,
+        .run_anim=824, .attack_anim=422,
+    };
+    if (active_loadout == -1) return &unarmed;
+    if (active_loadout < 0 || active_loadout >= FC_NUM_LOADOUTS)
+        active_loadout = FC_ACTIVE_LOADOUT;
+    return &PLAYER_VISUALS[active_loadout];
+}
+
+int fc_player_equipment_visual_profile(const FcPlayer *player) {
+    const FcItemDef *weapon = fc_item_definition(player->equipment[FC_EQUIP_SLOT_WEAPON].item_id);
+    return weapon ? weapon->visual_profile : -1;
+}
+
+NpcModelEntry *fc_actor_player_model_entry(NpcModelSet *player_models,
+                                           int active_loadout) {
+    if (!player_models) return NULL;
+    if (active_loadout < 0 || active_loadout >= FC_NUM_LOADOUTS)
+        active_loadout = FC_ACTIVE_LOADOUT;
+    uint32_t model_id = FC_LOADOUTS[active_loadout].player_model_id;
+    NpcModelEntry *entry = fc_npc_model_find(player_models, model_id);
+    return entry && entry->loaded ? entry : NULL;
+}
+
+
+void fc_actor_animation_upload_npc(FcActorAnimation *animation,
+                                   int npc_slot,
+                                   NpcModelEntry *entry) {
+    if (!animation || npc_slot < 0 || npc_slot >= FC_MAX_NPCS) return;
+    fc_model_animation_upload(entry, animation->npc_states[npc_slot]);
+}
+
+static AnimSequence *advance_track(AnimCache *cache, uint16_t desired,
+                                   uint16_t *current, int *frame,
+                                   float *timer, float dt, int play_once) {
+    if (!cache || desired == 0 || !current || !frame || !timer) return NULL;
+    AnimSequence *sequence = anim_get_sequence(cache, desired);
+    if (!sequence || sequence->frame_count == 0) return NULL;
+    if (*current != desired) {
+        *current = desired;
+        *frame = 0;
+        *timer = (float)sequence->frames[0].delay * 0.02f;
+        if (*timer < 0.016f) *timer = 0.016f;
+    }
+    if (*frame < 0 || *frame >= sequence->frame_count) *frame = 0;
+    *timer -= dt;
+    while (*timer <= 0.0f && (!play_once || *frame < sequence->frame_count - 1)) {
+        (*frame)++;
+        if (*frame >= sequence->frame_count) {
+            if (sequence->frame_step > 0 &&
+                sequence->frame_step <= sequence->frame_count) {
+                *frame -= sequence->frame_step;
+            } else {
+                *frame = 0;
+            }
+        }
+        float delay = (float)sequence->frames[*frame].delay * 0.02f;
+        if (delay < 0.016f) delay = 0.016f;
+        *timer += delay;
+    }
+    if (play_once && *timer <= 0.0f) *timer = 0.016f;
+    return sequence;
+}
+
+static float frame_duration(const AnimSequence *sequence, int frame) {
+    if (!sequence || frame < 0 || frame >= sequence->frame_count) return 0.016f;
+    float duration = (float)sequence->frames[frame].delay * 0.02f;
+    return duration < 0.016f ? 0.016f : duration;
+}
+
+static float track_duration(const AnimSequence *sequence) {
+    if (!sequence || sequence->frame_count == 0) return 0.0f;
+    float duration = 0.0f;
+    for (int i = 0; i < sequence->frame_count; i++)
+        duration += frame_duration(sequence, i);
+    return duration;
+}
+
+static void retarget_track(AnimCache *cache, uint16_t desired,
+                           uint16_t *current, int *frame, float *timer) {
+    if (!cache || desired == 0 || !current || !frame || !timer ||
+        *current == 0 || *current == desired) return;
+    AnimSequence *old_sequence = anim_get_sequence(cache, *current);
+    AnimSequence *new_sequence = anim_get_sequence(cache, desired);
+    if (!old_sequence || old_sequence->frame_count == 0 ||
+        !new_sequence || new_sequence->frame_count == 0) return;
+    int old_frame = *frame;
+    if (old_frame < 0 || old_frame >= old_sequence->frame_count) old_frame = 0;
+    float old_total = track_duration(old_sequence);
+    float new_total = track_duration(new_sequence);
+    if (old_total <= 0.0f || new_total <= 0.0f) return;
+    float old_elapsed = 0.0f;
+    for (int i = 0; i < old_frame; i++)
+        old_elapsed += frame_duration(old_sequence, i);
+    float old_frame_duration = frame_duration(old_sequence, old_frame);
+    float remaining = *timer;
+    if (remaining < 0.0f) remaining = 0.0f;
+    if (remaining > old_frame_duration) remaining = old_frame_duration;
+    old_elapsed += old_frame_duration - remaining;
+    float target = fmodf(old_elapsed, old_total) / old_total * new_total;
+    float elapsed = 0.0f;
+    int new_frame = 0;
+    for (; new_frame < new_sequence->frame_count - 1; new_frame++) {
+        float duration = frame_duration(new_sequence, new_frame);
+        if (target < elapsed + duration) break;
+        elapsed += duration;
+    }
+    *current = desired;
+    *frame = new_frame;
+    *timer = elapsed + frame_duration(new_sequence, new_frame) - target;
+    if (*timer < 0.001f) *timer = 0.001f;
+}
+
+static int movement_sequence(const FcPlayerVisualProfile *profile,
+                             uint16_t sequence) {
+    return profile && sequence != 0 &&
+        (sequence == profile->walk_anim ||
+         sequence == profile->walk_back_anim ||
+         sequence == profile->walk_left_anim ||
+         sequence == profile->walk_right_anim ||
+         sequence == profile->run_anim);
+}
+
+static float sequence_duration(const AnimSequence *sequence) {
+    if (!sequence || sequence->frame_count == 0) return 0.45f;
+    float total = track_duration(sequence);
+    return total < 0.35f ? 0.35f : total;
+}
+
+static uint16_t npc_attack_sequence(int npc_type, int attack_style) {
+    if (npc_type == NPC_TZTOK_JAD) {
+        if (attack_style == ATTACK_MAGIC) return JAD_ANIM_MAGIC;
+        if (attack_style == ATTACK_RANGED) return JAD_ANIM_RANGED;
+        if (attack_style == ATTACK_MELEE) return JAD_ANIM_MELEE;
+    }
+    return npc_type > 0 && npc_type < 9 ? NPC_ANIM_ATTACK[npc_type] : 0;
+}
+
+float fc_actor_animation_scaled_dt(float tps, float dt) {
+    if (tps <= 0.0f) return dt;
+    float scale = tps / POLICY_REPLAY_BASE_TPS;
+    if (scale < 0.05f) scale = 0.05f;
+    if (scale > 36.0f) scale = 36.0f;
+    return dt * scale;
+}
+
+float fc_actor_animation_scaled_duration(float tps, float seconds) {
+    float scale = tps > 0.0f ? tps / POLICY_REPLAY_BASE_TPS : 1.0f;
+    if (scale < 0.05f) scale = 0.05f;
+    if (scale > 36.0f) scale = 36.0f;
+    seconds /= scale;
+    return seconds < 0.05f ? 0.05f : seconds;
+}
+
+static int player_lock_active(const FcActorAnimation *animation) {
+    return animation && animation->player_lock_sequence != 0 &&
+           animation->player_lock_timer > 0.0f;
+}
+
+static uint16_t player_action_sequence(const FcActorAnimation *animation,
+                                       const FcState *state) {
+    if (!animation || !state) return 0;
+    if (state->terminal == TERMINAL_PLAYER_DEATH) return PLAYER_ANIM_DEATH;
+    if (state->player.food_eaten_this_tick) return PLAYER_ANIM_EAT;
+    return player_lock_active(animation) ? animation->player_lock_sequence : 0;
+}
+
+static int sequence_blocks_movement(AnimCache *cache, uint16_t sequence_id) {
+    if (!cache || sequence_id == 0) return 0;
+    AnimSequence *sequence = anim_get_sequence(cache, sequence_id);
+    return sequence && sequence->postanim_move == 0;
+}
+
+static void recreate_player_state(FcActorAnimation *animation,
+                                  NpcModelEntry *entry,
+                                  int active_loadout) {
+    if (!animation || !entry || !entry->loaded || !entry->vertex_skins) return;
+    if (animation->player_state &&
+        animation->player_state->vert_count == entry->base_vert_count) return;
+    if (animation->player_state) anim_model_state_free(animation->player_state);
+    animation->player_state = anim_model_state_create(entry->vertex_skins,
+                                                       entry->base_vert_count);
+    const FcPlayerVisualProfile *profile = fc_player_visual_profile(active_loadout);
+    animation->player_sequence = profile->idle_anim;
+    animation->player_frame = 0;
+    animation->player_timer = 0.0f;
+    fprintf(stderr, "Player animation state created (%d base verts, model %u)\n",
+            entry->base_vert_count, entry->model_id);
+}
+
+void fc_actor_animation_init(FcActorAnimation *animation) {
+    if (!animation) return;
+    memset(animation, 0, sizeof(*animation));
+    animation->player_attack_target = -1;
+    for (int i = 0; i < FC_MAX_NPCS; i++)
+        animation->npc_prayer_lock_ticks[i] = -1;
+}
+
+void fc_actor_animation_reset(FcActorAnimation *animation,
+                              const FcState *state,
+                              NpcModelSet *player_models,
+                              int active_loadout) {
+    if (!animation || !state) return;
+    fc_visual_scene_init(&animation->scene);
+    fc_visual_scene_reset_player(&animation->scene, state->player.x,
+                                 state->player.y, 1,
+                                 state->player.facing_angle);
+    const FcPlayerVisualProfile *profile = fc_player_visual_profile(
+        fc_player_equipment_visual_profile(&state->player));
+    animation->player_pose_sequence = profile->idle_anim;
+    animation->player_pose_frame = 0;
+    animation->player_pose_timer = 0.0f;
+    animation->player_action_sequence = 0;
+    animation->player_action_frame = 0;
+    animation->player_action_timer = 0.0f;
+    animation->player_lock_sequence = 0;
+    animation->player_lock_timer = 0.0f;
+    animation->player_attack_target = -1;
+    animation->prayer_flick_timer = 0.0f;
+    recreate_player_state(animation,
+        fc_actor_player_model_entry(player_models, active_loadout),
+        active_loadout);
+    for (int i = 0; i < FC_MAX_NPCS; i++) {
+        const FcNpc *npc = &state->npcs[i];
+        animation->previous_npc_x[i] = npc->x;
+        animation->previous_npc_y[i] = npc->y;
+        animation->previous_npc_active[i] = npc->active;
+        if (npc->active || npc->died_this_tick) {
+            fc_visual_scene_reset_npc(&animation->scene, i, npc->x, npc->y,
+                                      npc->size, 0.0f);
+        }
+        if (animation->npc_states[i]) {
+            anim_model_state_free(animation->npc_states[i]);
+            animation->npc_states[i] = NULL;
+        }
+        animation->npc_sequences[i] = 0;
+        animation->npc_frames[i] = 0;
+        animation->npc_timers[i] = 0.0f;
+        animation->npc_action_sequences[i] = 0;
+        animation->npc_action_frames[i] = 0;
+        animation->npc_action_timers[i] = 0.0f;
+        animation->npc_attack_styles[i] = ATTACK_NONE;
+        animation->npc_attack_timers[i] = 0.0f;
+        animation->npc_prayer_indicator_timers[i] = 0.0f;
+        animation->npc_prayer_lock_ticks[i] = -1;
+    }
+}
+
+void fc_actor_animation_shutdown(FcActorAnimation *animation) {
+    if (!animation) return;
+    if (animation->player_state) anim_model_state_free(animation->player_state);
+    for (int i = 0; i < FC_MAX_NPCS; i++) {
+        if (animation->npc_states[i])
+            anim_model_state_free(animation->npc_states[i]);
+    }
+    memset(animation, 0, sizeof(*animation));
+}
+
+void fc_actor_animation_capture_tick_start(FcActorAnimation *animation,
+                                           const FcState *state) {
+    if (!animation || !state) return;
+    for (int i = 0; i < FC_MAX_NPCS; i++) {
+        animation->previous_npc_x[i] = state->npcs[i].x;
+        animation->previous_npc_y[i] = state->npcs[i].y;
+        animation->previous_npc_active[i] = state->npcs[i].active;
+    }
+}
+
+void fc_actor_animation_ingest_tick(FcActorAnimation *animation,
+                                    const FcState *state,
+                                    const FcRenderEvents *events) {
+    if (!animation || !state || !events) return;
+    FcVisualActor *player = &animation->scene.player;
+    if (!player->active) {
+        fc_visual_scene_reset_player(&animation->scene,
+            events->player_move_start_x, events->player_move_start_y, 1,
+            state->player.facing_angle);
+    }
+    int waypoint_count = events->player_move_waypoint_count;
+    int running = waypoint_count > 1;
+    for (int i = 0; i < waypoint_count; i++) {
+        fc_visual_actor_enqueue_tile(player, events->player_move_waypoint_x[i],
+                                     events->player_move_waypoint_y[i], running);
+    }
+    if (waypoint_count == 0 &&
+        (player->server_tile_x != state->player.x ||
+         player->server_tile_y != state->player.y)) {
+        fc_visual_actor_enqueue_transition(player, player->server_tile_x,
+            player->server_tile_y, state->player.x, state->player.y,
+            state->player.is_running);
+    }
+    for (int i = 0; i < FC_MAX_NPCS; i++) {
+        const FcNpc *npc = &state->npcs[i];
+        FcVisualActor *visual = &animation->scene.npcs[i];
+        if (npc->active && !animation->previous_npc_active[i]) {
+            fc_visual_scene_reset_npc(&animation->scene, i, npc->x, npc->y,
+                                      npc->size, 0.0f);
+        } else if ((npc->active || npc->died_this_tick) && visual->active) {
+            fc_visual_actor_enqueue_transition(visual,
+                animation->previous_npc_x[i], animation->previous_npc_y[i],
+                npc->x, npc->y, 0);
+        } else if (!npc->active && !npc->died_this_tick) {
+            fc_visual_scene_deactivate_npc(&animation->scene, i);
+        }
+    }
+}
+
+void fc_actor_animation_ingest_events(FcActorAnimation *animation,
+                                      const FcRenderEvents *events,
+                                      AnimCache *cache,
+                                      int active_loadout,
+                                      float tps) {
+    if (!animation || !events) return;
+    if (events->player_attack_fired) {
+        const FcPlayerVisualProfile *profile =
+            fc_player_visual_profile(active_loadout);
+        AnimSequence *sequence = cache
+            ? anim_get_sequence(cache, profile->attack_anim) : NULL;
+        animation->player_lock_sequence = profile->attack_anim;
+        animation->player_lock_timer = fc_actor_animation_scaled_duration(
+            tps, sequence_duration(sequence));
+        animation->player_attack_target =
+            events->player_attack_target_npc_slot;
+        animation->player_action_sequence = 0;
+        animation->player_action_frame = 0;
+        animation->player_action_timer = 0.0f;
+    }
+    if (events->prayer_flick_performed) {
+        animation->prayer_flick_timer =
+            fc_actor_animation_scaled_duration(tps, 0.10f);
+    }
+    for (int i = 0; i < events->npc_attack_count; i++) {
+        const FcRenderNpcAttack *attack = &events->npc_attacks[i];
+        int slot = attack->npc_slot;
+        if (slot < 0 || slot >= FC_MAX_NPCS ||
+            attack->attack_style == ATTACK_NONE) continue;
+        animation->npc_attack_styles[slot] = attack->attack_style;
+        animation->npc_attack_timers[slot] = 1.15f;
+        animation->npc_prayer_indicator_timers[slot] = 0.30f;
+        animation->npc_prayer_lock_ticks[slot] = attack->prayer_lock_tick;
+    }
+}
+
+static void update_targets(FcActorAnimation *animation, const FcState *state) {
+    int target = player_lock_active(animation)
+        ? animation->player_attack_target : state->player.attack_target_idx;
+    if (target >= 0 && target < FC_MAX_NPCS &&
+        animation->scene.npcs[target].active) {
+        fc_visual_actor_set_target(&animation->scene.player,
+                                   FC_VISUAL_TARGET_NPC, target);
+    } else {
+        fc_visual_actor_set_target(&animation->scene.player,
+                                   FC_VISUAL_TARGET_NONE, -1);
+    }
+    for (int i = 0; i < FC_MAX_NPCS; i++) {
+        FcVisualActor *actor = &animation->scene.npcs[i];
+        if (actor->active && state->npcs[i].active) {
+            int heal_target = state->npcs[i].heal_target_idx;
+            if (heal_target >= 0 && heal_target < FC_MAX_NPCS &&
+                heal_target != i && animation->scene.npcs[heal_target].active) {
+                fc_visual_actor_set_target(actor, FC_VISUAL_TARGET_NPC,
+                                           heal_target);
+            } else if (heal_target == i) {
+                fc_visual_actor_set_target(actor, FC_VISUAL_TARGET_NONE, -1);
+            } else {
+                fc_visual_actor_set_target(actor, FC_VISUAL_TARGET_PLAYER, 0);
+            }
+        } else {
+            fc_visual_actor_set_target(actor, FC_VISUAL_TARGET_NONE, -1);
+        }
+    }
+}
+
+void fc_actor_animation_update_scene(FcActorAnimation *animation,
+                                     const FcState *state,
+                                     AnimCache *cache,
+                                     float tps,
+                                     float dt,
+                                     int advance_scene,
+                                     const unsigned char deferred_deaths[FC_MAX_NPCS]) {
+    if (!animation || !state) return;
+    update_targets(animation, state);
+    fc_visual_actor_set_movement_blocked(&animation->scene.player,
+        sequence_blocks_movement(cache,
+            player_action_sequence(animation, state)));
+    for (int i = 0; i < FC_MAX_NPCS; i++) {
+        uint16_t action = 0;
+        if ((state->npcs[i].is_dead || state->npcs[i].died_this_tick) &&
+            (!deferred_deaths || !deferred_deaths[i])) {
+            int type = state->npcs[i].npc_type;
+            if (type > 0 && type < 9) action = NPC_ANIM_DEATH[type];
+        } else if (animation->npc_attack_timers[i] > 0.0f) {
+            action = npc_attack_sequence(state->npcs[i].npc_type,
+                                          animation->npc_attack_styles[i]);
+        }
+        fc_visual_actor_set_movement_blocked(&animation->scene.npcs[i],
+                                             sequence_blocks_movement(cache, action));
+    }
+    float visual_dt = fc_actor_animation_scaled_dt(tps, dt);
+    if (advance_scene) fc_visual_scene_update(&animation->scene, visual_dt);
+    if (animation->player_lock_timer > 0.0f) {
+        animation->player_lock_timer -= dt;
+        if (animation->player_lock_timer <= 0.0f) {
+            animation->player_lock_timer = 0.0f;
+            animation->player_lock_sequence = 0;
+            animation->player_attack_target = -1;
+            animation->player_action_sequence = 0;
+            animation->player_action_frame = 0;
+            animation->player_action_timer = 0.0f;
+        }
+    }
+    if (animation->prayer_flick_timer > 0.0f) {
+        animation->prayer_flick_timer -= dt;
+        if (animation->prayer_flick_timer < 0.0f)
+            animation->prayer_flick_timer = 0.0f;
+    }
+    for (int i = 0; i < FC_MAX_NPCS; i++) {
+        if (animation->npc_prayer_lock_ticks[i] >= 0 &&
+            state->tick >= animation->npc_prayer_lock_ticks[i]) {
+            animation->npc_prayer_indicator_timers[i] = 0.0f;
+            animation->npc_prayer_lock_ticks[i] = -1;
+        }
+        if (animation->npc_prayer_indicator_timers[i] > 0.0f) {
+            animation->npc_prayer_indicator_timers[i] -= dt;
+            if (animation->npc_prayer_indicator_timers[i] < 0.0f)
+                animation->npc_prayer_indicator_timers[i] = 0.0f;
+        }
+    }
+}
+
+static uint16_t player_pose_sequence(const FcPlayerVisualProfile *profile,
+                                     FcVisualLocomotion locomotion) {
+    switch (locomotion) {
+        case FC_VISUAL_LOCOMOTION_TURN: return profile->turn_anim;
+        case FC_VISUAL_LOCOMOTION_WALK_BACK: return profile->walk_back_anim;
+        case FC_VISUAL_LOCOMOTION_WALK_LEFT: return profile->walk_left_anim;
+        case FC_VISUAL_LOCOMOTION_WALK_RIGHT: return profile->walk_right_anim;
+        case FC_VISUAL_LOCOMOTION_RUN: return profile->run_anim;
+        case FC_VISUAL_LOCOMOTION_WALK_FORWARD: return profile->walk_anim;
+        default: return profile->idle_anim;
+    }
+}
+
+void fc_actor_animation_update_models(FcActorAnimation *animation,
+                                      const FcState *state,
+                                      NpcModelSet *player_models,
+                                      NpcModelSet *npc_models,
+                                      AnimCache *cache,
+                                      int active_loadout,
+                                      float tps,
+                                      float dt,
+                                      const unsigned char deferred_deaths[FC_MAX_NPCS]) {
+    if (!animation || !state || !cache) return;
+    float anim_dt = fc_actor_animation_scaled_dt(tps, dt);
+    NpcModelEntry *player_entry =
+        fc_actor_player_model_entry(player_models, active_loadout);
+    int visual_profile = fc_player_equipment_visual_profile(&state->player);
+    recreate_player_state(animation, player_entry, visual_profile);
+    if (animation->player_state && player_entry) {
+        const FcPlayerVisualProfile *profile =
+            fc_player_visual_profile(visual_profile);
+        FcVisualPose pose = fc_visual_scene_player_pose(&animation->scene);
+        uint16_t pose_sequence = player_pose_sequence(profile, pose.locomotion);
+        uint16_t action_sequence = player_action_sequence(animation, state);
+        if (pose_sequence != animation->player_pose_sequence &&
+            movement_sequence(profile, animation->player_pose_sequence) &&
+            movement_sequence(profile, pose_sequence)) {
+            retarget_track(cache, pose_sequence,
+                &animation->player_pose_sequence,
+                &animation->player_pose_frame,
+                &animation->player_pose_timer);
+        }
+        AnimSequence *pose_track = advance_track(cache, pose_sequence,
+            &animation->player_pose_sequence, &animation->player_pose_frame,
+            &animation->player_pose_timer, anim_dt, 0);
+        AnimSequence *action_track = NULL;
+        if (action_sequence != 0) {
+            action_track = advance_track(cache, action_sequence,
+                &animation->player_action_sequence,
+                &animation->player_action_frame,
+                &animation->player_action_timer, anim_dt,
+                player_lock_active(animation));
+        } else {
+            animation->player_action_sequence = 0;
+            animation->player_action_frame = 0;
+            animation->player_action_timer = 0.0f;
+        }
+        animation->player_sequence = action_track ? action_sequence : pose_sequence;
+        animation->player_frame = action_track
+            ? animation->player_action_frame : animation->player_pose_frame;
+        if (anim_mix_pose_action(cache, animation->player_state,
+                player_entry->base_verts, pose_track,
+                animation->player_pose_frame, action_track,
+                animation->player_action_frame)) {
+            fc_model_animation_upload(player_entry, animation->player_state);
+        }
+    }
+    if (!npc_models) return;
+    for (int i = 0; i < FC_MAX_NPCS; i++) {
+        const FcNpc *npc = &state->npcs[i];
+        if (!npc->active && !npc->died_this_tick) {
+            if (animation->npc_states[i]) {
+                anim_model_state_free(animation->npc_states[i]);
+                animation->npc_states[i] = NULL;
+            }
+            animation->npc_attack_styles[i] = ATTACK_NONE;
+            animation->npc_attack_timers[i] = 0.0f;
+            animation->npc_prayer_indicator_timers[i] = 0.0f;
+            animation->npc_prayer_lock_ticks[i] = -1;
+            continue;
+        }
+        NpcModelEntry *entry = fc_npc_model_find(
+            npc_models, fc_npc_type_to_model_id(npc->npc_type));
+        if (!entry || !entry->loaded || !entry->vertex_skins) continue;
+        if (!animation->npc_states[i] ||
+            animation->npc_states[i]->vert_count != entry->base_vert_count) {
+            if (animation->npc_states[i])
+                anim_model_state_free(animation->npc_states[i]);
+            animation->npc_states[i] = anim_model_state_create(
+                entry->vertex_skins, entry->base_vert_count);
+            animation->npc_sequences[i] =
+                npc->npc_type > 0 && npc->npc_type < 9
+                    ? NPC_ANIM_IDLE[npc->npc_type] : 0;
+            animation->npc_frames[i] = 0;
+            animation->npc_timers[i] = 0.0f;
+            animation->npc_action_sequences[i] = 0;
+            animation->npc_action_frames[i] = 0;
+            animation->npc_action_timers[i] = 0.0f;
+        }
+        uint16_t pose_sequence = npc->npc_type > 0 && npc->npc_type < 9
+            ? NPC_ANIM_IDLE[npc->npc_type] : 0;
+        if (animation->scene.npcs[i].moving &&
+            npc->npc_type > 0 && npc->npc_type < 9)
+            pose_sequence = NPC_ANIM_WALK[npc->npc_type];
+        uint16_t action_sequence = 0;
+        if ((npc->is_dead || npc->died_this_tick) &&
+            (!deferred_deaths || !deferred_deaths[i])) {
+            if (npc->npc_type > 0 && npc->npc_type < 9)
+                action_sequence = NPC_ANIM_DEATH[npc->npc_type];
+        } else if (animation->npc_attack_timers[i] > 0.0f) {
+            action_sequence = npc_attack_sequence(
+                npc->npc_type, animation->npc_attack_styles[i]);
+        }
+        AnimSequence *pose_track = advance_track(cache, pose_sequence,
+            &animation->npc_sequences[i], &animation->npc_frames[i],
+            &animation->npc_timers[i], anim_dt, 0);
+        AnimSequence *action_track = NULL;
+        if (action_sequence != 0) {
+            action_track = advance_track(cache, action_sequence,
+                &animation->npc_action_sequences[i],
+                &animation->npc_action_frames[i],
+                &animation->npc_action_timers[i], anim_dt, 1);
+        } else {
+            animation->npc_action_sequences[i] = 0;
+            animation->npc_action_frames[i] = 0;
+            animation->npc_action_timers[i] = 0.0f;
+        }
+        anim_mix_pose_action(cache, animation->npc_states[i],
+            entry->base_verts, pose_track, animation->npc_frames[i],
+            action_track, animation->npc_action_frames[i]);
+        if (animation->npc_attack_timers[i] > 0.0f) {
+            animation->npc_attack_timers[i] -= anim_dt;
+            if (animation->npc_attack_timers[i] <= 0.0f) {
+                animation->npc_attack_timers[i] = 0.0f;
+                animation->npc_attack_styles[i] = ATTACK_NONE;
+            }
+        }
+    }
+}
+
+int fc_actor_animation_render_prayer(const FcActorAnimation *animation,
+                                     const FcState *state) {
+    if (!animation || !state || animation->prayer_flick_timer > 0.0f)
+        return PRAYER_NONE;
+    return state->player.prayer;
+}
+
+int fc_actor_animation_prayer_window_active(const FcActorAnimation *animation,
+                                            int npc_slot,
+                                            int current_tick) {
+    if (!animation || npc_slot < 0 || npc_slot >= FC_MAX_NPCS) return 0;
+    return animation->npc_prayer_indicator_timers[npc_slot] > 0.0f ||
+        (animation->npc_prayer_lock_ticks[npc_slot] >= 0 &&
+         current_tick < animation->npc_prayer_lock_ticks[npc_slot]);
+}
+
+int fc_actor_animation_previous_npc_active(const FcActorAnimation *animation,
+                                           int npc_slot) {
+    return animation && npc_slot >= 0 && npc_slot < FC_MAX_NPCS
+        ? animation->previous_npc_active[npc_slot] : 0;
+}
+
+#undef POLICY_REPLAY_BASE_TPS
+#undef PLAYER_ANIM_HUMAN_IDLE
+#undef PLAYER_ANIM_HUMAN_WALK
+#undef PLAYER_ANIM_HUMAN_WALK_BACK
+#undef PLAYER_ANIM_HUMAN_WALK_RIGHT
+#undef PLAYER_ANIM_HUMAN_WALK_LEFT
+#undef PLAYER_ANIM_HUMAN_TURN
+#undef PLAYER_ANIM_HUMAN_RUN
+#undef PLAYER_ANIM_BOW_ATTACK
+#undef PLAYER_ANIM_XBOW_IDLE
+#undef PLAYER_ANIM_XBOW_WALK
+#undef PLAYER_ANIM_XBOW_RUN
+#undef PLAYER_ANIM_XBOW_ATTACK
+#undef PLAYER_ANIM_BLOWPIPE_ATTACK
+#undef PLAYER_ANIM_EAT
+#undef PLAYER_ANIM_DEATH
+#undef JAD_ANIM_RANGED
+#undef JAD_ANIM_MELEE
+#undef JAD_ANIM_MAGIC
+
+/* Projectile Visual */
+#include <math.h>
+
+float fc_projectile_profile_end_cycle(float launch_cycle,
+                                      float length_adjustment,
+                                      float step_multiplier,
+                                      int tile_distance) {
+    if (tile_distance < 0) tile_distance = 0;
+    float end_cycle = launch_cycle + length_adjustment +
+                      step_multiplier * (float)tile_distance;
+    return end_cycle > launch_cycle ? end_cycle : launch_cycle + 1.0f;
+}
+
+int fc_projectile_timing_from_client_cycles(float launch_cycle,
+                                            float end_cycle,
+                                            float ticks_per_second,
+                                            FcProjectileTiming* timing) {
+    if (!timing || ticks_per_second <= 0.0f || launch_cycle < 0.0f ||
+        end_cycle <= launch_cycle)
+        return 0;
+
+    float seconds_per_client_cycle = 1.0f / (30.0f * ticks_per_second);
+    timing->launch_delay = launch_cycle * seconds_per_client_cycle;
+    timing->flight_duration =
+        (end_cycle + 1.0f - launch_cycle) * seconds_per_client_cycle;
+    timing->total_duration = timing->launch_delay + timing->flight_duration;
+    return 1;
+}
+
+float fc_projectile_effect_duration_seconds(float animation_client_cycles,
+                                            float retain_client_cycles,
+                                            float ticks_per_second) {
+    if (ticks_per_second <= 0.0f || retain_client_cycles <= 0.0f)
+        return 0.0f;
+    if (animation_client_cycles <= 0.0f)
+        animation_client_cycles = 30.0f;
+    float visible_cycles = animation_client_cycles < retain_client_cycles
+        ? animation_client_cycles : retain_client_cycles;
+    return visible_cycles / (30.0f * ticks_per_second);
+}
+
+int fc_projectile_path_sample(const FcProjectilePath* path,
+                              float elapsed,
+                              FcProjectileSample* sample) {
+    if (!path || !sample || path->duration <= 0.0f)
+        return 0;
+
+    float dx = path->target_x - path->source_x;
+    float dz = path->target_z - path->source_z;
+    float horizontal = sqrtf(dx * dx + dz * dz);
+    float direction_x = 0.0f;
+    float direction_z = 1.0f;
+    if (horizontal > 0.00001f) {
+        direction_x = dx / horizontal;
+        direction_z = dz / horizontal;
+    }
+
+    float source_x = path->source_x + direction_x * path->progress;
+    float source_z = path->source_z + direction_z * path->progress;
+    float velocity_x = (path->target_x - source_x) / path->duration;
+    float velocity_z = (path->target_z - source_z) / path->duration;
+    float horizontal_speed = sqrtf(
+        velocity_x * velocity_x + velocity_z * velocity_z);
+    float velocity_y = horizontal_speed *
+        tanf(path->angle * (3.14159265358979323846f / 128.0f));
+    float acceleration_y = 2.0f *
+        (path->target_y - path->source_y - velocity_y * path->duration) /
+        (path->duration * path->duration);
+
+    float t = elapsed;
+    if (t < 0.0f) t = 0.0f;
+    if (t > path->duration) t = path->duration;
+    sample->x = source_x + velocity_x * t;
+    sample->y = path->source_y + velocity_y * t +
+                0.5f * acceleration_y * t * t;
+    sample->z = source_z + velocity_z * t;
+    sample->velocity_x = velocity_x;
+    sample->velocity_y = velocity_y + acceleration_y * t;
+    sample->velocity_z = velocity_z;
+    return 1;
+}
+
+
+/* Click Feedback */
+#include <string.h>
+
+void fc_click_feedback_reset(FcClickFeedback* feedback) {
+    if (!feedback) return;
+    memset(feedback, 0, sizeof(*feedback));
+    feedback->destination_x = -1;
+    feedback->destination_y = -1;
+}
+
+static void start_cross(FcClickFeedback* feedback, FcClickCrossKind kind,
+                        float screen_x, float screen_y) {
+    feedback->cross_kind = kind;
+    feedback->cross_screen_x = screen_x;
+    feedback->cross_screen_y = screen_y;
+    feedback->cross_elapsed = 0.0f;
+}
+
+void fc_click_feedback_select_move(FcClickFeedback* feedback,
+                                   const FcState* state,
+                                   int tile_x, int tile_y,
+                                   float screen_x, float screen_y) {
+    if (!feedback || !state ||
+        tile_x < 0 || tile_x >= FC_ARENA_WIDTH ||
+        tile_y < 0 || tile_y >= FC_ARENA_HEIGHT) {
+        return;
+    }
+
+    feedback->destination_active = 1;
+    feedback->destination_x = tile_x;
+    feedback->destination_y = tile_y;
+    feedback->preview_pending = 1;
+    feedback->preview_route_len = fc_pathfind_bfs_move_near(
+        state->player.x, state->player.y, tile_x, tile_y,
+        state->walkable, state->movement_flags,
+        feedback->preview_route_x, feedback->preview_route_y, FC_MAX_ROUTE);
+    start_cross(feedback, FC_CLICK_CROSS_MOVE, screen_x, screen_y);
+}
+
+void fc_click_feedback_select_interaction(FcClickFeedback* feedback,
+                                          float screen_x, float screen_y) {
+    if (!feedback) return;
+    feedback->destination_active = 0;
+    feedback->destination_x = -1;
+    feedback->destination_y = -1;
+    feedback->preview_pending = 0;
+    feedback->preview_route_len = 0;
+    start_cross(feedback, FC_CLICK_CROSS_INTERACTION, screen_x, screen_y);
+}
+
+void fc_click_feedback_accept_move_tick(FcClickFeedback* feedback,
+                                        const FcState* state) {
+    if (!feedback || !state || !feedback->preview_pending) return;
+    feedback->preview_pending = 0;
+    feedback->preview_route_len = 0;
+    fc_click_feedback_sync(feedback, state);
+}
+
+void fc_click_feedback_sync(FcClickFeedback* feedback,
+                            const FcState* state) {
+    if (!feedback || !state || !feedback->destination_active ||
+        feedback->preview_pending) {
+        return;
+    }
+    if (state->player.route_idx >= state->player.route_len) {
+        feedback->destination_active = 0;
+        feedback->destination_x = -1;
+        feedback->destination_y = -1;
+    }
+}
+
+void fc_click_feedback_update(FcClickFeedback* feedback,
+                              float elapsed_seconds) {
+    if (!feedback || feedback->cross_kind == FC_CLICK_CROSS_NONE ||
+        elapsed_seconds <= 0.0f) {
+        return;
+    }
+    feedback->cross_elapsed += elapsed_seconds;
+    if (feedback->cross_elapsed >=
+        FC_CLICK_CROSS_FRAME_COUNT * FC_CLICK_CROSS_FRAME_SECONDS) {
+        feedback->cross_kind = FC_CLICK_CROSS_NONE;
+        feedback->cross_elapsed = 0.0f;
+    }
+}
+
+int fc_click_feedback_cross_frame(const FcClickFeedback* feedback) {
+    if (!feedback || feedback->cross_kind == FC_CLICK_CROSS_NONE) return -1;
+    int frame = (int)(feedback->cross_elapsed / FC_CLICK_CROSS_FRAME_SECONDS);
+    if (frame < 0) frame = 0;
+    if (frame >= FC_CLICK_CROSS_FRAME_COUNT)
+        frame = FC_CLICK_CROSS_FRAME_COUNT - 1;
+    return frame;
+}
+
+int fc_click_feedback_route(const FcClickFeedback* feedback,
+                            const FcState* state,
+                            const int** out_x, const int** out_y,
+                            int* out_start, int* out_len) {
+    if (!feedback || !state || !out_x || !out_y || !out_start || !out_len ||
+        !feedback->destination_active) {
+        return 0;
+    }
+
+    if (feedback->preview_pending) {
+        *out_x = feedback->preview_route_x;
+        *out_y = feedback->preview_route_y;
+        *out_start = 0;
+        *out_len = feedback->preview_route_len;
+        return feedback->preview_route_len > 0;
+    }
+
+    *out_x = state->player.route_x;
+    *out_y = state->player.route_y;
+    *out_start = state->player.route_idx;
+    *out_len = state->player.route_len;
+    return state->player.route_idx < state->player.route_len;
+}
+
+
+/* Combat Presentation */
+#include "raymath.h"
+#include "rlgl.h"
+
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define MAX_HITSPLATS 32
+#define MAX_PROJECTILES 16
+#define MAX_VISUAL_EFFECTS 32
+#define OSRS_HITSPLAT_SECONDS 1.0f
+#define OSRS_HEALTHBAR_SECONDS 6.0f
+#define POLICY_REPLAY_BASE_TPS (5.0f / 3.0f)
+
+#define PROJ_JAD_MAGIC_LAUNCH 439
+#define PROJ_TOK_XIL_SPINE 443
+#define PROJ_TOK_XIL_IMPACT 444
+#define PROJ_KET_ZEK_FIRE 445
+#define PROJ_KET_ZEK_IMPACT 446
+#define PROJ_JAD_MAGIC_TRAVEL 448
+#define PROJ_JAD_MAGIC_IMPACT 157
+#define PROJ_JAD_RANGED_IMPACT 451
+#define PROJ_SPOTANIM_MODEL_BASE 0xA2000000u
+
+typedef enum {
+    HITSPLAT_DAMAGE = 0,
+    HITSPLAT_HEAL = 1,
+    HITSPLAT_PRAYER_DRAIN = 2,
+} HitsplatKind;
+
+typedef struct {
+    int active;
+    float world_x;
+    float world_y;
+    float world_z;
+    FcVisualTargetKind actor_kind;
+    int actor_slot;
+    int overlay_slot;
+    int damage;
+    int kind;
+    float seconds_left;
+} Hitsplat;
+
+typedef struct {
+    int active;
+    float src_x;
+    float src_y;
+    float src_z;
+    float dst_x;
+    float dst_y;
+    float dst_z;
+    float x;
+    float y;
+    float z;
+    float velocity_x;
+    float velocity_y;
+    float velocity_z;
+    float total_time;
+    float elapsed;
+    float launch_delay;
+    int launched;
+    FcVisualTargetKind source_kind;
+    int source_slot;
+    float source_y_offset;
+    FcVisualTargetKind target_kind;
+    int target_slot;
+    float target_y_offset;
+    int track_target;
+    int attack_style;
+    int launch_tick;
+    int has_deferred_hitsplat;
+    FcVisualTargetKind hitsplat_actor_kind;
+    int hitsplat_actor_slot;
+    float hitsplat_world_x;
+    float hitsplat_world_y;
+    float hitsplat_world_z;
+    int hitsplat_damage;
+    Color color;
+    float radius;
+    uint32_t spot_id;
+    uint32_t launch_spot_id;
+    uint32_t impact_spot_id;
+    float projectile_angle;
+    float projectile_progress;
+    AnimModelState *anim_state;
+    uint16_t anim_sequence;
+    int anim_frame;
+    float anim_timer;
+} VisualProjectile;
+
+typedef struct {
+    int active;
+    float x;
+    float y;
+    float z;
+    float total_time;
+    float elapsed;
+    Color color;
+    float radius;
+    uint32_t spot_id;
+    float yaw_degrees;
+    int attached;
+    FcVisualTargetKind attached_kind;
+    int attached_slot;
+    float attached_y_offset;
+    FcVisualTargetKind face_kind;
+    int face_slot;
+    AnimModelState *anim_state;
+    uint16_t anim_sequence;
+    int anim_frame;
+    float anim_timer;
+} VisualEffect;
+
+struct FcCombatPresentation {
+    Hitsplat hitsplats[MAX_HITSPLATS];
+    float player_healthbar_timer;
+    float npc_healthbar_timers[FC_MAX_NPCS];
+    VisualProjectile projectiles[MAX_PROJECTILES];
+    VisualEffect effects[MAX_VISUAL_EFFECTS];
+    NpcModelSet *projectile_models;
+    SpotAnimSet *spotanims;
+    Texture2D hitsplat_zero_texture;
+    Texture2D hitsplat_damage_texture;
+    Texture2D hitsplat_heal_texture;
+    Texture2D hitsplat_prayer_drain_texture;
+    Texture2D healthbar_full_texture;
+    Texture2D healthbar_empty_texture;
+};
+
+static float ground_height(const FcCombatPresentationContext *context,
+                           int tile_x, int tile_y) {
+    return context && context->terrain && context->terrain->loaded
+        ? terrain_height_at(context->terrain, tile_x, tile_y) + 0.1f : 0.0f;
+}
+
+static float smooth_ground_height(const FcCombatPresentationContext *context,
+                                  float tile_x, float tile_y) {
+    int x0 = (int)floorf(tile_x);
+    int y0 = (int)floorf(tile_y);
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x0 >= FC_ARENA_WIDTH) x0 = FC_ARENA_WIDTH - 1;
+    if (y0 >= FC_ARENA_HEIGHT) y0 = FC_ARENA_HEIGHT - 1;
+    int x1 = x0 + 1 < FC_ARENA_WIDTH ? x0 + 1 : x0;
+    int y1 = y0 + 1 < FC_ARENA_HEIGHT ? y0 + 1 : y0;
+    float tx = tile_x - floorf(tile_x);
+    float ty = tile_y - floorf(tile_y);
+    float h00 = ground_height(context, x0, y0);
+    float h10 = ground_height(context, x1, y0);
+    float h01 = ground_height(context, x0, y1);
+    float h11 = ground_height(context, x1, y1);
+    float h0 = h00 + (h10 - h00) * tx;
+    float h1 = h01 + (h11 - h01) * tx;
+    return h0 + (h1 - h0) * ty;
+}
+
+static void free_projectile(VisualProjectile *projectile) {
+    if (!projectile) return;
+    if (projectile->anim_state)
+        anim_model_state_free(projectile->anim_state);
+    memset(projectile, 0, sizeof(*projectile));
+}
+
+static void free_effect(VisualEffect *effect) {
+    if (!effect) return;
+    if (effect->anim_state) anim_model_state_free(effect->anim_state);
+    memset(effect, 0, sizeof(*effect));
+}
+
+static void clear_visuals(FcCombatPresentation *presentation) {
+    for (int i = 0; i < MAX_PROJECTILES; i++)
+        free_projectile(&presentation->projectiles[i]);
+    for (int i = 0; i < MAX_VISUAL_EFFECTS; i++)
+        free_effect(&presentation->effects[i]);
+}
+
+FcCombatPresentation *fc_combat_presentation_create(Texture2D shared_atlas) {
+    FcCombatPresentation *presentation = calloc(1, sizeof(*presentation));
+    if (!presentation) return NULL;
+    if (fc_asset_exists("fc_projectiles.models")) {
+        presentation->projectile_models = fc_npc_models_load(
+            "fc_projectiles.models", shared_atlas);
+    }
+    if (fc_asset_exists("fc_spotanims.bin"))
+        presentation->spotanims = spotanims_load("fc_spotanims.bin");
+    presentation->hitsplat_zero_texture = fc_load_texture_asset(
+        "data/sprites/ui/hitsplat_zero.png");
+    presentation->hitsplat_damage_texture = fc_load_texture_asset(
+        "data/sprites/ui/hitsplat_damage.png");
+    presentation->hitsplat_heal_texture = fc_load_texture_asset(
+        "data/sprites/ui/hitsplat_heal.png");
+    presentation->hitsplat_prayer_drain_texture = fc_load_texture_asset(
+        "data/sprites/ui/hitsplat_prayer_drain.png");
+    presentation->healthbar_full_texture = fc_load_texture_asset(
+        "data/sprites/ui/healthbar_full_30.png");
+    presentation->healthbar_empty_texture = fc_load_texture_asset(
+        "data/sprites/ui/healthbar_empty_30.png");
+    Texture2D *textures[] = {
+        &presentation->hitsplat_zero_texture,
+        &presentation->hitsplat_damage_texture,
+        &presentation->hitsplat_heal_texture,
+        &presentation->hitsplat_prayer_drain_texture,
+        &presentation->healthbar_full_texture,
+        &presentation->healthbar_empty_texture,
+    };
+    int loaded = 0;
+    for (int i = 0; i < (int)(sizeof(textures) / sizeof(textures[0])); i++) {
+        if (textures[i]->id > 0) {
+            SetTextureFilter(*textures[i], TEXTURE_FILTER_POINT);
+            loaded++;
+        }
+    }
+    fprintf(stderr, "Actor overhead sprites loaded: %d/6\n", loaded);
+    return presentation;
+}
+
+int fc_combat_presentation_ready(
+        const FcCombatPresentation *presentation) {
+    if (!presentation || !presentation->projectile_models ||
+        !presentation->projectile_models->loaded || !presentation->spotanims ||
+        !presentation->spotanims->loaded) {
+        return 0;
+    }
+    const Texture2D textures[] = {
+        presentation->hitsplat_zero_texture,
+        presentation->hitsplat_damage_texture,
+        presentation->hitsplat_heal_texture,
+        presentation->hitsplat_prayer_drain_texture,
+        presentation->healthbar_full_texture,
+        presentation->healthbar_empty_texture,
+    };
+    for (int i = 0; i < (int)(sizeof(textures) / sizeof(textures[0])); i++) {
+        if (textures[i].id == 0) return 0;
+    }
+    return 1;
+}
+
+void fc_combat_presentation_destroy(FcCombatPresentation *presentation) {
+    if (!presentation) return;
+    clear_visuals(presentation);
+    Texture2D textures[] = {
+        presentation->hitsplat_zero_texture,
+        presentation->hitsplat_damage_texture,
+        presentation->hitsplat_heal_texture,
+        presentation->hitsplat_prayer_drain_texture,
+        presentation->healthbar_full_texture,
+        presentation->healthbar_empty_texture,
+    };
+    for (int i = 0; i < (int)(sizeof(textures) / sizeof(textures[0])); i++) {
+        if (textures[i].id > 0) UnloadTexture(textures[i]);
+    }
+    if (presentation->spotanims) spotanims_free(presentation->spotanims);
+    if (presentation->projectile_models)
+        fc_npc_models_unload(presentation->projectile_models);
+    free(presentation);
+}
+
+void fc_combat_presentation_reset(FcCombatPresentation *presentation) {
+    if (!presentation) return;
+    clear_visuals(presentation);
+    memset(presentation->hitsplats, 0, sizeof(presentation->hitsplats));
+    presentation->player_healthbar_timer = 0.0f;
+    memset(presentation->npc_healthbar_timers, 0,
+           sizeof(presentation->npc_healthbar_timers));
+}
+
+void fc_combat_presentation_clear_npc_healthbar(
+    FcCombatPresentation *presentation, int npc_slot) {
+    if (!presentation || npc_slot < 0 || npc_slot >= FC_MAX_NPCS) return;
+    presentation->npc_healthbar_timers[npc_slot] = 0.0f;
+}
+
+static VisualEffect *spawn_effect(FcCombatPresentation *presentation,
+                                  uint32_t spot_id, float x, float y, float z,
+                                  float duration, Color color, float radius,
+                                  float yaw_degrees) {
+    if (!presentation || spot_id == 0) return NULL;
+    for (int i = 0; i < MAX_VISUAL_EFFECTS; i++) {
+        if (!presentation->effects[i].active) {
+            VisualEffect *effect = &presentation->effects[i];
+            memset(effect, 0, sizeof(*effect));
+            effect->active = 1;
+            effect->x = x;
+            effect->y = y;
+            effect->z = z;
+            effect->total_time = duration;
+            effect->color = color;
+            effect->radius = radius;
+            effect->spot_id = spot_id;
+            effect->yaw_degrees = yaw_degrees;
+            return effect;
+        }
+    }
+    return NULL;
+}
+
+static VisualProjectile *spawn_projectile(FcCombatPresentation *presentation,
+    float source_x, float source_y, float source_z,
+    float target_x, float target_y, float target_z,
+    float travel_seconds, Color color, float radius,
+    uint32_t travel_spot, uint32_t launch_spot, uint32_t impact_spot) {
+    if (!presentation ||
+        (travel_spot == 0 && launch_spot == 0 && impact_spot == 0)) return NULL;
+    for (int i = 0; i < MAX_PROJECTILES; i++) {
+        if (!presentation->projectiles[i].active) {
+            VisualProjectile *projectile = &presentation->projectiles[i];
+            free_projectile(projectile);
+            projectile->active = 1;
+            projectile->src_x = source_x;
+            projectile->src_y = source_y;
+            projectile->src_z = source_z;
+            projectile->dst_x = target_x;
+            projectile->dst_y = target_y;
+            projectile->dst_z = target_z;
+            projectile->x = source_x;
+            projectile->y = source_y;
+            projectile->z = source_z;
+            projectile->total_time = travel_seconds;
+            projectile->color = color;
+            projectile->radius = radius;
+            projectile->spot_id = travel_spot;
+            projectile->launch_spot_id = launch_spot;
+            projectile->impact_spot_id = impact_spot;
+            return projectile;
+        }
+    }
+    return NULL;
+}
+
+static int actor_world_point(const FcCombatPresentationContext *context,
+                             FcVisualTargetKind kind, int slot,
+                             float *x, float *y, float *z) {
+    if (!context || !context->scene || !x || !y || !z) return 0;
+    FcVisualPose pose;
+    float height;
+    if (kind == FC_VISUAL_TARGET_PLAYER && context->scene->player.active) {
+        pose = fc_visual_scene_player_pose(context->scene);
+        height = 1.5f;
+    } else if (kind == FC_VISUAL_TARGET_NPC && slot >= 0 &&
+               slot < FC_MAX_NPCS && context->scene->npcs[slot].active) {
+        pose = fc_visual_scene_npc_pose(context->scene, slot);
+        height = 1.0f + (float)context->scene->npcs[slot].size * 0.3f;
+    } else {
+        return 0;
+    }
+    *x = pose.x;
+    *z = -pose.y;
+    *y = smooth_ground_height(context, pose.x, pose.y) + height;
+    return 1;
+}
+
+static int tile_distance(int source_x, int source_y,
+                         int target_x, int target_y) {
+    int dx = abs(target_x - source_x);
+    int dy = abs(target_y - source_y);
+    return dx > dy ? dx : dy;
+}
+
+static float animation_client_cycles(const AnimSequence *sequence) {
+    if (!sequence || sequence->frame_count == 0) return 0.0f;
+    float total = 0.0f;
+    for (int i = 0; i < sequence->frame_count; i++)
+        total += sequence->frames[i].delay > 0 ? sequence->frames[i].delay : 1;
+    return total;
+}
+
+static float effect_duration(const FcCombatPresentation *presentation,
+                             const FcCombatPresentationContext *context,
+                             uint32_t spot_id, float retained_cycles) {
+    const SpotAnimDef *spot = presentation && presentation->spotanims
+        ? spotanim_find(presentation->spotanims, (int)spot_id) : NULL;
+    float cycles = 0.0f;
+    if (spot && spot->animation_id >= 0 && context && context->anim_cache) {
+        cycles = animation_client_cycles(anim_get_sequence(
+            context->anim_cache, (uint16_t)spot->animation_id));
+    }
+    return fc_projectile_effect_duration_seconds(cycles, retained_cycles,
+        context && context->tps > 0.0f
+            ? context->tps : POLICY_REPLAY_BASE_TPS);
+}
+
+static void configure_tracking(FcCombatPresentation *presentation,
+    const FcCombatPresentationContext *context, VisualProjectile *projectile,
+    FcVisualTargetKind source_kind, int source_slot,
+    FcVisualTargetKind target_kind, int target_slot, int attack_style,
+    float launch_cycles, float end_cycles, float angle, float progress,
+    int track_target) {
+    if (!presentation || !context || !projectile) return;
+    projectile->source_kind = source_kind;
+    projectile->source_slot = source_slot;
+    projectile->target_kind = target_kind;
+    projectile->target_slot = target_slot;
+    projectile->track_target = track_target;
+    projectile->attack_style = attack_style;
+    projectile->launch_tick = context->state->tick;
+    projectile->projectile_angle = angle >= 0.0f ? angle : 15.0f;
+    projectile->projectile_progress = progress >= 0.0f ? progress : 0.0f;
+    FcProjectileTiming timing = {0};
+    if (fc_projectile_timing_from_client_cycles(
+            launch_cycles, end_cycles, context->tps, &timing)) {
+        projectile->launch_delay = timing.launch_delay;
+        projectile->total_time = timing.total_duration;
+    } else {
+        projectile->launch_delay = 0.0f;
+    }
+    float x;
+    float y;
+    float z;
+    if (actor_world_point(context, source_kind, source_slot, &x, &y, &z)) {
+        projectile->source_y_offset = projectile->src_y - y;
+        projectile->src_x = x;
+        projectile->src_y = y + projectile->source_y_offset;
+        projectile->src_z = z;
+    }
+    if (track_target &&
+        actor_world_point(context, target_kind, target_slot, &x, &y, &z)) {
+        projectile->target_y_offset = projectile->dst_y - y;
+        projectile->dst_x = x;
+        projectile->dst_y = y + projectile->target_y_offset;
+        projectile->dst_z = z;
+    }
+    projectile->x = projectile->src_x;
+    projectile->y = projectile->src_y;
+    projectile->z = projectile->src_z;
+    if (projectile->launch_spot_id != 0) {
+        float retain = launch_cycles > 30.0f ? launch_cycles : 30.0f;
+        float duration = effect_duration(presentation, context,
+                                         projectile->launch_spot_id, retain);
+        float yaw = atan2f(projectile->dst_x - projectile->src_x,
+                           projectile->dst_z - projectile->src_z) * RAD2DEG;
+        VisualEffect *effect = spawn_effect(presentation,
+            projectile->launch_spot_id, projectile->src_x, projectile->src_y,
+            projectile->src_z, duration, projectile->color,
+            projectile->radius * 1.4f, yaw);
+        if (effect) {
+            effect->attached = 1;
+            effect->attached_kind = source_kind;
+            effect->attached_slot = source_slot;
+            effect->face_kind = target_kind;
+            effect->face_slot = target_slot;
+            if (actor_world_point(context, source_kind, source_slot,
+                                  &x, &y, &z))
+                effect->attached_y_offset = effect->y - y;
+        }
+    }
+}
+
+static void show_healthbar(FcCombatPresentation *presentation,
+                           FcVisualTargetKind kind, int slot) {
+    if (kind == FC_VISUAL_TARGET_PLAYER) {
+        presentation->player_healthbar_timer = OSRS_HEALTHBAR_SECONDS;
+    } else if (kind == FC_VISUAL_TARGET_NPC &&
+               slot >= 0 && slot < FC_MAX_NPCS) {
+        presentation->npc_healthbar_timers[slot] = OSRS_HEALTHBAR_SECONDS;
+    }
+}
+
+static int next_overlay_slot(const FcCombatPresentation *presentation,
+                             FcVisualTargetKind kind, int actor_slot) {
+    unsigned int used = 0;
+    for (int i = 0; i < MAX_HITSPLATS; i++) {
+        const Hitsplat *hit = &presentation->hitsplats[i];
+        if (hit->active && hit->actor_kind == kind &&
+            hit->actor_slot == actor_slot &&
+            hit->overlay_slot >= 0 && hit->overlay_slot < 4)
+            used |= 1u << hit->overlay_slot;
+    }
+    for (int i = 0; i < 4; i++)
+        if ((used & (1u << i)) == 0) return i;
+    return 0;
+}
+
+static void spawn_status_splat(FcCombatPresentation *presentation,
+    FcVisualTargetKind kind, int actor_slot,
+    float x, float y, float z, int damage, HitsplatKind splat_kind) {
+    for (int i = 0; i < MAX_HITSPLATS; i++) {
+        if (!presentation->hitsplats[i].active) {
+            Hitsplat *hit = &presentation->hitsplats[i];
+            hit->active = 1;
+            hit->world_x = x;
+            hit->world_y = y;
+            hit->world_z = z;
+            hit->actor_kind = kind;
+            hit->actor_slot = actor_slot;
+            hit->overlay_slot = next_overlay_slot(presentation, kind, actor_slot);
+            hit->damage = damage;
+            hit->kind = splat_kind;
+            hit->seconds_left = OSRS_HITSPLAT_SECONDS;
+            if (splat_kind != HITSPLAT_PRAYER_DRAIN)
+                show_healthbar(presentation, kind, actor_slot);
+            return;
+        }
+    }
+}
+
+static void spawn_hitsplat(FcCombatPresentation *presentation,
+    FcVisualTargetKind kind, int actor_slot,
+    float x, float y, float z, int damage) {
+    spawn_status_splat(presentation, kind, actor_slot, x, y, z,
+                       damage, HITSPLAT_DAMAGE);
+}
+
+static int defer_hitsplat(FcCombatPresentation *presentation,
+                          const FcCombatPresentationContext *context,
+                          const FcRenderHit *hit,
+                          FcVisualTargetKind kind, int actor_slot,
+                          float x, float y, float z) {
+    if (!hit || hit->attack_style == ATTACK_MELEE) return 0;
+    FcVisualTargetKind source_kind;
+    FcVisualTargetKind target_kind;
+    int source_slot;
+    int target_slot;
+    if (hit->target_entity_type == ENTITY_PLAYER) {
+        if (hit->source_npc_slot < 0) return 0;
+        source_kind = FC_VISUAL_TARGET_NPC;
+        source_slot = hit->source_npc_slot;
+        target_kind = FC_VISUAL_TARGET_PLAYER;
+        target_slot = 0;
+    } else if (hit->target_entity_type == ENTITY_NPC) {
+        if (hit->target_npc_slot < 0) return 0;
+        source_kind = FC_VISUAL_TARGET_PLAYER;
+        source_slot = 0;
+        target_kind = FC_VISUAL_TARGET_NPC;
+        target_slot = hit->target_npc_slot;
+    } else {
+        return 0;
+    }
+    VisualProjectile *match = NULL;
+    for (int i = 0; i < MAX_PROJECTILES; i++) {
+        VisualProjectile *projectile = &presentation->projectiles[i];
+        if (!projectile->active || projectile->has_deferred_hitsplat ||
+            projectile->launch_tick >= context->state->tick ||
+            projectile->source_kind != source_kind ||
+            projectile->source_slot != source_slot ||
+            projectile->target_kind != target_kind ||
+            projectile->target_slot != target_slot ||
+            projectile->attack_style != hit->attack_style) continue;
+        if (!match || projectile->elapsed > match->elapsed) match = projectile;
+    }
+    if (!match) return 0;
+    match->has_deferred_hitsplat = 1;
+    match->hitsplat_actor_kind = kind;
+    match->hitsplat_actor_slot = actor_slot;
+    match->hitsplat_world_x = x;
+    match->hitsplat_world_y = y;
+    match->hitsplat_world_z = z;
+    match->hitsplat_damage = hit->damage;
+    return 1;
+}
+
+static int deferred_damage(const FcCombatPresentation *presentation,
+                           FcVisualTargetKind kind, int actor_slot) {
+    int damage = 0;
+    if (!presentation) return 0;
+    for (int i = 0; i < MAX_PROJECTILES; i++) {
+        const VisualProjectile *projectile = &presentation->projectiles[i];
+        if (projectile->active && projectile->has_deferred_hitsplat &&
+            projectile->hitsplat_actor_kind == kind &&
+            projectile->hitsplat_actor_slot == actor_slot)
+            damage += projectile->hitsplat_damage;
+    }
+    return damage;
+}
+
+int fc_combat_presentation_npc_death_deferred(
+    const FcCombatPresentation *presentation,
+    const FcState *state,
+    int npc_slot) {
+    return presentation && state && npc_slot >= 0 && npc_slot < FC_MAX_NPCS &&
+        state->npcs[npc_slot].is_dead &&
+        deferred_damage(presentation, FC_VISUAL_TARGET_NPC, npc_slot) > 0;
+}
+
+void fc_combat_presentation_deferred_deaths(
+    const FcCombatPresentation *presentation,
+    const FcState *state,
+    unsigned char deferred_deaths[FC_MAX_NPCS]) {
+    if (!deferred_deaths) return;
+    for (int i = 0; i < FC_MAX_NPCS; i++) {
+        deferred_deaths[i] = (unsigned char)
+            fc_combat_presentation_npc_death_deferred(presentation, state, i);
+    }
+}
+
+static void ingest_player_attack(FcCombatPresentation *presentation,
+    const FcCombatPresentationContext *context) {
+    const FcRenderEvents *events = context->events;
+    const FcPlayerVisualProfile *profile = context->player_profile;
+    if (!profile->projectile_travel_spot) return; /* unarmed: no projectile */
+    int sx = events->player_attack_source_x;
+    int sy = events->player_attack_source_y;
+    int tx = events->player_attack_target_x;
+    int ty = events->player_attack_target_y;
+    int target_size = events->player_attack_target_size;
+    float source_x = (float)sx + 0.5f;
+    float source_y = ground_height(context, sx, sy) +
+                     profile->projectile_start_height / 128.0f;
+    float source_z = -((float)sy + 0.5f);
+    float target_x = (float)tx + (float)target_size * 0.5f;
+    float target_y = ground_height(context, tx, ty) +
+                     profile->projectile_end_height / 128.0f;
+    float target_z = -((float)ty + (float)target_size * 0.5f);
+    float end_cycle = fc_projectile_profile_end_cycle(
+        profile->projectile_launch_delay_client_ticks,
+        profile->projectile_length_adjustment,
+        profile->projectile_step_multiplier, tile_distance(sx, sy, tx, ty));
+    VisualProjectile *projectile = spawn_projectile(presentation,
+        source_x, source_y, source_z, target_x, target_y, target_z, 0.1f,
+        profile->projectile_color, profile->projectile_radius,
+        profile->projectile_travel_spot, profile->projectile_launch_spot,
+        profile->projectile_impact_spot);
+    configure_tracking(presentation, context, projectile,
+        FC_VISUAL_TARGET_PLAYER, 0, FC_VISUAL_TARGET_NPC,
+        events->player_attack_target_npc_slot, ATTACK_RANGED,
+        profile->projectile_launch_delay_client_ticks, end_cycle,
+        profile->projectile_angle, profile->projectile_progress, 1);
+}
+
+static void ingest_npc_attack(FcCombatPresentation *presentation,
+    const FcCombatPresentationContext *context,
+    const FcRenderNpcAttack *attack) {
+    if (!attack->hit_queued || attack->attack_style == ATTACK_MELEE) return;
+    int source_x = attack->source_x;
+    int source_y = attack->source_y;
+    if (attack->source_size > 1) {
+        if (attack->target_x < attack->source_x) source_x = attack->source_x;
+        else if (attack->target_x >= attack->source_x + attack->source_size)
+            source_x = attack->source_x + attack->source_size - 1;
+        else source_x = attack->target_x;
+        if (attack->target_y < attack->source_y) source_y = attack->source_y;
+        else if (attack->target_y >= attack->source_y + attack->source_size)
+            source_y = attack->source_y + attack->source_size - 1;
+        else source_y = attack->target_y;
+    }
+    float source_ground = ground_height(context, source_x, source_y);
+    float source_world_x = (float)source_x + 0.5f;
+    float source_world_y = source_ground + 1.0f +
+                           (float)attack->source_size * 0.3f;
+    float source_world_z = -((float)source_y + 0.5f);
+    float target_ground = ground_height(
+        context, attack->target_x, attack->target_y);
+    float target_world_x = (float)attack->target_x + 0.5f;
+    float target_world_y = target_ground + 1.5f;
+    float target_world_z = -((float)attack->target_y + 0.5f);
+    Color color = attack->attack_style == ATTACK_MAGIC
+        ? CLITERAL(Color){255, 104, 36, 235}
+        : CLITERAL(Color){218, 178, 92, 235};
+    float radius = attack->npc_type == NPC_TZTOK_JAD ? 0.3f : 0.15f;
+    uint32_t travel_spot = 0;
+    uint32_t launch_spot = 0;
+    uint32_t impact_spot = 0;
+    float start_height = -1.0f;
+    float end_height = -1.0f;
+    float start_cycle = 0.0f;
+    float angle = -1.0f;
+    float length_adjustment = 0.0f;
+    float progress = -1.0f;
+    float step_multiplier = 0.0f;
+    float fixed_end_cycle = -1.0f;
+    int track_target = 1;
+    if (attack->npc_type == NPC_TOK_XIL) {
+        travel_spot = PROJ_TOK_XIL_SPINE;
+        impact_spot = PROJ_TOK_XIL_IMPACT;
+        start_height = 296.0f;
+        end_height = 40.0f;
+        start_cycle = 32.0f;
+        angle = 16.0f;
+        progress = 0.0f;
+        step_multiplier = 5.0f;
+    } else if (attack->npc_type == NPC_KET_ZEK) {
+        travel_spot = PROJ_KET_ZEK_FIRE;
+        impact_spot = PROJ_KET_ZEK_IMPACT;
+        start_height = 192.0f;
+        end_height = 40.0f;
+        start_cycle = 28.0f;
+        angle = 16.0f;
+        length_adjustment = 8.0f;
+        progress = 0.0f;
+        step_multiplier = 8.0f;
+    } else if (attack->npc_type == NPC_TZTOK_JAD &&
+               attack->attack_style == ATTACK_MAGIC) {
+        launch_spot = PROJ_JAD_MAGIC_LAUNCH;
+        travel_spot = PROJ_JAD_MAGIC_TRAVEL;
+        impact_spot = PROJ_JAD_MAGIC_IMPACT;
+        start_height = 172.0f;
+        end_height = 124.0f;
+        start_cycle = 41.0f;
+        angle = 16.0f;
+        progress = 64.0f;
+        step_multiplier = 5.0f;
+    } else if (attack->npc_type == NPC_TZTOK_JAD &&
+               attack->attack_style == ATTACK_RANGED) {
+        impact_spot = PROJ_JAD_RANGED_IMPACT;
+        start_height = 768.0f;
+        end_height = 52.0f;
+        angle = 0.0f;
+        progress = 0.0f;
+        fixed_end_cycle = 60.0f;
+        track_target = 0;
+    }
+    if (start_height >= 0.0f)
+        source_world_y = source_ground + start_height / 128.0f;
+    if (end_height >= 0.0f)
+        target_world_y = target_ground + end_height / 128.0f;
+    float end_cycle = fixed_end_cycle >= 0.0f ? fixed_end_cycle
+        : fc_projectile_profile_end_cycle(start_cycle, length_adjustment,
+            step_multiplier, tile_distance(source_x, source_y,
+                                             attack->target_x, attack->target_y));
+    VisualProjectile *projectile = spawn_projectile(presentation,
+        source_world_x, source_world_y, source_world_z,
+        target_world_x, target_world_y, target_world_z,
+        0.1f, color, radius, travel_spot, launch_spot, impact_spot);
+    configure_tracking(presentation, context, projectile,
+        FC_VISUAL_TARGET_NPC, attack->npc_slot,
+        FC_VISUAL_TARGET_PLAYER, 0, attack->attack_style,
+        start_cycle, end_cycle, angle, progress, track_target);
+}
+
+void fc_combat_presentation_ingest_tick(
+    FcCombatPresentation *presentation,
+    const FcCombatPresentationContext *context) {
+    if (!presentation || !context || !context->state || !context->events ||
+        !context->player_profile) return;
+    const FcState *state = context->state;
+    int player_x = state->player.x;
+    int player_y = state->player.y;
+    if (player_x < 0) player_x = 0;
+    if (player_y < 0) player_y = 0;
+    if (player_x >= FC_ARENA_WIDTH) player_x = FC_ARENA_WIDTH - 1;
+    if (player_y >= FC_ARENA_HEIGHT) player_y = FC_ARENA_HEIGHT - 1;
+    float player_ground = ground_height(context, player_x, player_y);
+    float player_world_x = (float)state->player.x + 0.5f;
+    float player_world_z = -((float)state->player.y + 0.5f);
+    if (state->tz_kih_prayer_drain_this_tick > 0) {
+        spawn_status_splat(presentation, FC_VISUAL_TARGET_PLAYER, 0,
+            player_world_x + 0.3f, player_ground + 3.0f, player_world_z,
+            state->tz_kih_prayer_drain_this_tick, HITSPLAT_PRAYER_DRAIN);
+    }
+    if (context->events->player_attack_fired)
+        ingest_player_attack(presentation, context);
+    for (int i = 0; i < context->events->hit_count; i++) {
+        const FcRenderHit *hit = &context->events->hits[i];
+        if (hit->target_entity_type == ENTITY_PLAYER) {
+            if (!defer_hitsplat(presentation, context, hit,
+                    FC_VISUAL_TARGET_PLAYER, 0, player_world_x,
+                    player_ground + 2.5f, player_world_z)) {
+                spawn_hitsplat(presentation, FC_VISUAL_TARGET_PLAYER, 0,
+                    player_world_x, player_ground + 2.5f,
+                    player_world_z, hit->damage);
+            }
+        } else if (hit->target_entity_type == ENTITY_NPC &&
+                   hit->target_npc_slot >= 0 &&
+                   hit->target_npc_slot < FC_MAX_NPCS) {
+            const FcNpc *target = &state->npcs[hit->target_npc_slot];
+            float ground = ground_height(context, target->x, target->y);
+            float x = (float)target->x + (float)target->size * 0.5f;
+            float z = -((float)target->y + (float)target->size * 0.5f);
+            float y = ground + 1.0f + (float)target->size * 0.5f;
+            if (!defer_hitsplat(presentation, context, hit,
+                    FC_VISUAL_TARGET_NPC, hit->target_npc_slot, x, y, z)) {
+                spawn_hitsplat(presentation, FC_VISUAL_TARGET_NPC,
+                    hit->target_npc_slot, x, y, z, hit->damage);
+            }
+        }
+    }
+    for (int i = 0; i < FC_MAX_NPCS; i++) {
+        const FcNpc *npc = &state->npcs[i];
+        if (npc->healing_received_this_tick > 0) {
+            float ground = ground_height(context, npc->x, npc->y);
+            float x = (float)npc->x + (float)npc->size * 0.5f;
+            float z = -((float)npc->y + (float)npc->size * 0.5f);
+            float y = ground + 1.4f + (float)npc->size * 0.5f;
+            spawn_status_splat(presentation, FC_VISUAL_TARGET_NPC, i,
+                x, y, z, npc->healing_received_this_tick, HITSPLAT_HEAL);
+        }
+    }
+    for (int i = 0; i < context->events->npc_attack_count; i++) {
+        const FcRenderNpcAttack *attack = &context->events->npc_attacks[i];
+        if (attack->npc_slot >= 0 && attack->npc_slot < FC_MAX_NPCS)
+            ingest_npc_attack(presentation, context, attack);
+    }
+}
+
+static void refresh_actor_points(const FcCombatPresentationContext *context,
+                                 VisualProjectile *projectile,
+                                 int refresh_source) {
+    float x;
+    float y;
+    float z;
+    if (refresh_source && actor_world_point(context, projectile->source_kind,
+            projectile->source_slot, &x, &y, &z)) {
+        projectile->src_x = x;
+        projectile->src_y = y + projectile->source_y_offset;
+        projectile->src_z = z;
+    }
+    if (projectile->track_target && actor_world_point(context,
+            projectile->target_kind, projectile->target_slot, &x, &y, &z)) {
+        projectile->dst_x = x;
+        projectile->dst_y = y + projectile->target_y_offset;
+        projectile->dst_z = z;
+    }
+}
+
+static int update_projectile(const FcCombatPresentationContext *context,
+                             VisualProjectile *projectile, float dt) {
+    float end = projectile->elapsed + dt;
+    if (end > projectile->total_time) end = projectile->total_time;
+    refresh_actor_points(context, projectile, !projectile->launched);
+    if (end < projectile->launch_delay) {
+        projectile->x = projectile->src_x;
+        projectile->y = projectile->src_y;
+        projectile->z = projectile->src_z;
+        projectile->elapsed = end;
+        return 0;
+    }
+    projectile->launched = 1;
+    float duration = projectile->total_time - projectile->launch_delay;
+    if (duration < 0.001f) duration = 0.001f;
+    FcProjectilePath path = {
+        .source_x = projectile->src_x,
+        .source_y = projectile->src_y,
+        .source_z = projectile->src_z,
+        .target_x = projectile->dst_x,
+        .target_y = projectile->dst_y,
+        .target_z = projectile->dst_z,
+        .duration = duration,
+        .angle = projectile->projectile_angle,
+        .progress = projectile->projectile_progress / 128.0f,
+    };
+    FcProjectileSample sample = {0};
+    if (fc_projectile_path_sample(&path, end - projectile->launch_delay,
+                                  &sample)) {
+        projectile->x = sample.x;
+        projectile->y = sample.y;
+        projectile->z = sample.z;
+        projectile->velocity_x = sample.velocity_x;
+        projectile->velocity_y = sample.velocity_y;
+        projectile->velocity_z = sample.velocity_z;
+    }
+    projectile->elapsed = end;
+    if (end >= projectile->total_time) {
+        projectile->x = projectile->dst_x;
+        projectile->y = projectile->dst_y;
+        projectile->z = projectile->dst_z;
+        return 1;
+    }
+    return 0;
+}
+
+void fc_combat_presentation_update(
+    FcCombatPresentation *presentation,
+    const FcCombatPresentationContext *context,
+    float dt) {
+    if (!presentation || !context || dt <= 0.0f) return;
+    for (int i = 0; i < MAX_HITSPLATS; i++) {
+        if (presentation->hitsplats[i].active) {
+            presentation->hitsplats[i].seconds_left -= dt;
+            if (presentation->hitsplats[i].seconds_left <= 0.0f)
+                presentation->hitsplats[i].active = 0;
+        }
+    }
+    if (presentation->player_healthbar_timer > 0.0f) {
+        presentation->player_healthbar_timer -= dt;
+        if (presentation->player_healthbar_timer < 0.0f)
+            presentation->player_healthbar_timer = 0.0f;
+    }
+    for (int i = 0; i < FC_MAX_NPCS; i++) {
+        if (presentation->npc_healthbar_timers[i] > 0.0f) {
+            presentation->npc_healthbar_timers[i] -= dt;
+            if (presentation->npc_healthbar_timers[i] < 0.0f)
+                presentation->npc_healthbar_timers[i] = 0.0f;
+        }
+    }
+    for (int i = 0; i < MAX_PROJECTILES; i++) {
+        VisualProjectile *projectile = &presentation->projectiles[i];
+        if (!projectile->active || !update_projectile(context, projectile, dt))
+            continue;
+        float duration = effect_duration(presentation, context,
+                                         projectile->impact_spot_id, 90.0f);
+        spawn_effect(presentation, projectile->impact_spot_id,
+            projectile->x, projectile->y, projectile->z, duration,
+            projectile->color, projectile->radius * 1.4f, 0.0f);
+        if (projectile->has_deferred_hitsplat) {
+            spawn_hitsplat(presentation, projectile->hitsplat_actor_kind,
+                projectile->hitsplat_actor_slot, projectile->hitsplat_world_x,
+                projectile->hitsplat_world_y, projectile->hitsplat_world_z,
+                projectile->hitsplat_damage);
+        }
+        free_projectile(projectile);
+    }
+    for (int i = 0; i < MAX_VISUAL_EFFECTS; i++) {
+        VisualEffect *effect = &presentation->effects[i];
+        if (effect->active) {
+            effect->elapsed += dt;
+            if (effect->elapsed >= effect->total_time) free_effect(effect);
+        }
+    }
+}
+
+static NpcModelEntry *projectile_model_for_spot(
+    FcCombatPresentation *presentation, uint32_t spot_id,
+    const SpotAnimDef **out_spot) {
+    const SpotAnimDef *spot = presentation && presentation->spotanims
+        ? spotanim_find(presentation->spotanims, (int)spot_id) : NULL;
+    if (out_spot) *out_spot = spot;
+    if (!presentation || spot_id == 0 || !presentation->projectile_models)
+        return NULL;
+    NpcModelEntry *entry = fc_npc_model_find(presentation->projectile_models,
+                                             PROJ_SPOTANIM_MODEL_BASE + spot_id);
+    if (!entry && spot && spot->model_id >= 0)
+        entry = fc_npc_model_find(presentation->projectile_models,
+                                  (uint32_t)spot->model_id);
+    if (!entry)
+        entry = fc_npc_model_find(presentation->projectile_models, spot_id);
+    return entry && entry->loaded ? entry : NULL;
+}
+
+void fc_combat_presentation_draw_world(
+    FcCombatPresentation *presentation,
+    const FcCombatPresentationContext *context,
+    float dt) {
+    if (!presentation || !context) return;
+    float animation_dt = fc_actor_animation_scaled_dt(context->tps, dt);
+    for (int i = 0; i < MAX_PROJECTILES; i++) {
+        VisualProjectile *projectile = &presentation->projectiles[i];
+        if (!projectile->active || projectile->spot_id == 0 ||
+            !projectile->launched) continue;
+        const SpotAnimDef *spot = NULL;
+        NpcModelEntry *entry = projectile_model_for_spot(
+            presentation, projectile->spot_id, &spot);
+        if (entry) {
+            float horizontal_speed = sqrtf(
+                projectile->velocity_x * projectile->velocity_x +
+                projectile->velocity_z * projectile->velocity_z);
+            float angle = atan2f(projectile->velocity_x,
+                                 projectile->velocity_z) * RAD2DEG;
+            float pitch = spot ? 0.0f
+                : atan2f(projectile->velocity_y, horizontal_speed);
+            float scale_xy = spot && spot->resize_xy > 0
+                ? (float)spot->resize_xy / 128.0f : 1.0f;
+            float scale_z = spot && spot->resize_z > 0
+                ? (float)spot->resize_z / 128.0f : 1.0f;
+            if (spot) angle += (float)spot->rotation;
+            if (spot && spot->animation_id >= 0) {
+                fc_model_animation_update(entry, context->anim_cache,
+                    &projectile->anim_state, &projectile->anim_sequence,
+                    &projectile->anim_frame, &projectile->anim_timer,
+                    spot->animation_id, animation_dt, 0.0f);
+            }
+            Quaternion yaw = QuaternionFromAxisAngle(
+                (Vector3){0, 1, 0}, angle * DEG2RAD);
+            Quaternion tilt = QuaternionFromAxisAngle(
+                (Vector3){1, 0, 0}, -pitch);
+            Quaternion rotation = QuaternionMultiply(yaw, tilt);
+            Vector3 axis = {0, 1, 0};
+            float rotation_angle = 0.0f;
+            QuaternionToAxisAngle(rotation, &axis, &rotation_angle);
+            rlDisableBackfaceCulling();
+            DrawModelEx(entry->model,
+                (Vector3){projectile->x, projectile->y, projectile->z},
+                axis, rotation_angle * RAD2DEG,
+                (Vector3){scale_xy, scale_z, scale_xy}, WHITE);
+            rlEnableBackfaceCulling();
+        } else if (projectile->radius > 0.0f) {
+            DrawSphere((Vector3){projectile->x, projectile->y, projectile->z},
+                       projectile->radius, projectile->color);
+        }
+    }
+    for (int i = 0; i < MAX_VISUAL_EFFECTS; i++) {
+        VisualEffect *effect = &presentation->effects[i];
+        if (!effect->active) continue;
+        float x = effect->x;
+        float y = effect->y;
+        float z = effect->z;
+        if (effect->attached) {
+            float actor_x;
+            float actor_y;
+            float actor_z;
+            if (actor_world_point(context, effect->attached_kind,
+                    effect->attached_slot, &actor_x, &actor_y, &actor_z)) {
+                x = actor_x;
+                y = actor_y + effect->attached_y_offset;
+                z = actor_z;
+            }
+        }
+        float yaw = effect->yaw_degrees;
+        if (effect->face_kind != FC_VISUAL_TARGET_NONE) {
+            float target_x;
+            float target_y;
+            float target_z;
+            if (actor_world_point(context, effect->face_kind,
+                    effect->face_slot, &target_x, &target_y, &target_z)) {
+                (void)target_y;
+                yaw = atan2f(target_x - x, target_z - z) * RAD2DEG;
+            }
+        }
+        const SpotAnimDef *spot = NULL;
+        NpcModelEntry *entry = projectile_model_for_spot(
+            presentation, effect->spot_id, &spot);
+        if (entry) {
+            float scale_xy = spot && spot->resize_xy > 0
+                ? (float)spot->resize_xy / 128.0f : 1.0f;
+            float scale_z = spot && spot->resize_z > 0
+                ? (float)spot->resize_z / 128.0f : 1.0f;
+            if (spot && spot->animation_id >= 0) {
+                fc_model_animation_update(entry, context->anim_cache,
+                    &effect->anim_state, &effect->anim_sequence,
+                    &effect->anim_frame, &effect->anim_timer,
+                    spot->animation_id, animation_dt, 0.0f);
+            }
+            rlDisableBackfaceCulling();
+            DrawModelEx(entry->model, (Vector3){x, y, z},
+                (Vector3){0, 1, 0},
+                yaw + (spot ? (float)spot->rotation : 0.0f),
+                (Vector3){scale_xy, scale_z, scale_xy}, WHITE);
+            rlEnableBackfaceCulling();
+        } else {
+            DrawSphere((Vector3){x, y, z}, effect->radius, effect->color);
+        }
+    }
+}
+
+static const FcRenderEntity *find_actor(
+    const FcCombatPresentationDrawContext *context,
+    int actor_kind, int actor_slot) {
+    for (int i = 0; i < context->entity_count; i++) {
+        const FcRenderEntity *entity = &context->entities[i];
+        if (actor_kind == FC_VISUAL_TARGET_PLAYER &&
+            entity->entity_type == ENTITY_PLAYER) return entity;
+        if (actor_kind == FC_VISUAL_TARGET_NPC &&
+            entity->entity_type == ENTITY_NPC &&
+            entity->npc_slot == actor_slot) return entity;
+    }
+    return NULL;
+}
+
+static FcVisualPose entity_pose(const FcCombatPresentationDrawContext *context,
+                                const FcRenderEntity *entity) {
+    return entity->entity_type == ENTITY_PLAYER
+        ? fc_visual_scene_player_pose(context->presentation.scene)
+        : fc_visual_scene_npc_pose(context->presentation.scene,
+                                   entity->npc_slot);
+}
+
+static float entity_model_top(const FcCombatPresentationDrawContext *context,
+                              const FcRenderEntity *entity) {
+    Model *model = NULL;
+    if (entity->entity_type == ENTITY_PLAYER) {
+        NpcModelEntry *entry = fc_actor_player_model_entry(
+            context->player_models, context->active_loadout);
+        if (entry) model = &entry->model;
+    } else if (context->npc_models) {
+        NpcModelEntry *entry = fc_npc_model_find(context->npc_models,
+            fc_npc_type_to_model_id(entity->npc_type));
+        if (entry && entry->loaded) model = &entry->model;
+    }
+    if (model) {
+        BoundingBox bounds = GetModelBoundingBox(*model);
+        if (bounds.max.y > 0.1f && bounds.max.y < 20.0f) return bounds.max.y;
+    }
+    return entity->entity_type == ENTITY_PLAYER
+        ? 2.0f : 1.3f + (float)entity->size * 0.5f;
+}
+
+static Vector3 overlay_anchor(const FcCombatPresentationDrawContext *context,
+                              const FcRenderEntity *entity,
+                              float height_fraction, float extra_height) {
+    FcVisualPose pose = entity_pose(context, entity);
+    return (Vector3){
+        pose.x,
+        smooth_ground_height(&context->presentation, pose.x, pose.y) +
+            entity_model_top(context, entity) * height_fraction + extra_height,
+        -pose.y,
+    };
+}
+
+static Texture2D hitsplat_texture(const FcCombatPresentation *presentation,
+                                  const Hitsplat *hit) {
+    if (hit->kind == HITSPLAT_HEAL) return presentation->hitsplat_heal_texture;
+    if (hit->kind == HITSPLAT_PRAYER_DRAIN)
+        return presentation->hitsplat_prayer_drain_texture;
+    return hit->damage > 0 ? presentation->hitsplat_damage_texture
+                           : presentation->hitsplat_zero_texture;
+}
+
+void fc_combat_presentation_draw_healthbars(
+    const FcCombatPresentation *presentation,
+    const FcCombatPresentationDrawContext *context) {
+    if (!presentation || !context || !context->entities ||
+        !context->presentation.scene) return;
+    for (int i = 0; i < context->entity_count; i++) {
+        const FcRenderEntity *entity = &context->entities[i];
+        float timer = entity->entity_type == ENTITY_PLAYER
+            ? presentation->player_healthbar_timer
+            : entity->npc_slot >= 0 && entity->npc_slot < FC_MAX_NPCS
+                ? presentation->npc_healthbar_timers[entity->npc_slot] : 0.0f;
+        if (timer <= 0.0f || entity->max_hp <= 0) continue;
+        Vector2 screen = GetWorldToScreen(
+            overlay_anchor(context, entity, 1.0f, 0.12f), context->camera);
+        if (screen.x < -40.0f || screen.x > GetScreenWidth() + 40.0f ||
+            screen.y < -20.0f || screen.y > GetScreenHeight() + 20.0f) continue;
+        FcVisualTargetKind kind = entity->entity_type == ENTITY_PLAYER
+            ? FC_VISUAL_TARGET_PLAYER : FC_VISUAL_TARGET_NPC;
+        int slot = entity->entity_type == ENTITY_PLAYER ? 0 : entity->npc_slot;
+        int visible_hp = entity->current_hp + deferred_damage(presentation,
+                                                               kind, slot);
+        if (visible_hp > entity->max_hp) visible_hp = entity->max_hp;
+        int fill = visible_hp * 30 / entity->max_hp;
+        if (fill < 0) fill = 0;
+        if (fill > 30) fill = 30;
+        int x = (int)roundf(screen.x) - 15;
+        int y = (int)roundf(screen.y) - 3;
+        if (presentation->healthbar_empty_texture.id > 0 &&
+            presentation->healthbar_full_texture.id > 0) {
+            DrawTexture(presentation->healthbar_empty_texture, x, y, WHITE);
+            if (fill > 0) {
+                Rectangle source = {0.0f, 0.0f, (float)fill, 5.0f};
+                DrawTextureRec(presentation->healthbar_full_texture, source,
+                               (Vector2){(float)x, (float)y}, WHITE);
+            }
+        } else {
+            DrawRectangle(x, y, 30, 5, RED);
+            DrawRectangle(x, y, fill, 5, GREEN);
+        }
+    }
+}
+
+void fc_combat_presentation_draw_hitsplats(
+    const FcCombatPresentation *presentation,
+    const FcCombatPresentationDrawContext *context) {
+    if (!presentation || !context || !context->entities ||
+        !context->presentation.scene) return;
+    static const int slot_x[4] = {0, 0, -15, 15};
+    static const int slot_y[4] = {0, -20, -10, -10};
+    for (int i = 0; i < MAX_HITSPLATS; i++) {
+        const Hitsplat *hit = &presentation->hitsplats[i];
+        if (!hit->active) continue;
+        Vector3 world = {hit->world_x, hit->world_y, hit->world_z};
+        const FcRenderEntity *entity = find_actor(context, hit->actor_kind,
+                                                   hit->actor_slot);
+        if (entity) world = overlay_anchor(context, entity, 0.5f, 0.0f);
+        Vector2 screen = GetWorldToScreen(world, context->camera);
+        if (screen.x < -50.0f || screen.x > GetScreenWidth() + 50.0f ||
+            screen.y < -50.0f || screen.y > GetScreenHeight() + 50.0f) continue;
+        int slot = hit->overlay_slot;
+        if (slot < 0 || slot >= 4) slot = 0;
+        int center_x = (int)roundf(screen.x) + slot_x[slot];
+        int center_y = (int)roundf(screen.y) + slot_y[slot];
+        Texture2D texture = hitsplat_texture(presentation, hit);
+        if (texture.id > 0)
+            DrawTexture(texture, center_x - 12, center_y - 12, WHITE);
+        int value = hit->kind == HITSPLAT_DAMAGE
+            ? hit->damage / 10 : (hit->damage + 9) / 10;
+        char text[16];
+        snprintf(text, sizeof(text), "%d", value);
+        const float font_size = 12.0f;
+        Font font = runec_ui_font_for_size(context->ui_assets, font_size);
+        Vector2 measured = MeasureTextEx(font, text, font_size, 0.0f);
+        float text_x = floorf((float)center_x - 1.0f - measured.x * 0.5f);
+        float text_y = floorf((float)center_y - 6.0f);
+        DrawTextEx(font, text, (Vector2){text_x + 1.0f, text_y + 1.0f},
+                   font_size, 0.0f, BLACK);
+        DrawTextEx(font, text, (Vector2){text_x, text_y},
+                   font_size, 0.0f, WHITE);
+    }
+}
+
+#undef MAX_HITSPLATS
+#undef MAX_PROJECTILES
+#undef MAX_VISUAL_EFFECTS
+#undef OSRS_HITSPLAT_SECONDS
+#undef OSRS_HEALTHBAR_SECONDS
+#undef POLICY_REPLAY_BASE_TPS
+#undef PROJ_JAD_MAGIC_LAUNCH
+#undef PROJ_TOK_XIL_SPINE
+#undef PROJ_TOK_XIL_IMPACT
+#undef PROJ_KET_ZEK_FIRE
+#undef PROJ_KET_ZEK_IMPACT
+#undef PROJ_JAD_MAGIC_TRAVEL
+#undef PROJ_JAD_MAGIC_IMPACT
+#undef PROJ_JAD_RANGED_IMPACT
+#undef PROJ_SPOTANIM_MODEL_BASE
+
+/* Debug Overlay */
+/*
+ * fc_debug_overlay.c — viewer debug tooling and overlays.
+ *
+ * All functions are read-only — they never modify FcState or ViewerState.
+ *
+ * Two entry points called from the viewer loop below:
+ *   debug_overlay_3d()  — called inside BeginMode3D/EndMode3D (tiles, rays, ranges)
+ *   debug_overlay_screen() — called after EndMode3D (screen-space overlays)
+ *
+ * Toggle with 'O' key (debug overlay master toggle).
+ * Sub-toggles cycle with Shift+O or number keys in debug mode.
+ */
+
+#include "raylib.h"
+#include "rlgl.h"
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+#include <stdlib.h>
+#include <stdarg.h>
+
+/* ======================================================================== */
+/* Event log ring buffer                                                    */
+/* ======================================================================== */
+
+#define DBG_LOG_MAX_ENTRIES  128
+#define DBG_LOG_MAX_MSG      80
+
+typedef struct {
+    char entries[DBG_LOG_MAX_ENTRIES][DBG_LOG_MAX_MSG];
+    int tick[DBG_LOG_MAX_ENTRIES];      /* game tick when event occurred */
+    Color color[DBG_LOG_MAX_ENTRIES];   /* display color per entry */
+    int head;                           /* next write position */
+    int count;                          /* total entries (capped at MAX) */
+    int scroll_offset;                  /* for scrollable display */
+} DbgEventLog;
+
+static DbgEventLog g_dbg_log = {0};
+
+void dbg_log_clear(void) {
+    g_dbg_log.head = 0;
+    g_dbg_log.count = 0;
+    g_dbg_log.scroll_offset = 0;
+}
+
+static void dbg_log_event(int game_tick, Color c, const char* fmt, ...) {
+    int idx = g_dbg_log.head;
+    g_dbg_log.tick[idx] = game_tick;
+    g_dbg_log.color[idx] = c;
+
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(g_dbg_log.entries[idx], DBG_LOG_MAX_MSG, fmt, args);
+    va_end(args);
+
+    g_dbg_log.head = (g_dbg_log.head + 1) % DBG_LOG_MAX_ENTRIES;
+    if (g_dbg_log.count < DBG_LOG_MAX_ENTRIES) g_dbg_log.count++;
+}
+
+/* Call once per tick to auto-generate events from state changes.
+ * Reads current state and emits relevant log entries. */
+void dbg_log_tick(const FcState* state) {
+    int t = state->tick;
+    const FcPlayer* p = &state->player;
+    static const char* npc_names[] = {"?","Tz-Kih","Tz-Kek","Kek-Sm","Tok-Xil",
+        "MejKot","Ket-Zek","Jad","HurKot"};
+    float rwd[FC_REWARD_FEATURES];
+
+    fc_write_reward_features(state, rwd);
+
+    /* Player took damage */
+    if (p->damage_taken_this_tick > 0) {
+        dbg_log_event(t, CLITERAL(Color){255,120,120,255},
+                      "Player took %d damage", p->damage_taken_this_tick / 10);
+    }
+    if (state->tz_kih_prayer_drain_this_tick > 0) {
+        dbg_log_event(t, CLITERAL(Color){100,190,255,255},
+                      "Tz-Kih drained %d Prayer",
+                      (state->tz_kih_prayer_drain_this_tick + 9) / 10);
+    }
+
+    /* Player ate food */
+    if (p->food_eaten_this_tick) {
+        dbg_log_event(t, CLITERAL(Color){180,255,180,255},
+                      "Ate shark (+20 HP) [%d left]", p->sharks_remaining);
+    }
+
+    /* Player drank potion */
+    if (p->potion_used_this_tick) {
+        dbg_log_event(t, CLITERAL(Color){120,180,255,255},
+                      "Drank ppot (+17 pray) [%d doses left]", p->prayer_doses_remaining);
+    }
+
+    /* Player switched prayer */
+    if (p->prayer_changed_this_tick) {
+        static const char* pray_names[] = {"OFF","Prot Melee","Prot Range","Prot Magic"};
+        dbg_log_event(t, CLITERAL(Color){255,255,100,255},
+                      "Prayer -> %s", pray_names[p->prayer]);
+    }
+
+    /* Player attack attempt */
+    if (rwd[FC_RWD_ATTACK_ATTEMPT] > 0.0f && p->attack_target_idx >= 0) {
+        const FcNpc* tgt = &state->npcs[p->attack_target_idx];
+        const char* nm = (tgt->npc_type > 0 && tgt->npc_type < 9) ? npc_names[tgt->npc_type] : "?";
+        dbg_log_event(t, CLITERAL(Color){200,200,200,255},
+                      "Attacked %s [%d]", nm, p->attack_target_idx);
+    }
+
+    /* NPC events */
+    for (int i = 0; i < FC_MAX_NPCS; i++) {
+        const FcNpc* n = &state->npcs[i];
+
+        /* NPC damage taken */
+        if (n->damage_taken_this_tick > 0) {
+            const char* nm = (n->npc_type > 0 && n->npc_type < 9) ? npc_names[n->npc_type] : "?";
+            dbg_log_event(t, CLITERAL(Color){255,200,100,255},
+                          "%s[%d] took %d dmg (%d HP left)",
+                          nm, i, n->damage_taken_this_tick / 10, n->current_hp / 10);
+        }
+        if (n->healing_received_this_tick > 0) {
+            const char* nm = (n->npc_type > 0 && n->npc_type < 9) ? npc_names[n->npc_type] : "?";
+            dbg_log_event(t, CLITERAL(Color){120,255,140,255},
+                          "%s[%d] healed %d HP",
+                          nm, i, (n->healing_received_this_tick + 9) / 10);
+        }
+
+        /* NPC died */
+        if (n->died_this_tick) {
+            const char* nm = (n->npc_type > 0 && n->npc_type < 9) ? npc_names[n->npc_type] : "?";
+            dbg_log_event(t, CLITERAL(Color){255,80,80,255},
+                          "%s[%d] KILLED", nm, i);
+        }
+
+    }
+
+    /* Movement — log new route destination (walk-to-tile or click-to-move) */
+    {
+        static int prev_route_dest_x = -1, prev_route_dest_y = -1;
+        if (p->route_len > 0 && p->route_idx < p->route_len) {
+            int dx = p->route_x[p->route_len - 1];
+            int dy = p->route_y[p->route_len - 1];
+            if (dx != prev_route_dest_x || dy != prev_route_dest_y) {
+                dbg_log_event(t, CLITERAL(Color){180,220,255,255},
+                              "Move to tile (%d,%d) [%d steps]", dx, dy, p->route_len - p->route_idx);
+                prev_route_dest_x = dx;
+                prev_route_dest_y = dy;
+            }
+        } else {
+            prev_route_dest_x = -1;
+            prev_route_dest_y = -1;
+        }
+    }
+
+    /* Wave events */
+    if (state->wave_just_cleared) {
+        dbg_log_event(t, CLITERAL(Color){100,255,255,255},
+                      "Wave %d CLEARED — advancing", state->current_wave - 1);
+    }
+
+    /* Jad killed */
+    if (state->jad_killed) {
+        dbg_log_event(t, CLITERAL(Color){255,215,0,255}, "*** JAD DEFEATED ***");
+    }
+
+    /* Player death */
+    if (state->terminal == TERMINAL_PLAYER_DEATH && p->current_hp <= 0) {
+        dbg_log_event(t, CLITERAL(Color){255,0,0,255}, "*** PLAYER DIED ***");
+    }
+
+    /* Cave complete */
+    if (state->terminal == TERMINAL_CAVE_COMPLETE) {
+        dbg_log_event(t, CLITERAL(Color){0,255,0,255}, "*** CAVE COMPLETE — FIRE CAPE ***");
+    }
+}
+
+/* Colors */
+#define DBG_COL_WALK     CLITERAL(Color){  30, 180,  30, 40 }
+#define DBG_COL_BLOCK    CLITERAL(Color){ 200,  30,  30, 60 }
+#define DBG_COL_LOS_OK   CLITERAL(Color){  30, 255,  30, 200 }
+#define DBG_COL_LOS_FAIL CLITERAL(Color){ 255,  30,  30, 200 }
+#define DBG_COL_PATH     CLITERAL(Color){ 255, 255,   0, 160 }
+#define DBG_COL_RANGE    CLITERAL(Color){ 100, 200, 255, 120 }
+#define DBG_COL_LABEL    CLITERAL(Color){ 200, 200, 200, 255 }
+#define DBG_COL_VALUE    CLITERAL(Color){ 255, 255, 100, 255 }
+#define DBG_COL_GOOD     CLITERAL(Color){ 100, 255, 100, 255 }
+#define DBG_COL_BAD      CLITERAL(Color){ 255, 100, 100, 255 }
+#define DBG_COL_DIM      CLITERAL(Color){ 120, 120, 120, 255 }
+
+static const char* dbg_basename(const char* path) {
+    const char* slash = strrchr(path, '/');
+    return slash ? slash + 1 : path;
+}
+
+static Color dbg_reward_color(float value) {
+    if (value > 0.0001f) return DBG_COL_GOOD;
+    if (value < -0.0001f) return DBG_COL_BAD;
+    return DBG_COL_DIM;
+}
+
+/* ======================================================================== */
+/* A. Collision / LOS / Path / Range overlays (3D)                          */
+/* ======================================================================== */
+
+/* Draw walkable/blocked tile overlay */
+static void dbg_draw_collision(const FcState* state) {
+    for (int tx = 0; tx < FC_ARENA_WIDTH; tx++) {
+        for (int ty = 0; ty < FC_ARENA_HEIGHT; ty++) {
+            Color c = state->walkable[tx][ty] ? DBG_COL_WALK : DBG_COL_BLOCK;
+            DrawCube((Vector3){tx + 0.5f, 0.02f, -(ty + 0.5f)}, 0.9f, 0.02f, 0.9f, c);
+        }
+    }
+}
+
+/* Master 3D overlay — called inside BeginMode3D/EndMode3D.
+ * Only collision tiles use 3D (they work with depth test disabled). */
+void debug_overlay_3d(const FcState* state, int dbg_flags) {
+    rlDisableDepthTest();
+    if (dbg_flags & DBG_COLLISION) dbg_draw_collision(state);
+    rlEnableDepthTest();
+}
+
+/* ======================================================================== */
+/* 2D screen-space overlays (LOS, path, range) — drawn after EndMode3D     */
+/* Uses GetWorldToScreen() projection so nothing can occlude them.          */
+/* ======================================================================== */
+
+static Vector2 dbg_tile_to_screen(int tx, int ty, Camera3D cam) {
+    Vector3 w = { tx + 0.5f, 0.5f, -(ty + 0.5f) };
+    return GetWorldToScreen(w, cam);
+}
+
+/* LOS rays — 2D projected lines from player to NPCs */
+static void dbg_draw_los_2d(const FcState* state, Camera3D cam) {
+    const FcPlayer* p = &state->player;
+    Vector2 ps = dbg_tile_to_screen(p->x, p->y, cam);
+
+    for (int i = 0; i < FC_MAX_NPCS; i++) {
+        const FcNpc* n = &state->npcs[i];
+        if (!n->active || n->is_dead) continue;
+
+        int ncx = n->x + n->size / 2;
+        int ncy = n->y + n->size / 2;
+        Vector2 ns = dbg_tile_to_screen(ncx, ncy, cam);
+
+        int has_los = fc_has_los_between_areas(
+            p->x, p->y, 1, n->x, n->y, n->size, state->los_flags);
+        Color c = has_los ? DBG_COL_LOS_OK : DBG_COL_LOS_FAIL;
+        DrawLineEx(ps, ns, 3.0f, c);
+        DrawCircleV(ns, 6.0f, c);
+    }
+}
+
+/* Path visualization — 2D projected dots and lines along route */
+static void dbg_draw_path_2d(const FcState* state, Camera3D cam) {
+    const FcPlayer* p = &state->player;
+    if (p->route_idx >= p->route_len) return;
+
+    Vector2 prev = {0};
+    for (int i = p->route_idx; i < p->route_len; i++) {
+        Vector2 s = dbg_tile_to_screen(p->route_x[i], p->route_y[i], cam);
+        DrawCircleV(s, 4.0f, DBG_COL_PATH);
+        if (i > p->route_idx) {
+            DrawLineEx(prev, s, 2.0f, DBG_COL_PATH);
+        }
+        prev = s;
+    }
+
+    /* Destination marker — larger circle */
+    if (p->route_len > 0) {
+        Vector2 dest = dbg_tile_to_screen(
+            p->route_x[p->route_len - 1], p->route_y[p->route_len - 1], cam);
+        DrawCircleV(dest, 8.0f, DBG_COL_PATH);
+        DrawCircleLinesV(dest, 12.0f, DBG_COL_PATH);
+    }
+}
+
+/* Attack range ring — 2D projected Chebyshev boundary */
+static void dbg_draw_range_2d(const FcState* state, Camera3D cam) {
+    const FcPlayer* p = &state->player;
+    int range = 7;
+
+    for (int dx = -range; dx <= range; dx++) {
+        for (int dy = -range; dy <= range; dy++) {
+            int dist = (abs(dx) > abs(dy)) ? abs(dx) : abs(dy);
+            if (dist == range) {
+                int tx = p->x + dx;
+                int ty = p->y + dy;
+                if (tx >= 0 && tx < FC_ARENA_WIDTH && ty >= 0 && ty < FC_ARENA_HEIGHT) {
+                    Vector2 s = dbg_tile_to_screen(tx, ty, cam);
+                    DrawCircleV(s, 3.0f, DBG_COL_RANGE);
+                }
+            }
+        }
+    }
+}
+
+static void dbg_draw_run_energy(const FcState* state) {
+    int energy = state->player.run_energy;
+    if (energy < 0) energy = 0;
+    if (energy > FC_RUN_ENERGY_MAX) energy = FC_RUN_ENERGY_MAX;
+
+    char text[32];
+    snprintf(text, sizeof(text), "Run energy: %d.%02d%%",
+             energy / 100, energy % 100);
+    int width = fc_osrs_measure_text(text, 9);
+    DrawRectangle(6, 6, width + 10, 18,
+                  CLITERAL(Color){20, 18, 14, 210});
+    DrawRectangleLines(6, 6, width + 10, 18,
+                       CLITERAL(Color){120, 110, 90, 255});
+    fc_osrs_draw_text(text, 11, 11, 9, DBG_COL_VALUE);
+}
+
+/* Master 2D overlays for LOS/path/range — called after EndMode3D */
+void debug_overlay_screen(const FcState* state, Camera3D cam, int dbg_flags) {
+    if (dbg_flags & DBG_LOS)   dbg_draw_los_2d(state, cam);
+    if (dbg_flags & DBG_PATH)  dbg_draw_path_2d(state, cam);
+    if (dbg_flags & DBG_RANGE) dbg_draw_range_2d(state, cam);
+    dbg_draw_run_energy(state);
+}
+
+void dbg_draw_prayer_window_indicator(Vector3 world_anchor, Camera3D cam) {
+    Vector2 screen = GetWorldToScreen(world_anchor, cam);
+    /* Keep the marker visibly separate from the centered overhead HP bar. */
+    screen.x += 24.0f;
+    screen.y -= 12.0f;
+    int screen_width = GetScreenWidth();
+    int screen_height = GetScreenHeight();
+    if (screen.x < -20.0f || screen.x > (float)screen_width + 20.0f ||
+        screen.y < -20.0f || screen.y > (float)screen_height + 20.0f) {
+        return;
+    }
+
+    DrawCircleV(screen, 15.0f, CLITERAL(Color){70, 255, 100, 70});
+    DrawCircleV(screen, 9.0f, CLITERAL(Color){70, 255, 100, 250});
+    DrawCircleLines((int)screen.x, (int)screen.y, 10.0f, WHITE);
+}
+
+/* ======================================================================== */
+/* Compact debug tabs (usable in any viewer panel)                          */
+/* ======================================================================== */
+
+/* Draw debug info as a tabbed panel section.
+ * px = panel X, x = content X, by = Y start position, pw = panel width.
+ * dbg_tab: 0=player, 1=obs, 2=mask, 3=reward, 4=log.
+ * draw_tabs controls whether this helper renders its own tab selector.
+ * content_height limits the log viewport; zero keeps the legacy 20 rows.
+ * Returns end Y position. */
+int dbg_draw_panel_tabs(const FcState* state,
+                        const FcRewardBreakdown* reward_breakdown,
+                        const FcRewardRuntime* reward_runtime,
+                        int reward_config_loaded,
+                        const char* reward_config_path,
+                        int px, int x, int by, int pw, int dbg_tab,
+                        int draw_tabs, int content_height) {
+    char buf[256];
+    int lh = 14;
+
+    if (draw_tabs) {
+        DrawLine(px+4, by, px+pw-4, by,
+                 CLITERAL(Color){42,36,28,255});
+        by += 2;
+        static const char* dtab_labels[] = {
+            "Player", "Obs", "Mask", "Reward", "Log"
+        };
+        int num_dtabs = 5;
+        int dtab_w = (pw - 12) / num_dtabs;
+        int dtab_h = 16;
+        for (int t = 0; t < num_dtabs; t++) {
+            int tx = px + 4 + t * dtab_w;
+            int selected = (t == dbg_tab);
+            Color bg = selected ? CLITERAL(Color){82,73,61,255}
+                                : CLITERAL(Color){42,36,28,255};
+            DrawRectangle(tx, by, dtab_w, dtab_h, bg);
+            Color tc = selected ? DBG_COL_VALUE : DBG_COL_DIM;
+            int tw = fc_osrs_measure_text(dtab_labels[t], 8);
+            fc_osrs_draw_text(dtab_labels[t], tx + (dtab_w - tw) / 2,
+                     by + 4, 8, tc);
+            if (selected)
+                DrawLine(tx+2, by+dtab_h-1, tx+dtab_w-2,
+                         by+dtab_h-1, DBG_COL_VALUE);
+        }
+        by += dtab_h + 3;
+    }
+
+    /* Tab content */
+    if (dbg_tab == 0) {
+        /* Player state */
+        const FcPlayer* p = &state->player;
+        static const char* pray_str[] = { "OFF", "Melee", "Range", "Magic" };
+
+        snprintf(buf, sizeof(buf), "Pos:(%d,%d) Face:%.0f", p->x, p->y, p->facing_angle);
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += lh;
+        snprintf(buf, sizeof(buf), "HP:%d/%d Pray:%d/%d",
+                 p->current_hp/10, p->max_hp/10, p->current_prayer/10, p->max_prayer/10);
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += lh;
+        snprintf(buf, sizeof(buf), "Tmr atk:%d fd:%d pot:%d",
+                 p->attack_timer, p->food_timer, p->potion_timer);
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += lh;
+        snprintf(buf, sizeof(buf), "Prayer:%s Drain:%d Bonus:+%d",
+                 pray_str[p->prayer], p->prayer_drain_counter, p->prayer_bonus);
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += lh;
+        snprintf(buf, sizeof(buf), "Shark:%d Dose:%d Ammo:%d",
+                 p->sharks_remaining, p->prayer_doses_remaining, p->ammo_count);
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += lh;
+        snprintf(buf, sizeof(buf), "Tgt:%d Appr:%d Route:%d/%d",
+                 p->attack_target_idx, p->approach_target, p->route_idx, p->route_len);
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += lh;
+        snprintf(buf, sizeof(buf), "Hits:%d Run:%d Regen:%d",
+                 p->num_pending_hits, p->is_running, p->hp_regen_counter);
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += lh;
+
+        /* Active NPCs compact list */
+        by += 2;
+        static const char* npc_names[] = {"?","Kih","Kek","KSm","Xil","Mej","Zek","Jad","Hur"};
+        for (int i = 0; i < FC_MAX_NPCS; i++) {
+            const FcNpc* n = &state->npcs[i];
+            if (!n->active) continue;
+            const char* nm = (n->npc_type>0 && n->npc_type<9) ? npc_names[n->npc_type] : "?";
+            snprintf(buf, sizeof(buf), "[%d]%s hp:%d atk:%d/%d",
+                     i, nm, n->current_hp/10, n->attack_timer, n->attack_speed);
+            Color c = n->is_dead ? DBG_COL_BAD : DBG_COL_DIM;
+            fc_osrs_draw_text(buf, x, by, 7, c); by += lh - 2;
+        }
+
+    } else if (dbg_tab == 1) {
+        /* Observation values */
+        float obs[FC_OBS_SIZE];
+        fc_write_obs(state, obs);
+        int mbase = FC_OBS_META_START;
+
+        snprintf(buf, sizeof(buf), "HP:%.2f Pray:%.2f X:%.2f Y:%.2f",
+                 obs[FC_OBS_PLAYER_HP], obs[FC_OBS_PLAYER_PRAYER],
+                 obs[FC_OBS_PLAYER_X], obs[FC_OBS_PLAYER_Y]);
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += lh;
+        snprintf(buf, sizeof(buf), "Atk:%.2f Run:%.2f Sharks:%.2f Dose:%.2f",
+                 obs[FC_OBS_PLAYER_ATK_TIMER],
+                 obs[FC_OBS_PLAYER_RUN_ENERGY],
+                 obs[FC_OBS_PLAYER_SHARKS],
+                 obs[FC_OBS_PLAYER_DOSES]);
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += lh;
+        snprintf(buf, sizeof(buf), "Pray M%.0f R%.0f G%.0f T%.2f",
+                 obs[FC_OBS_PLAYER_PRAY_MEL],
+                 obs[FC_OBS_PLAYER_PRAY_RNG],
+                 obs[FC_OBS_PLAYER_PRAY_MAG],
+                 obs[FC_OBS_PLAYER_TARGET]);
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += lh;
+        snprintf(buf, sizeof(buf), "PrayDDL M%.2f R%.2f G%.2f",
+                 obs[FC_OBS_PLAYER_PRAY_DDL_MEL],
+                 obs[FC_OBS_PLAYER_PRAY_DDL_RNG],
+                 obs[FC_OBS_PLAYER_PRAY_DDL_MAG]);
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += lh;
+        snprintf(buf, sizeof(buf), "In1 M%.2f R%.2f G%.2f",
+                 obs[FC_OBS_PLAYER_IN_MEL_1T],
+                 obs[FC_OBS_PLAYER_IN_RNG_1T],
+                 obs[FC_OBS_PLAYER_IN_MAG_1T]);
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += lh;
+        snprintf(buf, sizeof(buf), "In2 M%.2f R%.2f G%.2f",
+                 obs[FC_OBS_PLAYER_IN_MEL_2T],
+                 obs[FC_OBS_PLAYER_IN_RNG_2T],
+                 obs[FC_OBS_PLAYER_IN_MAG_2T]);
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += lh;
+        snprintf(buf, sizeof(buf), "Meta W%.2f Rot%.2f Rem%.2f",
+                 obs[mbase + FC_OBS_META_WAVE],
+                 obs[mbase + FC_OBS_META_ROTATION],
+                 obs[mbase + FC_OBS_META_REMAINING]);
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += lh;
+        snprintf(buf, sizeof(buf), "Drain:%.2f Dmg:%.2f Clear:%.0f",
+                 obs[mbase + FC_OBS_META_PRAY_DRAIN],
+                 obs[mbase + FC_OBS_META_DMG_T_TICK],
+                 obs[mbase + FC_OBS_META_WAVE_CLR]);
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += lh;
+        snprintf(buf, sizeof(buf), "In3 M%.2f R%.2f G%.2f",
+                 obs[mbase + FC_OBS_META_IN_MEL_3T],
+                 obs[mbase + FC_OBS_META_IN_RNG_3T],
+                 obs[mbase + FC_OBS_META_IN_MAG_3T]);
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += lh;
+        snprintf(buf, sizeof(buf), "Prog C%.2f W%.2f Rem%.2f NoP%.2f",
+                 obs[mbase + FC_OBS_META_CAVE_PROG],
+                 obs[mbase + FC_OBS_META_WAVE_PROG],
+                 obs[mbase + FC_OBS_META_WORK_REM],
+                 obs[mbase + FC_OBS_META_NO_PROG]);
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += lh;
+
+        by += 2;
+        fc_osrs_draw_text("NPC slots:", x, by, 7, DBG_COL_DIM); by += lh - 1;
+        for (int s = 0; s < FC_OBS_NPC_SLOTS; s++) {
+            int base = FC_OBS_NPC_START + s * FC_OBS_NPC_STRIDE;
+            if (obs[base + FC_NPC_VALID] < 0.5f) continue;
+            char tele = '-';
+            if (obs[base + FC_NPC_TELE_MELEE]  > 0.5f) tele = 'M';
+            else if (obs[base + FC_NPC_TELE_RANGED] > 0.5f) tele = 'R';
+            else if (obs[base + FC_NPC_TELE_MAGIC]  > 0.5f) tele = 'A';
+            snprintf(buf, sizeof(buf), "[%d] hp:%.2f d:%.2f tele:%c los:%.0f pd:%.2f ddl:%.0f/%.2f",
+                     s,
+                     obs[base + FC_NPC_HP],
+                     obs[base + FC_NPC_DISTANCE],
+                     tele,
+                     obs[base + FC_NPC_LOS],
+                     obs[base + FC_NPC_PENDING_STYLE],
+                     obs[base + FC_NPC_PENDING_PRAYER_WINDOW],
+                     obs[base + FC_NPC_PENDING_PRAYER_DEADLINE]);
+            fc_osrs_draw_text(buf, x, by, 7, DBG_COL_LABEL); by += lh - 2;
+        }
+
+    } else if (dbg_tab == 2) {
+        /* Action mask */
+        float mask[FC_ACTION_MASK_SIZE];
+        fc_write_mask(state, mask);
+
+        fc_osrs_draw_text("MOVE:", x, by, 8, DBG_COL_DIM);
+        snprintf(buf, sizeof(buf), " ");
+        int len = 1;
+        for (int m = 0; m < FC_MOVE_DIM && len < 120; m++)
+            buf[len++] = mask[FC_MASK_MOVE_START + m] > 0.5f ? '1' : '0';
+        buf[len] = '\0';
+        fc_osrs_draw_text(buf, x + 30, by, 8, DBG_COL_LABEL); by += lh;
+
+        fc_osrs_draw_text("ATK:", x, by, 8, DBG_COL_DIM);
+        len = 1; buf[0] = ' ';
+        for (int m = 0; m < FC_ATTACK_DIM && len < 120; m++)
+            buf[len++] = mask[FC_MASK_ATTACK_START + m] > 0.5f ? '1' : '0';
+        buf[len] = '\0';
+        fc_osrs_draw_text(buf, x + 30, by, 8, DBG_COL_LABEL); by += lh;
+
+        fc_osrs_draw_text("PRAY:", x, by, 8, DBG_COL_DIM);
+        len = 1; buf[0] = ' ';
+        for (int m = 0; m < FC_PRAYER_DIM && len < 120; m++)
+            buf[len++] = mask[FC_MASK_PRAYER_START + m] > 0.5f ? '1' : '0';
+        buf[len] = '\0';
+        fc_osrs_draw_text(buf, x + 30, by, 8, DBG_COL_LABEL); by += lh;
+
+        snprintf(buf, sizeof(buf), "EAT:%c%c%c  DRINK:%c%c",
+                 mask[FC_MASK_EAT_START+0]>0.5f?'1':'0',
+                 mask[FC_MASK_EAT_START+1]>0.5f?'1':'0',
+                 mask[FC_MASK_EAT_START+2]>0.5f?'1':'0',
+                 mask[FC_MASK_DRINK_START+0]>0.5f?'1':'0',
+                 mask[FC_MASK_DRINK_START+1]>0.5f?'1':'0');
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += lh;
+
+        int vx = 0, vy = 0;
+        for (int m = 0; m < FC_MOVE_TARGET_X_DIM; m++)
+            if (mask[FC_MASK_TARGET_X_START + m] > 0.5f) vx++;
+        for (int m = 0; m < FC_MOVE_TARGET_Y_DIM; m++)
+            if (mask[FC_MASK_TARGET_Y_START + m] > 0.5f) vy++;
+        snprintf(buf, sizeof(buf), "TGT_X:%d/65 TGT_Y:%d/65", vx, vy);
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += lh;
+
+    } else if (dbg_tab == 3) {
+        const FcRewardBreakdown* b = reward_breakdown;
+        int sh = 14;
+        const char* cfg_name = dbg_basename(reward_config_path);
+
+        fc_osrs_draw_text("Training reward parity", x, by, 8, DBG_COL_VALUE); by += sh + 2;
+        snprintf(buf, sizeof(buf), "cfg:%s%s",
+                 cfg_name,
+                 reward_config_loaded ? "" : " (defaults)");
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += sh;
+        snprintf(buf, sizeof(buf), "total:%+.4f noatk_t:%d",
+                 b->total,
+                 reward_runtime->ticks_since_attack);
+        fc_osrs_draw_text(buf, x, by, 8, dbg_reward_color(b->total)); by += sh;
+        snprintf(buf, sizeof(buf), "threat:%d", b->any_threat);
+        fc_osrs_draw_text(buf, x, by, 8, DBG_COL_LABEL); by += sh + 2;
+
+        {
+            struct {
+                const char* name;
+                float value;
+            } terms[] = {
+                {"dmg_dealt", b->damage_dealt},
+                {"progress", b->progress},
+                {"dmg_taken", b->damage_taken},
+                {"npc_kill", b->npc_kill},
+                {"wave_clear", b->wave_clear},
+                {"jad_kill", b->jad_kill},
+                {"complete", b->cave_complete},
+                {"death", b->player_death},
+                {"jad_ok", b->correct_jad_prayer},
+                {"danger_ok", b->correct_danger_prayer},
+                {"pray_lost", b->prayer_lost},
+                {"pray_waste", b->unnecessary_prayer},
+                {"wave_stall", b->wave_stall},
+                {"no_progress", b->no_progress},
+                {"no_attack", b->no_attack},
+                {"jad_heal", b->jad_heal},
+                {"npc_heal", b->npc_heal},
+                {"invalid", b->invalid_action},
+                {"tick_pen", b->tick_penalty},
+            };
+            int term_count = (int)(sizeof(terms) / sizeof(terms[0]));
+
+            for (int i = 0; i < term_count; i++) {
+                snprintf(buf, sizeof(buf), "%-12s %+.4f",
+                         terms[i].name, terms[i].value);
+                fc_osrs_draw_text(buf, x, by, 7, dbg_reward_color(terms[i].value));
+                by += sh;
+            }
+        }
+    } else if (dbg_tab == 4) {
+        /* Event log — scrollable with scrollbar, most recent at top */
+        int entry_h = lh - 2;
+        int max_visible = content_height > 0
+            ? content_height / entry_h : 20;
+        if (max_visible < 1) max_visible = 1;
+        int total = g_dbg_log.count;
+        int log_h = max_visible * entry_h;
+        int scrollbar_w = 10;
+        if (total == 0) {
+            fc_osrs_draw_text("No events yet", x, by, 8, DBG_COL_DIM);
+            by += lh;
+        } else {
+            int max_scroll = total - max_visible;
+            if (max_scroll < 0) max_scroll = 0;
+
+            /* Clamp scroll */
+            if (g_dbg_log.scroll_offset > max_scroll)
+                g_dbg_log.scroll_offset = max_scroll;
+            if (g_dbg_log.scroll_offset < 0)
+                g_dbg_log.scroll_offset = 0;
+
+            /* Mouse wheel scroll */
+            float wheel = GetMouseWheelMove();
+            if (wheel != 0.0f) {
+                Vector2 mp = GetMousePosition();
+                if (mp.x >= px && mp.x < px + pw &&
+                    mp.y >= by && mp.y < by + log_h) {
+                    g_dbg_log.scroll_offset -= (int)wheel * 3;
+                    if (g_dbg_log.scroll_offset < 0) g_dbg_log.scroll_offset = 0;
+                    if (g_dbg_log.scroll_offset > max_scroll) g_dbg_log.scroll_offset = max_scroll;
+                }
+            }
+
+            /* Scrollbar track */
+            int sb_x = px + pw - scrollbar_w - 4;
+            int sb_y = by;
+            DrawRectangle(sb_x, sb_y, scrollbar_w, log_h, CLITERAL(Color){30,26,20,255});
+
+            /* Scrollbar thumb */
+            if (total > max_visible) {
+                float thumb_frac = (float)max_visible / (float)total;
+                int thumb_h = (int)(log_h * thumb_frac);
+                if (thumb_h < 12) thumb_h = 12;
+                float scroll_frac = (max_scroll > 0) ? (float)g_dbg_log.scroll_offset / (float)max_scroll : 0;
+                int thumb_y = sb_y + (int)((log_h - thumb_h) * scroll_frac);
+                DrawRectangle(sb_x, thumb_y, scrollbar_w, thumb_h, CLITERAL(Color){120,110,90,255});
+
+                /* Drag scrollbar with mouse */
+                if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+                    Vector2 mp = GetMousePosition();
+                    if (mp.x >= sb_x && mp.x < sb_x + scrollbar_w &&
+                        mp.y >= sb_y && mp.y < sb_y + log_h) {
+                        float click_frac = (mp.y - sb_y) / (float)log_h;
+                        g_dbg_log.scroll_offset = (int)(click_frac * (float)(max_scroll + 1));
+                        if (g_dbg_log.scroll_offset > max_scroll) g_dbg_log.scroll_offset = max_scroll;
+                    }
+                }
+            }
+
+            /* Draw entries */
+            int drawn = 0;
+            for (int i = g_dbg_log.scroll_offset; i < total && drawn < max_visible; i++) {
+                int idx = (g_dbg_log.head - 1 - i + DBG_LOG_MAX_ENTRIES * 2) % DBG_LOG_MAX_ENTRIES;
+                snprintf(buf, sizeof(buf), "t%d %s", g_dbg_log.tick[idx], g_dbg_log.entries[idx]);
+                /* Truncate to fit content width */
+                fc_osrs_draw_text(buf, x, by, 7, g_dbg_log.color[idx]);
+                by += entry_h;
+                drawn++;
+            }
+
+            /* Pad remaining space if fewer entries than max_visible */
+            by += (max_visible - drawn) * entry_h;
+        }
+    }
+
+    return by;
+}
+
+#undef DBG_LOG_MAX_ENTRIES
+#undef DBG_LOG_MAX_MSG
+#undef DBG_COL_WALK
+#undef DBG_COL_BLOCK
+#undef DBG_COL_LOS_OK
+#undef DBG_COL_LOS_FAIL
+#undef DBG_COL_PATH
+#undef DBG_COL_RANGE
+#undef DBG_COL_LABEL
+#undef DBG_COL_VALUE
+#undef DBG_COL_GOOD
+#undef DBG_COL_BAD
+#undef DBG_COL_DIM
+
+/* ===================== Viewer window and main loop ===================== */
+
+#include <ctype.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+
+#define DEFAULT_WINDOW_W 1244
+#define DEFAULT_WINDOW_H 1064
+#define MAX_TPS         60.0f
+#define MIN_TPS         0.25f
+#define HALF_TPS        0.50f
+#define NORMAL_TPS      (5.0f / 3.0f)
+#define POLICY_REPLAY_BASE_TPS NORMAL_TPS
+
+#define FC_UI_ITEM_VIAL          229u
+#define FC_UI_ITEM_SHARK         385u
+#define FC_UI_ITEM_PRAYER_POT_3  139u
+#define FC_UI_ITEM_PRAYER_POT_2  141u
+#define FC_UI_ITEM_PRAYER_POT_1  143u
+#define FC_UI_ITEM_PRAYER_POT_4  2434u
+
+/* Colors */
+#define COL_BG          CLITERAL(Color){ 80, 80, 85, 255 }
+#define COL_PANEL       CLITERAL(Color){ 62, 53, 41, 255 }
+#define COL_PANEL_BORDER CLITERAL(Color){ 42, 36, 28, 255 }
+#define COL_TEXT_YELLOW CLITERAL(Color){ 255, 255,  0, 255 }
+#define COL_TEXT_WHITE  CLITERAL(Color){ 255, 255, 255, 255 }
+#define COL_TEXT_SHADOW CLITERAL(Color){   0,   0,   0, 255 }
+#define COL_TEXT_DIM    CLITERAL(Color){ 130, 130, 140, 255 }
+#define COL_TEXT_GREEN  CLITERAL(Color){ 100, 255, 100, 255 }
+#define COL_HP_GREEN    CLITERAL(Color){  30, 255,  30, 255 }
+#define COL_HP_RED      CLITERAL(Color){ 120,   0,   0, 255 }
+#define COL_PRAY_BLUE   CLITERAL(Color){  50, 120, 210, 255 }
+#define COL_PLAYER      CLITERAL(Color){  80, 140, 255, 255 }
+#define COL_GRID        CLITERAL(Color){  30,  30,  30, 80  }
+#define COL_BLOCKED     CLITERAL(Color){ 180,  30,  30, 60  }
+#define COL_WALKABLE    CLITERAL(Color){  30, 120,  30, 30  }
+#define COL_HIT_RED     CLITERAL(Color){ 255,  50,  50, 255 }
+#define COL_HIT_BLUE    CLITERAL(Color){  50, 100, 255, 255 }
+
+#define FC_REWARD_CONFIG_PATH_MAX 256
+#define FC_WORLD_ORIGIN_X 2368
+#define FC_WORLD_ORIGIN_Y 5056
+typedef struct {
+    AnimModelState* anim_state;
+    uint16_t anim_seq;
+    int anim_frame;
+    float anim_timer;
+} ObjectAnimRuntime;
+
+/* NPC colors by type */
+static const Color NPC_COLORS[] = {
+    {128,128,128,255}, /* 0: none */
+    {180,160,60,255},  /* 1: Tz-Kih (yellow) */
+    {100,180,60,255},  /* 2: Tz-Kek (green) */
+    {80,150,50,255},   /* 3: Tz-Kek small */
+    {60,60,200,255},   /* 4: Tok-Xil (blue) */
+    {200,100,60,255},  /* 5: Yt-MejKot (orange) */
+    {160,40,160,255},  /* 6: Ket-Zek (purple) */
+    {200,40,40,255},   /* 7: TzTok-Jad (RED) */
+    {60,200,200,255},  /* 8: Yt-HurKot (cyan) */
+};
+
+/* Viewer state */
+typedef struct ViewerState {
+    FcState state;
+    /* CPU snapshots only: worker-thread stepping must never call Raylib. */
+    FcState pending_state, reset_state;
+    FcRewardRuntime pending_reward_runtime;
+    FcRewardBreakdown pending_reward_breakdown;
+    int pending_actions[FC_NUM_ACTION_HEADS];
+    int pending_frame;
+    FcRenderEvents render_events;
+    FcActorAnimation actor_animation;
+    FcCombatPresentation* combat_presentation;
+    RuneCUiState ui;
+    FcRenderEntity entities[FC_MAX_RENDER_ENTITIES];
+    int entity_count;
+    int paused, step_once;
+    float tps;
+    float tick_acc;
+    int show_grid, show_collision;
+    Camera3D camera;
+    float cam_yaw, cam_pitch, cam_dist;
+    int camera_locked;
+    int actions[FC_NUM_ACTION_HEADS];
+    uint32_t seed, last_hash;
+    int episode_count;
+    int attack_target;   /* NPC slot index for attack (-1 = none) */
+    /* Terrain + Objects + NPC models */
+    TerrainMesh* terrain;
+    FcMinimapScene minimap_scene;
+    ObjectMesh* objects;
+    ObjectAnimSet* object_anims;
+    FcAnimatedAtlas shared_model_atlas;
+    NpcModelSet* object_anim_models;
+    ObjectAnimRuntime* object_anim_runtimes;
+    int object_anim_runtime_count;
+    NpcModelSet* npc_models;
+    FcPlayerAppearance appearance;
+    char item_message[96];
+    float item_message_seconds;
+    /* Animation cache (shared by player + all NPCs) */
+    AnimCache* anim_cache;
+    /* Buffered key inputs (captured every frame, consumed on tick) */
+    int pending_prayer, pending_eat, pending_drink;
+    int pending_attack_npc;
+    int pending_tile_x, pending_tile_y;
+    FcClickFeedback click_feedback;
+    int context_npc_slot, context_npc_spawn_index;
+    int context_tile_x, context_tile_y;
+    Vector2 scene_right_start;
+    int scene_right_tracking, scene_right_dragged;
+    int console_tab;              /* controls, player, obs, mask, reward, log */
+    int console_wave_dropdown_open;
+    int console_scroll[4];        /* player/obs/mask/reward vertical offsets */
+    int console_content_height[4];
+    /* Prayer overhead icon textures */
+    Texture2D pray_melee_tex, pray_missiles_tex, pray_magic_tex;
+    Texture2D click_cross_tex[FC_CLICK_CROSS_FRAME_COUNT * 2];
+    int active_loadout; /* index into FC_LOADOUTS[] */
+    int combat_style;   /* 0=accurate, 1=rapid, 2=long range */
+    /* Prayer-tab sprites used by the active RuneC side interface. */
+    Texture2D tex_pray_melee_on, tex_pray_melee_off;
+    Texture2D tex_pray_range_on, tex_pray_range_off;
+    Texture2D tex_pray_magic_on, tex_pray_magic_off;
+    /* Debug overlay (Phase 9c) — toggled with O key */
+    int dbg_flags;       /* bitmask of DBG_* flags from fc_debug_overlay.h */
+    /* Debug toggles */
+    int godmode;        /* 1 = player can't die */
+    int policy_replay;    /* 1 = read-only presentation of native policy transitions */
+    int replay_episode_count; /* number of completed native replay episodes */
+    int start_wave;     /* 0 = wave 1 (default), >0 = skip to this wave on reset */
+    int initial_sharks;
+    int initial_prayer_doses;
+    FcRewardParams reward_params;
+    FcRewardRuntime reward_runtime;
+    FcRewardBreakdown reward_breakdown;
+    int reward_breakdown_tick;
+    int reward_config_loaded;
+    char reward_config_path[FC_REWARD_CONFIG_PATH_MAX];
+} ViewerState;
+
+/* Forward declarations */
+static void draw_tex_fit(Texture2D tex, int dx, int dy, int dw, int dh,
+                         Color tint);
+
+static void viewer_trace_log_to_stderr(int log_level, const char* text,
+                                       va_list args) {
+    (void)log_level;
+    vfprintf(stderr, text, args);
+    fputc('\n', stderr);
+}
+
+static void set_ui_slot(RuneCUiSlot* slot, uint32_t item_id,
+                        uint32_t icon_item_id, int quantity,
+                        const char* label) {
+    if (!slot) return;
+    memset(slot, 0, sizeof(*slot));
+    if (item_id == 0 || quantity <= 0) return;
+    slot->item_id = item_id;
+    slot->icon_item_id = icon_item_id ? icon_item_id : item_id;
+    slot->quantity = quantity;
+    snprintf(slot->label, sizeof(slot->label), "%s", label ? label : "Item");
+    slot->enabled = 1;
+}
+
+static uint32_t fc_ui_active_prayer_bits(int prayer) {
+    switch (prayer) {
+        case PRAYER_PROTECT_MAGIC: return 1u << 16;
+        case PRAYER_PROTECT_RANGE: return 1u << 17;
+        case PRAYER_PROTECT_MELEE: return 1u << 18;
+        default: return 0;
+    }
+}
+
+static int fc_ui_prayer_action_for_slot(const FcPlayer* p, int slot) {
+    int prayer = PRAYER_NONE;
+    int action = FC_PRAYER_OFF;
+    if (slot == 16) {
+        prayer = PRAYER_PROTECT_MAGIC;
+        action = FC_PRAYER_MAGIC;
+    } else if (slot == 17) {
+        prayer = PRAYER_PROTECT_RANGE;
+        action = FC_PRAYER_RANGE;
+    } else if (slot == 18) {
+        prayer = PRAYER_PROTECT_MELEE;
+        action = FC_PRAYER_MELEE;
+    } else {
+        return 0;
+    }
+    if (!p || p->current_prayer <= 0) return 0;
+    return p->prayer == prayer ? FC_PRAYER_OFF : action;
+}
+
+static void queue_viewer_prayer_button(ViewerState* v, int prayer, int action) {
+    if (!v) return;
+    FcPlayer* p = &v->state.player;
+    if (p->current_prayer <= 0)
+        return;
+    v->pending_prayer = (p->prayer == prayer) ? FC_PRAYER_OFF : action;
+}
+
+static int load_ui_item_icon(RuneCUiState* ui, uint32_t item_id) {
+    if (!ui || item_id == 0) return 0;
+    char path[128];
+    snprintf(path, sizeof(path), "data/sprites/items/item_%u.png", item_id);
+    if (!fc_asset_exists(path)) return 0;
+    Texture2D tex = fc_load_texture_asset(path);
+    if (tex.id == 0) return 0;
+    SetTextureFilter(tex, TEXTURE_FILTER_POINT);
+    runec_ui_set_item_icon(ui, item_id, tex);
+    return 1;
+}
+
+static int load_fc_ui_item_icons(ViewerState* v) {
+    static const uint32_t ids[] = {
+        FC_UI_ITEM_VIAL, FC_UI_ITEM_SHARK,
+        FC_UI_ITEM_PRAYER_POT_1, FC_UI_ITEM_PRAYER_POT_2,
+        FC_UI_ITEM_PRAYER_POT_3, FC_UI_ITEM_PRAYER_POT_4,
+    };
+    if (!v) return 0;
+    int ready = 1;
+    for (int i = 0; i < (int)(sizeof(ids) / sizeof(ids[0])); i++)
+        ready &= load_ui_item_icon(&v->ui, ids[i]);
+    for (int li = 0; li < FC_NUM_LOADOUTS; li++) {
+        const FcLoadout* lo = &FC_LOADOUTS[li];
+        for (int ei = 0; ei < lo->equipment_count; ei++) {
+            ready &= load_ui_item_icon(&v->ui, (uint32_t)lo->equipment[ei]);
+        }
+    }
+    return ready;
+}
+
+static void sync_item_slots(RuneCUiSlot *slots, const FcItemStack *items, int count) {
+    for (int i = 0; i < count; i++) {
+        memset(&slots[i], 0, sizeof(slots[i]));
+        const FcItemDef *item = fc_item_definition(items[i].item_id);
+        if (!item) continue;
+        set_ui_slot(&slots[i], (uint32_t)item->id, (uint32_t)item->id,
+                    items[i].quantity, item->name);
+        slots[i].action = item->slot == FC_EQUIP_SLOT_WEAPON ? "Wield" :
+            item->slot >= 0 ? "Wear" : item->id == 385 ? "Eat" :
+            item->id == 229 ? "Use" : "Drink";
+    }
+}
+
+static void sync_fc_ui_items(ViewerState* v) {
+    sync_item_slots(v->ui.inventory, v->state.player.inventory, FC_INVENTORY_SLOTS);
+    sync_item_slots(v->ui.equipment, v->state.player.equipment, FC_EQUIPMENT_SLOTS);
+}
+
+static void sync_fc_ui_status(ViewerState* v) {
+    if (!v) return;
+    FcPlayer* p = &v->state.player;
+    v->ui.hitpoints = p->current_hp > 0 ? (p->current_hp + 9) / 10 : 0;
+    v->ui.hitpoints_max = p->max_hp > 0 ? (p->max_hp + 9) / 10 : 0;
+    v->ui.prayer_points = p->current_prayer > 0 ? (p->current_prayer + 9) / 10 : 0;
+    v->ui.prayer_points_max = p->max_prayer > 0 ? (p->max_prayer + 9) / 10 : 0;
+    v->ui.active_prayers = fc_ui_active_prayer_bits(
+        fc_actor_animation_render_prayer(&v->actor_animation, &v->state));
+    v->ui.run_energy = p->run_energy / 100;
+    if (v->ui.run_energy < 0) v->ui.run_energy = 0;
+    if (v->ui.run_energy > 100) v->ui.run_energy = 100;
+    v->ui.run_enabled = p->is_running != 0;
+    v->ui.auto_retaliate = 1;
+    v->ui.special_attack_energy = 100;
+    v->ui.combat_level = 126;
+    const FcItemDef *weapon = fc_item_definition(p->equipment[FC_EQUIP_SLOT_WEAPON].item_id);
+    v->ui.selected_combat_style = weapon ? (v->combat_style == 2 ? 3 : v->combat_style) : 0;
+    runec_ui_set_combat_weapon_name(&v->ui, weapon ? weapon->name : "Unarmed");
+    runec_ui_set_combat_style_profile(&v->ui,
+        weapon ? FC_LOADOUTS[weapon->visual_profile].combat_style_profile : 0);
+
+    for (int i = 0; i < RUNEC_UI_SKILL_COUNT; i++) {
+        v->ui.skill_current[i] = 1;
+        v->ui.skill_base[i] = 1;
+    }
+    v->ui.skill_current[0] = v->ui.skill_base[0] = p->attack_level;
+    v->ui.skill_current[1] = v->ui.skill_base[1] = p->strength_level;
+    v->ui.skill_current[2] = v->ui.skill_base[2] = p->defence_level;
+    v->ui.skill_current[3] = v->ui.skill_base[3] = p->ranged_level;
+    v->ui.skill_current[4] = v->ui.skill_base[4] = p->prayer_level;
+    v->ui.skill_current[5] = v->ui.skill_base[5] = p->magic_level;
+    v->ui.skill_current[8] = v->ui.skill_base[8] = p->max_hp / 10;
+    int total = 0;
+    for (int i = 0; i < RUNEC_UI_SKILL_COUNT; i++)
+        total += v->ui.skill_base[i];
+    v->ui.skill_total = total;
+}
+
+static void sync_fc_ui_minimap(ViewerState* v) {
+    if (!v) return;
+    FcPlayer* p = &v->state.player;
+    FcVisualPose player_pose =
+        fc_visual_scene_player_pose(&v->actor_animation.scene);
+    float player_x = v->actor_animation.scene.player.active
+        ? player_pose.x : (float)p->x + 0.5f;
+    float player_y = v->actor_animation.scene.player.active
+        ? player_pose.y : (float)p->y + 0.5f;
+    Color pixels[FC_MINIMAP_DISPLAY_SIZE * FC_MINIMAP_DISPLAY_SIZE];
+    fc_minimap_render(&v->minimap_scene, player_x, player_y, v->cam_yaw,
+                      pixels);
+    runec_ui_update_minimap(&v->ui, pixels, FC_MINIMAP_DISPLAY_SIZE,
+                            FC_MINIMAP_DISPLAY_SIZE);
+    runec_ui_set_minimap_rotation(&v->ui, v->cam_yaw);
+
+    runec_ui_clear_minimap(&v->ui);
+    runec_ui_add_minimap_dot(&v->ui, 0.0f, 0.0f, RUNEC_UI_MINIMAP_DOT_PLAYER);
+    if (v->click_feedback.destination_active) {
+        int tx = v->click_feedback.destination_x;
+        int ty = v->click_feedback.destination_y;
+        Vector2 offset = fc_minimap_rotate_offset(
+            (float)tx + 0.5f - player_x,
+            (float)ty + 0.5f - player_y, v->cam_yaw);
+        runec_ui_add_minimap_dot(&v->ui, offset.x, offset.y,
+                                 RUNEC_UI_MINIMAP_DOT_DESTINATION);
+    } else if (p->route_idx < p->route_len && p->route_len > 0) {
+        int tx = p->route_x[p->route_len - 1];
+        int ty = p->route_y[p->route_len - 1];
+        Vector2 offset = fc_minimap_rotate_offset(
+            (float)tx + 0.5f - player_x,
+            (float)ty + 0.5f - player_y, v->cam_yaw);
+        runec_ui_add_minimap_dot(&v->ui, offset.x, offset.y,
+                                 RUNEC_UI_MINIMAP_DOT_DESTINATION);
+    }
+    for (int i = 0; i < FC_MAX_NPCS; i++) {
+        FcNpc* n = &v->state.npcs[i];
+        if (!n->active || n->is_dead) continue;
+        FcVisualPose npc_pose =
+            fc_visual_scene_npc_pose(&v->actor_animation.scene, i);
+        float npc_x = v->actor_animation.scene.npcs[i].active
+            ? npc_pose.x : (float)n->x + (float)n->size * 0.5f;
+        float npc_y = v->actor_animation.scene.npcs[i].active
+            ? npc_pose.y : (float)n->y + (float)n->size * 0.5f;
+        Vector2 offset = fc_minimap_rotate_offset(
+            npc_x - player_x, npc_y - player_y, v->cam_yaw);
+        runec_ui_add_minimap_dot(&v->ui, offset.x, offset.y,
+                                 RUNEC_UI_MINIMAP_DOT_NPC);
+    }
+}
+
+static void sync_fc_ui(ViewerState* v) {
+    sync_fc_ui_items(v);
+    sync_fc_ui_status(v);
+    sync_fc_ui_minimap(v);
+}
+
+static void queue_player_tile_request(ViewerState* v, int tx, int ty,
+                                      float screen_x, float screen_y) {
+    if (!v || v->policy_replay || tx < 0 || tx >= FC_ARENA_WIDTH ||
+        ty < 0 || ty >= FC_ARENA_HEIGHT)
+        return;
+    v->pending_tile_x = tx;
+    v->pending_tile_y = ty;
+    v->pending_attack_npc = -1;
+    fc_click_feedback_select_move(&v->click_feedback, &v->state, tx, ty,
+                                  screen_x, screen_y);
+}
+
+static void queue_player_attack_request(ViewerState* v, int npc_idx,
+                                        float screen_x, float screen_y) {
+    if (!v || v->policy_replay || npc_idx < 0 || npc_idx >= FC_MAX_NPCS) return;
+    v->pending_attack_npc = npc_idx;
+    v->pending_tile_x = -1;
+    v->pending_tile_y = -1;
+    fc_click_feedback_select_interaction(&v->click_feedback,
+                                         screen_x, screen_y);
+}
+
+static void show_item_result(ViewerState *v, FcItemResult result) {
+    snprintf(v->item_message, sizeof(v->item_message), "%s", fc_item_result_message(result));
+    v->item_message_seconds = result == FC_ITEM_OK ? 0.0f : 4.0f;
+}
+
+static void use_inventory_slot(ViewerState *v, int slot) {
+    if (v->policy_replay || slot < 0 || slot >= FC_INVENTORY_SLOTS) return;
+    const FcItemDef *item = fc_item_definition(v->state.player.inventory[slot].item_id);
+    if (!item) return;
+    FcItemResult result;
+    if (item->slot >= 0) {
+        result = fc_equip_item(&v->state, slot);
+        if (result == FC_ITEM_OK) v->pending_attack_npc = v->attack_target = -1;
+    } else {
+        result = fc_select_consumable(&v->state, slot);
+        if (result == FC_ITEM_OK) {
+            if (item->id == 385) v->pending_eat = FC_EAT_SHARK;
+            else v->pending_drink = FC_DRINK_PRAYER_POT;
+        }
+    }
+    show_item_result(v, result);
+}
+
+static void handle_runec_ui_intent(ViewerState* v) {
+    if (!v) return;
+    RuneCUiIntent* intent = &v->ui.last_intent;
+    FcPlayer* p = &v->state.player;
+    switch (intent->kind) {
+        case RUNEC_UI_INTENT_WORLD_ACTION: {
+            int slot = v->context_npc_slot;
+            const FcNpc *npc = slot >= 0 && slot < FC_MAX_NPCS ? &v->state.npcs[slot] : NULL;
+            int same_npc = npc && npc->active && !npc->is_dead &&
+                npc->spawn_index == v->context_npc_spawn_index;
+            if (strcmp(intent->text, "Examine") == 0 && same_npc) {
+                snprintf(v->item_message, sizeof(v->item_message), "%s", fc_menu_npc_info(npc->npc_type).name);
+                v->item_message_seconds = 4.0f;
+            } else if (!v->policy_replay && v->state.terminal == TERMINAL_NONE) {
+                if (strcmp(intent->text, "Attack") == 0 && same_npc)
+                    queue_player_attack_request(v, slot, intent->position.x, intent->position.y);
+                else if (strcmp(intent->text, "Walk here") == 0)
+                    queue_player_tile_request(v, v->context_tile_x, v->context_tile_y,
+                                               intent->position.x, intent->position.y);
+            }
+            break;
+        }
+        case RUNEC_UI_INTENT_INVENTORY_SLOT:
+            use_inventory_slot(v, intent->primary);
+            break;
+        case RUNEC_UI_INTENT_INVENTORY_ACTION:
+            if (strcmp(intent->text, "Examine") == 0) {
+                snprintf(v->item_message, sizeof(v->item_message), "%s",
+                         v->ui.inventory[intent->primary].label);
+                v->item_message_seconds = 4.0f;
+            }
+            if (strcmp(intent->text, "Wear") == 0 || strcmp(intent->text, "Wield") == 0 ||
+                strcmp(intent->text, "Eat") == 0 || strcmp(intent->text, "Drink") == 0)
+                use_inventory_slot(v, intent->primary);
+            break;
+        case RUNEC_UI_INTENT_EQUIPMENT_ACTION:
+            if (strcmp(intent->text, "Examine") == 0) {
+                snprintf(v->item_message, sizeof(v->item_message), "%s",
+                         v->ui.equipment[intent->primary].label);
+                v->item_message_seconds = 4.0f;
+            }
+            if (strcmp(intent->text, "Remove") != 0) break;
+            /* fall through */
+        case RUNEC_UI_INTENT_EQUIPMENT_SLOT:
+            if (!v->policy_replay)
+                show_item_result(v, fc_unequip_item(&v->state, intent->primary));
+            break;
+        case RUNEC_UI_INTENT_INVENTORY_DRAG:
+            if (!v->policy_replay)
+                show_item_result(v, fc_inventory_swap(&v->state, intent->primary, intent->secondary));
+            break;
+        case RUNEC_UI_INTENT_PRAYER_SLOT: {
+            int action = fc_ui_prayer_action_for_slot(p, intent->primary);
+            /* A context-menu verb is explicit, not a toggle of whatever
+             * prayer happens to be active when the option is selected. */
+            if (intent->secondary == 1 && action == FC_PRAYER_OFF) action = 0;
+            if (intent->secondary == -1 && action != FC_PRAYER_OFF) action = 0;
+            if (action && !v->policy_replay) v->pending_prayer = action;
+            break;
+        }
+        case RUNEC_UI_INTENT_COMBAT_STYLE:
+            if (v->policy_replay) break;
+            v->combat_style = intent->primary == 3 ? 2 : intent->primary;
+            if (v->combat_style < 0) v->combat_style = 0;
+            if (v->combat_style > 2) v->combat_style = 2;
+            break;
+        case RUNEC_UI_INTENT_RUN_TOGGLE:
+            if (!v->policy_replay) {
+                fc_request_set_running(&v->state, !p->is_running);
+                v->ui.run_enabled = p->is_running != 0;
+            }
+            break;
+        case RUNEC_UI_INTENT_MINIMAP_CLICK: {
+            FcVisualPose player_pose =
+                fc_visual_scene_player_pose(&v->actor_animation.scene);
+            float player_x = v->actor_animation.scene.player.active
+                ? player_pose.x : (float)p->x + 0.5f;
+            float player_y = v->actor_animation.scene.player.active
+                ? player_pose.y : (float)p->y + 0.5f;
+            int tile_x = -1;
+            int tile_y = -1;
+            Vector2 mouse = GetMousePosition();
+            if (fc_minimap_click_to_tile(
+                    (float)intent->primary, (float)intent->secondary,
+                    player_x, player_y, v->cam_yaw, &tile_x, &tile_y)) {
+                queue_player_tile_request(v, tile_x, tile_y,
+                                          mouse.x, mouse.y);
+            }
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+static void text_s(const char* t, int x, int y, int sz, Color c) {
+    fc_osrs_draw_text(t, x+1, y+1, sz, COL_TEXT_SHADOW);
+    fc_osrs_draw_text(t, x, y, sz, c);
+}
+
+static const char* fc_terminal_name(int terminal) {
+    switch (terminal) {
+        case TERMINAL_PLAYER_DEATH: return "player_death";
+        case TERMINAL_CAVE_COMPLETE: return "cave_complete";
+        case TERMINAL_TICK_CAP: return "tick_cap";
+        default: return "none";
+    }
+}
+
+static int float_near(float a, float b) {
+    return fabsf(a - b) < 0.0001f;
+}
+
+static char* trim_ascii(char* s) {
+    while (*s && isspace((unsigned char)*s)) s++;
+    if (*s == '\0') return s;
+
+    char* end = s + strlen(s) - 1;
+    while (end >= s && isspace((unsigned char)*end)) {
+        *end = '\0';
+        end--;
+    }
+    return s;
+}
+
+static void reward_params_apply_key(FcRewardParams* params,
+                                    const char* key,
+                                    const char* value) {
+    if (strcmp(key, "w_damage_dealt") == 0) params->w_damage_dealt = strtof(value, NULL);
+    else if (strcmp(key, "w_progress") == 0) params->w_progress = strtof(value, NULL);
+    else if (strcmp(key, "negative_progress_multiplier") == 0) params->negative_progress_multiplier = strtof(value, NULL);
+    else if (strcmp(key, "w_damage_taken") == 0) params->w_damage_taken = strtof(value, NULL);
+    else if (strcmp(key, "w_npc_kill") == 0) params->w_npc_kill = strtof(value, NULL);
+    else if (strcmp(key, "w_wave_clear") == 0) params->w_wave_clear = strtof(value, NULL);
+    else if (strcmp(key, "w_jad_kill") == 0) params->w_jad_kill = strtof(value, NULL);
+    else if (strcmp(key, "w_cave_complete") == 0) params->w_cave_complete = strtof(value, NULL);
+    else if (strcmp(key, "w_player_death") == 0) params->w_player_death = strtof(value, NULL);
+    else if (strcmp(key, "scale_player_death_with_progress") == 0) params->scale_player_death_with_progress = (int)strtol(value, NULL, 10);
+    else if (strcmp(key, "player_death_min_scale") == 0) params->player_death_min_scale = strtof(value, NULL);
+    else if (strcmp(key, "w_correct_jad_prayer") == 0) params->w_correct_jad_prayer = strtof(value, NULL);
+    else if (strcmp(key, "w_correct_danger_prayer") == 0) params->w_correct_danger_prayer = strtof(value, NULL);
+    else if (strcmp(key, "w_prayer_lost") == 0) params->w_prayer_lost = strtof(value, NULL);
+    else if (strcmp(key, "w_invalid_action") == 0) params->w_invalid_action = strtof(value, NULL);
+    else if (strcmp(key, "w_tick_penalty") == 0) params->w_tick_penalty = strtof(value, NULL);
+    else if (strcmp(key, "shape_unnecessary_prayer_penalty") == 0) params->shape_unnecessary_prayer_penalty = strtof(value, NULL);
+    else if (strcmp(key, "shape_wave_stall_base_penalty") == 0) params->shape_wave_stall_base_penalty = strtof(value, NULL);
+    else if (strcmp(key, "shape_wave_stall_cap") == 0) params->shape_wave_stall_cap = strtof(value, NULL);
+    else if (strcmp(key, "shape_wave_stall_start") == 0) params->shape_wave_stall_start = (int)strtol(value, NULL, 10);
+    else if (strcmp(key, "shape_wave_stall_ramp_interval") == 0) params->shape_wave_stall_ramp_interval = (int)strtol(value, NULL, 10);
+    else if (strcmp(key, "shape_jad_heal_penalty") == 0) params->shape_jad_heal_penalty = strtof(value, NULL);
+    else if (strcmp(key, "shape_npc_heal_penalty") == 0) params->shape_npc_heal_penalty = strtof(value, NULL);
+    else if (strcmp(key, "shape_no_progress_penalty_1") == 0) params->shape_no_progress_penalty_1 = strtof(value, NULL);
+    else if (strcmp(key, "shape_no_progress_penalty_2") == 0) params->shape_no_progress_penalty_2 = strtof(value, NULL);
+    else if (strcmp(key, "shape_no_progress_penalty_3") == 0) params->shape_no_progress_penalty_3 = strtof(value, NULL);
+    else if (strcmp(key, "shape_no_attack_base_penalty") == 0) params->shape_no_attack_base_penalty = strtof(value, NULL);
+    else if (strcmp(key, "shape_no_attack_wave_scale") == 0) params->shape_no_attack_wave_scale = strtof(value, NULL);
+    else if (strcmp(key, "shape_no_progress_start_1") == 0) params->shape_no_progress_start_1 = (int)strtol(value, NULL, 10);
+    else if (strcmp(key, "shape_no_progress_start_2") == 0) params->shape_no_progress_start_2 = (int)strtol(value, NULL, 10);
+    else if (strcmp(key, "shape_no_progress_start_3") == 0) params->shape_no_progress_start_3 = (int)strtol(value, NULL, 10);
+    else if (strcmp(key, "shape_no_attack_start") == 0) params->shape_no_attack_start = (int)strtol(value, NULL, 10);
+}
+
+static void initial_supplies_apply_key(ViewerState* v,
+                                       const char* key,
+                                       const char* value) {
+    if (strcmp(key, "initial_sharks") == 0)
+        v->initial_sharks = (int)strtol(value, NULL, 10);
+    else if (strcmp(key, "initial_prayer_doses") == 0)
+        v->initial_prayer_doses = (int)strtol(value, NULL, 10);
+}
+
+static void apply_initial_supplies(ViewerState* v) {
+    if (v->initial_sharks < 0) v->initial_sharks = 0;
+    if (v->initial_sharks > FC_MAX_SHARKS) v->initial_sharks = FC_MAX_SHARKS;
+    if (v->initial_prayer_doses < 0) v->initial_prayer_doses = 0;
+    if (v->initial_prayer_doses > FC_MAX_PRAYER_DOSES)
+        v->initial_prayer_doses = FC_MAX_PRAYER_DOSES;
+    fc_set_initial_supplies(&v->state, v->initial_sharks, v->initial_prayer_doses);
+}
+
+static void load_reward_params(ViewerState* v) {
+    v->reward_params = fc_reward_default_params();
+    v->initial_sharks = 0;
+    v->initial_prayer_doses = 0;
+    v->reward_config_loaded = 0;
+    snprintf(v->reward_config_path, sizeof(v->reward_config_path), "%s", "defaults");
+
+    {
+        char config_path[FC_ASSET_PATH_MAX];
+        FILE* f;
+        if (!fc_repo_resolve_path("config/fight_caves.ini",
+                                  config_path, sizeof(config_path))) {
+            return;
+        }
+        f = fopen(config_path, "r");
+        if (!f) return;
+
+        char line[512];
+        int in_env = 0;
+        while (fgets(line, sizeof(line), f)) {
+            char* comment = strchr(line, '#');
+            if (comment) *comment = '\0';
+
+            char* text = trim_ascii(line);
+            if (*text == '\0') continue;
+
+            if (*text == '[') {
+                char* close = strchr(text, ']');
+                if (!close) continue;
+                *close = '\0';
+                in_env = (strcmp(text + 1, "env") == 0);
+                continue;
+            }
+
+            if (!in_env) continue;
+
+            char* eq = strchr(text, '=');
+            if (!eq) continue;
+            *eq = '\0';
+
+            char* key = trim_ascii(text);
+            char* value = trim_ascii(eq + 1);
+            if (*key == '\0' || *value == '\0') continue;
+
+            reward_params_apply_key(&v->reward_params, key, value);
+            initial_supplies_apply_key(v, key, value);
+        }
+
+        fclose(f);
+        v->reward_config_loaded = 1;
+        strncpy(v->reward_config_path, config_path, sizeof(v->reward_config_path) - 1);
+        v->reward_config_path[sizeof(v->reward_config_path) - 1] = '\0';
+        return;
+    }
+}
+
+static void reset_reward_tracking(ViewerState* v) {
+    fc_reward_runtime_reset(&v->reward_runtime);
+    memset(&v->reward_breakdown, 0, sizeof(v->reward_breakdown));
+    v->reward_breakdown_tick = -1;
+}
+
+static void update_reward_breakdown(ViewerState* v) {
+    if (v->reward_breakdown_tick == v->state.tick) return;
+    v->reward_breakdown = fc_reward_compute_breakdown(
+        &v->state, &v->reward_params, &v->reward_runtime);
+    fc_reward_sync_progress_state(&v->state, &v->reward_runtime);
+    v->reward_breakdown_tick = v->state.tick;
+}
+
+static const float MANUAL_TPS_PRESETS[] = {
+    0.25f, 0.50f, NORMAL_TPS, 4.0f, 10.0f, 15.0f, 30.0f, 60.0f
+};
+static const char* MANUAL_TPS_LABELS[] = {
+    "0.25", "0.5", "5/3", "4", "10", "15", "30", "60"
+};
+#define NUM_MANUAL_TPS_PRESETS ((int)(sizeof(MANUAL_TPS_PRESETS) / sizeof(MANUAL_TPS_PRESETS[0])))
+
+static float policy_replay_multiplier_to_tps(int multiplier) {
+    switch (multiplier) {
+        case 1: return (float)POLICY_REPLAY_BASE_TPS;
+        case 2: return (float)(POLICY_REPLAY_BASE_TPS * 2);
+        case 4: return (float)(POLICY_REPLAY_BASE_TPS * 4);
+        case 10: return (float)(POLICY_REPLAY_BASE_TPS * 10);
+        default: return (float)POLICY_REPLAY_BASE_TPS;
+    }
+}
+
+static int policy_replay_tps_to_multiplier(float tps) {
+    if (float_near(tps, (float)POLICY_REPLAY_BASE_TPS)) return 1;
+    if (float_near(tps, (float)(POLICY_REPLAY_BASE_TPS * 2))) return 2;
+    if (float_near(tps, (float)(POLICY_REPLAY_BASE_TPS * 4))) return 4;
+    if (float_near(tps, (float)(POLICY_REPLAY_BASE_TPS * 10))) return 10;
+    return 0;
+}
+
+static int policy_replay_normalize_multiplier(int multiplier) {
+    switch (multiplier) {
+        case 1:
+        case 2:
+        case 4:
+        case 10:
+            return multiplier;
+        default:
+            return 1;
+    }
+}
+
+static void set_viewer_tps(ViewerState* v, float tps) {
+    if (tps < MIN_TPS) tps = MIN_TPS;
+    if (tps > MAX_TPS) tps = MAX_TPS;
+    v->tps = tps;
+    if (v->tick_acc >= 1.0f)
+        v->tick_acc = fmodf(v->tick_acc, 1.0f);
+}
+
+static void set_policy_replay_speed(ViewerState* v, int multiplier) {
+    int normalized = policy_replay_normalize_multiplier(multiplier);
+    set_viewer_tps(v, policy_replay_multiplier_to_tps(normalized));
+    fprintf(stderr, "[eval] Replay speed set to %dx (%.2f TPS)\n",
+            normalized, v->tps);
+}
+
+static void cycle_policy_replay_speed(ViewerState* v, int direction) {
+    static const int presets[] = {1, 2, 4, 10};
+    int current = policy_replay_tps_to_multiplier(v->tps);
+    int idx = 0;
+
+    for (int i = 0; i < 4; i++) {
+        if (presets[i] == current) {
+            idx = i;
+            break;
+        }
+    }
+
+    idx += direction;
+    if (idx < 0) idx = 0;
+    if (idx > 3) idx = 3;
+    set_policy_replay_speed(v, presets[idx]);
+}
+
+static void set_manual_speed(ViewerState* v, float tps) {
+    float best = MANUAL_TPS_PRESETS[0];
+    float best_diff = fabsf(tps - best);
+    for (int i = 1; i < NUM_MANUAL_TPS_PRESETS; i++) {
+        float diff = fabsf(tps - MANUAL_TPS_PRESETS[i]);
+        if (diff < best_diff) {
+            best = MANUAL_TPS_PRESETS[i];
+            best_diff = diff;
+        }
+    }
+    set_viewer_tps(v, best);
+}
+
+static void toggle_debug_overlay(ViewerState* v) {
+    if (!v) return;
+    v->dbg_flags = v->dbg_flags ? 0 : DBG_ALL;
+}
+
+static void toggle_godmode(ViewerState* v) {
+    if (!v || v->policy_replay) return;
+    v->godmode = !v->godmode;
+    fprintf(stderr, "GODMODE: %s\n", v->godmode ? "ON" : "OFF");
+}
+
+static void print_replay_episode_summary(const ViewerState* v) {
+    FcEpisodeSummary summary;
+    fc_episode_summary_build(&v->state, &v->reward_runtime, v->state.tick, &summary);
+    fprintf(stderr,
+        "[eval] episode_summary "
+        "{\"episode\":%d,\"seed\":%u,\"terminal\":\"%s\","
+        "\"env/zero_progress_ticks\":%d,"
+        "\"env/wave_reached\":%d,"
+        "\"env/wrong_prayer_hits\":%d,"
+        "\"env/reached_wave_63\":%d,"
+        "\"env/jad_kill_rate\":%d,"
+        "\"env/prayer_uptime_range\":%.6f,"
+        "\"env/prayer_uptime_melee\":%.6f,"
+        "\"env/prayer_uptime_magic\":%.6f,"
+        "\"env/npc_healing_total\":%.6f,"
+        "\"env/jad_healing_total\":%.6f,"
+        "\"env/episode_length\":%d,"
+        "\"env/n\":1.0}\n",
+        v->replay_episode_count + 1, v->seed, fc_terminal_name(v->state.terminal),
+        summary.zero_progress_ticks,
+        summary.wave_reached,
+        summary.wrong_prayer_hits,
+        summary.reached_wave_63,
+        summary.jad_kill_rate,
+        summary.prayer_uptime_range,
+        summary.prayer_uptime_melee,
+        summary.prayer_uptime_magic,
+        summary.npc_healing_total,
+        summary.jad_healing_total,
+        summary.episode_length);
+}
+
+static void sync_player_appearance(ViewerState *v) {
+    int changed = fc_player_appearance_sync(&v->appearance, &v->state.player,
+        FC_LOADOUTS[v->active_loadout].player_model_id);
+    if (changed < 0) {
+        fprintf(stderr, "Cannot compose player appearance from local equipment assets.\n");
+        exit(EXIT_FAILURE);
+    }
+    if (changed && v->actor_animation.player_state) {
+        anim_model_state_free(v->actor_animation.player_state);
+        v->actor_animation.player_state = NULL;
+        /* Keep pose/action clocks: a gear change isn't an animation restart. */
+    }
+}
+
+static void fc_viewer_reset_presentation(ViewerState* v) {
+    v->seed = v->state.rng_seed;
+    sync_player_appearance(v);
+    v->item_message_seconds = 0.0f;
+    fc_fill_render_entities(&v->state, v->entities, &v->entity_count);
+    fc_fill_render_events(&v->state, &v->render_events);
+    v->last_hash = fc_state_hash(&v->state);
+    v->episode_count++;
+    v->attack_target = -1;
+    memset(v->actions, 0, sizeof(v->actions));
+    fc_combat_presentation_reset(v->combat_presentation);
+    fc_actor_animation_reset(&v->actor_animation, &v->state,
+                             v->appearance.model, v->active_loadout);
+    v->pending_prayer = 0;
+    v->pending_eat = 0;
+    v->pending_drink = 0;
+    v->pending_attack_npc = -1;
+    v->pending_tile_x = -1;
+    v->pending_tile_y = -1;
+    fc_click_feedback_reset(&v->click_feedback);
+    dbg_log_clear();
+}
+
+static void reset_ep(ViewerState* v) {
+    runec_ui_close_context(&v->ui);
+    v->scene_right_tracking = v->scene_right_dragged = 0;
+    load_reward_params(v);
+    reset_reward_tracking(v);
+    v->seed = (uint32_t)GetRandomValue(1, 999999);
+    fc_reset(&v->state, v->seed);
+    /* Skip to start_wave if set */
+    if (v->start_wave > 1 && v->start_wave <= FC_NUM_WAVES) {
+        for (int i = 0; i < FC_MAX_NPCS; i++) {
+            v->state.npcs[i].active = 0;
+            v->state.npcs[i].is_dead = 0;
+        }
+        v->state.npcs_remaining = 0;
+        v->state.current_wave = v->start_wave;
+        fc_wave_spawn(&v->state, v->start_wave);
+        v->state.player.current_hp = v->state.player.max_hp;
+        v->state.player.current_prayer = v->state.player.max_prayer;
+    }
+    apply_initial_supplies(v);
+    fc_reward_runtime_begin_episode(&v->reward_runtime, &v->state);
+    fc_viewer_reset_presentation(v);
+}
+
+static void viewer_jump_to_wave(ViewerState* v, int wave) {
+    if (!v || v->policy_replay) return;
+    runec_ui_close_context(&v->ui);
+    if (wave < 1) wave = 1;
+    if (wave > FC_NUM_WAVES) wave = FC_NUM_WAVES;
+
+    for (int i = 0; i < FC_MAX_NPCS; i++) {
+        v->state.npcs[i].active = 0;
+        v->state.npcs[i].is_dead = 0;
+    }
+    v->state.npcs_remaining = 0;
+    v->state.current_wave = wave;
+    fc_wave_spawn(&v->state, wave);
+    v->state.player.current_hp = v->state.player.max_hp;
+    v->state.player.current_prayer = v->state.player.max_prayer;
+    v->state.terminal = TERMINAL_NONE;
+    v->state.jad_healers_spawned = 0;
+    reset_reward_tracking(v);
+    fc_reward_runtime_begin_episode(&v->reward_runtime, &v->state);
+    fc_fill_render_entities(&v->state, v->entities, &v->entity_count);
+    fc_fill_render_events(&v->state, &v->render_events);
+    fc_combat_presentation_reset(v->combat_presentation);
+    fc_actor_animation_reset(&v->actor_animation, &v->state,
+                             v->appearance.model, v->active_loadout);
+    v->attack_target = -1;
+    fc_click_feedback_reset(&v->click_feedback);
+    dbg_log_clear();
+}
+/* Terrain loader — the terrain mesh is the floor heightmap.
+ * The red/black lava pattern comes from the objects mesh (fightcaves.objects),
+ * not the terrain. The terrain is just the ground surface.
+ * We keep original cache colors (dark base) without modification. */
+static TerrainMesh* load_terrain(ViewerState* v) {
+    (void)v;
+    TerrainMesh* tm = terrain_load("fightcaves.terrain");
+    if (tm && tm->loaded) {
+        terrain_offset(tm, FC_WORLD_ORIGIN_X, FC_WORLD_ORIGIN_Y);
+        return tm;
+    }
+    return NULL;
+}
+
+/* Objects loader — no modifications */
+static ObjectMesh* load_objects_with_terrain(TerrainMesh* tm) {
+    (void)tm;
+    ObjectMesh* om = objects_load("fightcaves.objects");
+    if (om && om->loaded) {
+        objects_offset(om, FC_WORLD_ORIGIN_X, FC_WORLD_ORIGIN_Y);
+
+        /* No modifications to objects mesh — original cache data */
+
+        return om;
+    }
+    return NULL;
+}
+
+/* Forward declaration */
+static float ground_y(ViewerState* v, int tile_x, int tile_y);
+static float ground_y_smooth(ViewerState* v, float tile_x, float tile_y);
+
+/* ======================================================================== */
+/* Human input → action heads                                                */
+/* ======================================================================== */
+
+/* Raycast from mouse position to find the tile coordinate on the ground plane */
+static int raycast_to_tile(ViewerState* v, int* out_x, int* out_y) {
+    Ray ray = GetScreenToWorldRay(GetMousePosition(), v->camera);
+    /* Intersect with Y = ground_y plane */
+    float gy = ground_y(v, 32, 32);
+    if (fabsf(ray.direction.y) < 0.001f) return 0;  /* ray parallel to ground */
+    float t = (gy - ray.position.y) / ray.direction.y;
+    if (t < 0) return 0;  /* behind camera */
+    float wx = ray.position.x + ray.direction.x * t;
+    float wz = ray.position.z + ray.direction.z * t;
+    /* Convert to tile coords: X = world X, tile Y = -world Z */
+    int tx = (int)floorf(wx);
+    int ty = (int)floorf(-wz);
+    if (tx < 0 || tx >= FC_ARENA_WIDTH || ty < 0 || ty >= FC_ARENA_HEIGHT) return 0;
+    *out_x = tx;
+    *out_y = ty;
+    return 1;
+}
+
+/* Pick what was drawn, including the individual animation and interpolated
+ * position. Core state only decides whether the picked NPC is still targetable. */
+static int find_clicked_npc_idx(ViewerState* v) {
+    int best = -1;
+    float best_depth = INFINITY;
+    Vector2 mouse = GetMousePosition();
+    for (int i = 0; i < v->entity_count; i++) {
+        const FcRenderEntity *entity = &v->entities[i];
+        int slot = entity->npc_slot;
+        if (entity->entity_type == ENTITY_PLAYER || slot < 0 || slot >= FC_MAX_NPCS) continue;
+        const FcNpc *n = &v->state.npcs[slot];
+        if (!n->active || n->is_dead) continue;
+        FcVisualPose pose = fc_visual_scene_npc_pose(&v->actor_animation.scene, slot);
+        Vector3 position = {pose.x, ground_y_smooth(v, pose.x, pose.y), -pose.y};
+        const NpcModelEntry *model = fc_npc_model_find(v->npc_models,
+            fc_npc_type_to_model_id(entity->npc_type));
+        float depth = -1;
+        if (model) {
+            const AnimModelState *animation = v->actor_animation.npc_states[slot];
+            depth = models_pick_depth(model, animation ? animation->verts : NULL,
+                position, pose.yaw_degrees, v->camera, mouse, GetScreenWidth(), GetScreenHeight());
+        } else {
+            /* Match the existing missing-model cube, not an invisible tile halo. */
+            float s = entity->size * 0.45f, h = 1.0f + entity->size * 0.5f;
+            BoundingBox box = {{position.x - s, position.y, position.z - s},
+                               {position.x + s, position.y + h, position.z + s}};
+            RayCollision hit = GetRayCollisionBox(GetScreenToWorldRay(mouse, v->camera), box);
+            if (hit.hit) depth = hit.distance;
+        }
+        if (depth >= 0 && depth < best_depth) { best_depth = depth; best = slot; }
+    }
+    return best;
+}
+
+static void open_scene_context_menu(ViewerState *v) {
+    int tx = -1, ty = -1;
+    int can_walk = raycast_to_tile(v, &tx, &ty);
+    int slot = find_clicked_npc_idx(v);
+    if (slot < 0 && !can_walk) return;
+    v->context_npc_slot = slot;
+    v->context_npc_spawn_index = slot >= 0 ? v->state.npcs[slot].spawn_index : -1;
+    v->context_tile_x = tx;
+    v->context_tile_y = ty;
+    runec_ui_open_world_context(&v->ui, GetMousePosition(),
+        slot >= 0 ? v->state.npcs[slot].npc_type : 0, can_walk);
+}
+
+/* Called EVERY FRAME to capture clicks (which only fire once at 60fps).
+ * Buffers authoritative actions and starts presentation-only feedback. */
+static void process_human_clicks(ViewerState* v, int ui_capture) {
+    FcPlayer* p = &v->state.player;
+
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+        !IsMouseButtonDown(MOUSE_BUTTON_RIGHT) && !IsMouseButtonDown(MOUSE_BUTTON_MIDDLE)) {
+        if (ui_capture) return;
+        Vector2 mpos = GetMousePosition();
+        int tx = -1;
+        int ty = -1;
+        int rc = raycast_to_tile(v, &tx, &ty);
+        fprintf(stderr, "CLICK mouse=(%.0f,%.0f) raycast=%d tile=(%d,%d) player=(%d,%d)",
+                mpos.x, mpos.y, rc, tx, ty, p->x, p->y);
+        int npc_idx = find_clicked_npc_idx(v);
+        if (npc_idx >= 0) {
+            queue_player_attack_request(v, npc_idx, mpos.x, mpos.y);
+            fprintf(stderr, " → ATTACK npc_idx=%d\n", npc_idx);
+        } else if (rc) {
+            int walkable = v->state.walkable[tx][ty];
+            fprintf(stderr, " walkable=%d", walkable);
+            queue_player_tile_request(v, tx, ty, mpos.x, mpos.y);
+            fprintf(stderr, " → MOVE%s\n", walkable ? "" : "-NEAR");
+        } else {
+            fprintf(stderr, " → MISS (raycast failed)\n");
+        }
+    }
+}
+
+/* Called EVERY FRAME for key presses. Buffers actions for next tick. */
+static void process_human_keys(ViewerState* v) {
+    FcPlayer* p = &v->state.player;
+    if (IsKeyPressed(KEY_ONE))   v->pending_prayer = (p->prayer == PRAYER_PROTECT_MELEE) ? FC_PRAYER_OFF : FC_PRAYER_MELEE;
+    if (IsKeyPressed(KEY_TWO))   v->pending_prayer = (p->prayer == PRAYER_PROTECT_RANGE) ? FC_PRAYER_OFF : FC_PRAYER_RANGE;
+    if (IsKeyPressed(KEY_THREE)) v->pending_prayer = (p->prayer == PRAYER_PROTECT_MAGIC) ? FC_PRAYER_OFF : FC_PRAYER_MAGIC;
+    if (IsKeyPressed(KEY_F))     v->pending_eat = FC_EAT_SHARK;
+    if (IsKeyPressed(KEY_P))     v->pending_drink = FC_DRINK_PRAYER_POT;
+    if (IsKeyPressed(KEY_X))
+        fc_request_set_running(&v->state, !p->is_running);
+
+    /* --- Debug toggles (testing only) --- */
+    /* F9: toggle godmode (player can't die) */
+    if (IsKeyPressed(KEY_F9)) toggle_godmode(v);
+    /* F1-F8: spawn NPC type 1-8 near the player */
+    for (int fk = 0; fk < 8; fk++) {
+        if (IsKeyPressed(KEY_F1 + fk)) {
+            int npc_type = fk + 1;
+            /* Find free NPC slot */
+            for (int si = 0; si < FC_MAX_NPCS; si++) {
+                if (!v->state.npcs[si].active) {
+                    int sx = p->x + 5, sy = p->y;
+                    const FcNpcStats* stats = fc_npc_get_stats(npc_type);
+                    /* Find nearby walkable tile */
+                    for (int r = 0; r < 10; r++) {
+                        for (int dx = -r; dx <= r; dx++) {
+                            int ty = p->y + r, tx = p->x + dx + 3;
+                            if (tx >= 0 && tx < FC_ARENA_WIDTH && ty >= 0 && ty < FC_ARENA_HEIGHT &&
+                                fc_footprint_walkable(tx, ty, stats->size, v->state.walkable)) {
+                                sx = tx; sy = ty; r = 99; break;
+                            }
+                        }
+                    }
+                    fc_npc_spawn(&v->state.npcs[si], npc_type, sx, sy,
+                                 v->state.next_spawn_index++);
+                    /* Don't increment npcs_remaining — debug spawns shouldn't
+                     * affect wave progression. Wave clear checks npcs_remaining. */
+                    fprintf(stderr, "DEBUG SPAWN: NPC type %d at (%d,%d)\n", npc_type, sx, sy);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/* Called on TICK frames: build action array from buffered inputs. */
+static void build_human_actions(ViewerState* v) {
+    memset(v->actions, 0, sizeof(v->actions));
+    v->actions[0] = FC_MOVE_IDLE;
+    v->actions[1] = FC_ATTACK_NONE;
+    if (v->pending_attack_npc >= 0) {
+        int visible[FC_VISIBLE_NPCS];
+        int count = fc_visible_npc_indices(&v->state, visible);
+        for (int slot = 0; slot < count; slot++) {
+            if (visible[slot] == v->pending_attack_npc) {
+                v->actions[1] = slot + 1;
+                break;
+            }
+        }
+    }
+    if (v->pending_tile_x >= 0 && v->pending_tile_y >= 0) {
+        v->actions[5] = v->pending_tile_x + 1;
+        v->actions[6] = v->pending_tile_y + 1;
+    }
+    /* Buffered prayer/eat/drink */
+    v->actions[2] = v->pending_prayer;
+    v->actions[3] = v->pending_eat;
+    v->actions[4] = v->pending_drink;
+    /* Clear buffers */
+    v->pending_prayer = 0;
+    v->pending_eat = 0;
+    v->pending_drink = 0;
+    v->pending_attack_npc = -1;
+    v->pending_tile_x = -1;
+    v->pending_tile_y = -1;
+}
+
+/* Entity ground Y — slightly above terrain so entities stand on the flattened cracks */
+static float ground_y(ViewerState* v, int tile_x, int tile_y) {
+    if (v->terrain && v->terrain->loaded) {
+        return terrain_height_at(v->terrain, tile_x, tile_y) + 0.1f;
+    }
+    return 0.0f;
+}
+
+static float ground_y_smooth(ViewerState* v, float tile_x, float tile_y) {
+    int x0 = (int)floorf(tile_x);
+    int y0 = (int)floorf(tile_y);
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x0 >= FC_ARENA_WIDTH) x0 = FC_ARENA_WIDTH - 1;
+    if (y0 >= FC_ARENA_HEIGHT) y0 = FC_ARENA_HEIGHT - 1;
+    int x1 = x0 + 1 < FC_ARENA_WIDTH ? x0 + 1 : x0;
+    int y1 = y0 + 1 < FC_ARENA_HEIGHT ? y0 + 1 : y0;
+    float tx = tile_x - floorf(tile_x);
+    float ty = tile_y - floorf(tile_y);
+    float h00 = ground_y(v, x0, y0);
+    float h10 = ground_y(v, x1, y0);
+    float h01 = ground_y(v, x0, y1);
+    float h11 = ground_y(v, x1, y1);
+    float h0 = h00 + (h10 - h00) * tx;
+    float h1 = h01 + (h11 - h01) * tx;
+    return h0 + (h1 - h0) * ty;
+}
+
+typedef struct {
+    float x;
+    float y;
+    float face_angle;
+    int moving;
+    FcVisualLocomotion locomotion;
+} EntityRenderPose;
+
+static EntityRenderPose entity_render_pose(const ViewerState* v,
+                                           const FcRenderEntity* e) {
+    EntityRenderPose pose = {0};
+    if (!v || !e) return pose;
+    FcVisualPose visual = e->entity_type == ENTITY_PLAYER
+        ? fc_visual_scene_player_pose(&v->actor_animation.scene)
+        : fc_visual_scene_npc_pose(&v->actor_animation.scene, e->npc_slot);
+    pose.x = visual.x;
+    pose.y = visual.y;
+    pose.face_angle = visual.yaw_degrees;
+    pose.moving = visual.moving;
+    pose.locomotion = visual.locomotion;
+    return pose;
+}
+
+static Vector2 click_route_point_to_screen(ViewerState* v,
+                                           float tile_x, float tile_y) {
+    Vector3 world = {
+        tile_x,
+        ground_y_smooth(v, tile_x, tile_y) + 0.08f,
+        -tile_y,
+    };
+    return GetWorldToScreen(world, v->camera);
+}
+
+static void draw_click_destination_3d(ViewerState* v) {
+    if (!v || !v->click_feedback.destination_active) return;
+    int tx = v->click_feedback.destination_x;
+    int ty = v->click_feedback.destination_y;
+    if (tx < 0 || tx >= FC_ARENA_WIDTH ||
+        ty < 0 || ty >= FC_ARENA_HEIGHT) {
+        return;
+    }
+
+    float y = ground_y(v, tx, ty) + 0.025f;
+    Vector3 center = {(float)tx + 0.5f, y, -((float)ty + 0.5f)};
+    Color fill = {255, 215, 0, 70};
+    Color edge = {255, 235, 70, 230};
+    DrawCube(center, 0.92f, 0.025f, 0.92f, fill);
+    DrawCubeWires(center, 0.92f, 0.025f, 0.92f, edge);
+}
+
+static void draw_click_route_2d(ViewerState* v) {
+    if (!v) return;
+    const int* route_x = NULL;
+    const int* route_y = NULL;
+    int start = 0;
+    int len = 0;
+    if (!fc_click_feedback_route(&v->click_feedback, &v->state,
+                                 &route_x, &route_y, &start, &len)) {
+        return;
+    }
+
+    FcVisualPose player =
+        fc_visual_scene_player_pose(&v->actor_animation.scene);
+    Vector2 previous = click_route_point_to_screen(v, player.x, player.y);
+    Color line = {255, 220, 30, 210};
+    Color point = {255, 245, 120, 240};
+    for (int i = start; i < len; i++) {
+        Vector2 next = click_route_point_to_screen(
+            v, (float)route_x[i] + 0.5f, (float)route_y[i] + 0.5f);
+        DrawLineEx(previous, next, 2.0f, line);
+        DrawCircleV(next, 2.5f, point);
+        previous = next;
+    }
+}
+
+static void draw_click_cross(ViewerState* v) {
+    if (!v) return;
+    int frame = fc_click_feedback_cross_frame(&v->click_feedback);
+    if (frame < 0) return;
+    int base = v->click_feedback.cross_kind == FC_CLICK_CROSS_INTERACTION
+        ? FC_CLICK_CROSS_FRAME_COUNT : 0;
+    Texture2D texture = v->click_cross_tex[base + frame];
+    if (texture.id == 0) return;
+    DrawTexture(texture,
+                (int)roundf(v->click_feedback.cross_screen_x) -
+                    texture.width / 2,
+                (int)roundf(v->click_feedback.cross_screen_y) -
+                    texture.height / 2,
+                WHITE);
+}
+
+static Vector3 camera_follow_target(const ViewerState* v) {
+    float cx = FC_ARENA_WIDTH * 0.5f;
+    float cy = -(FC_ARENA_HEIGHT * 0.5f);
+    if (v->entity_count > 0) {
+        EntityRenderPose pose = entity_render_pose(v, &v->entities[0]);
+        cx = pose.x;
+        cy = -pose.y;
+    }
+    return (Vector3){cx, 0.5f, cy};
+}
+
+static void draw_npc_prayer_window_indicators(ViewerState* v) {
+    if (!v || !v->dbg_flags) return;
+
+    for (int i = 0; i < v->entity_count; i++) {
+        const FcRenderEntity* entity = &v->entities[i];
+        int npc_idx = entity->npc_slot;
+        if (entity->entity_type != ENTITY_NPC || entity->is_dead ||
+            npc_idx < 0 || npc_idx >= FC_MAX_NPCS ||
+            !fc_actor_animation_prayer_window_active(
+                &v->actor_animation, npc_idx, v->state.tick)) {
+            continue;
+        }
+
+        EntityRenderPose pose = entity_render_pose(v, entity);
+        Vector3 anchor = {
+            pose.x,
+            ground_y_smooth(v, pose.x, pose.y) +
+                2.2f + (float)entity->size * 0.8f,
+            -pose.y
+        };
+        dbg_draw_prayer_window_indicator(anchor, v->camera);
+    }
+}
+
+/* ======================================================================== */
+/* Scene drawing                                                             */
+/* ======================================================================== */
+
+static int object_anim_row_visible(const ObjectAnimPlacement* row) {
+    if (!row) return 0;
+    return (row->flags & OANM_FLAG_DYNAMIC_REPLACEMENT) == 0;
+}
+
+static void draw_animated_objects(ViewerState* v) {
+    if (!v || !v->object_anims || !v->object_anims->loaded ||
+        !v->object_anim_models || !v->object_anim_runtimes)
+        return;
+
+    float dt = GetFrameTime();
+    rlDisableBackfaceCulling();
+    for (int i = 0; i < v->object_anims->count; i++) {
+        ObjectAnimPlacement* row = &v->object_anims->rows[i];
+        if (!object_anim_row_visible(row)) continue;
+
+        NpcModelEntry* entry = fc_npc_model_find(v->object_anim_models,
+                                                 row->model_id);
+        if (!entry || !entry->loaded) continue;
+
+        if (row->animation_id >= 0 && v->anim_cache) {
+            ObjectAnimRuntime* rt = &v->object_anim_runtimes[i];
+            fc_model_animation_update(entry, v->anim_cache, &rt->anim_state,
+                                      &rt->anim_seq, &rt->anim_frame,
+                                      &rt->anim_timer, row->animation_id, dt,
+                                      row->phase_ticks);
+        }
+
+        DrawModelEx(entry->model,
+                    (Vector3){row->pos_x, row->pos_y, row->pos_z},
+                    (Vector3){0, 1, 0}, 0.0f,
+                    (Vector3){1, 1, 1}, WHITE);
+    }
+    rlEnableBackfaceCulling();
+}
+
+static void draw_actor_footprint(ViewerState* v,
+                                 const FcRenderEntity* entity) {
+    if (!v || !entity || entity->size <= 0) {
+        return;
+    }
+    if (entity->is_dead &&
+        (entity->entity_type != ENTITY_NPC ||
+         !fc_combat_presentation_npc_death_deferred(
+             v->combat_presentation, &v->state, entity->npc_slot))) {
+        return;
+    }
+
+    const int is_player = entity->entity_type == ENTITY_PLAYER;
+    const Color fill = is_player
+        ? CLITERAL(Color){50, 220, 100, 72}
+        : CLITERAL(Color){50, 140, 255, 62};
+    const Color outline = is_player
+        ? CLITERAL(Color){80, 255, 130, 225}
+        : CLITERAL(Color){80, 180, 255, 210};
+    for (int offset_x = 0; offset_x < entity->size; offset_x++) {
+        for (int offset_y = 0; offset_y < entity->size; offset_y++) {
+            float tile_x = (float)(entity->x + offset_x) + 0.5f;
+            float tile_y = (float)(entity->y + offset_y) + 0.5f;
+            float height = ground_y_smooth(v, tile_x, tile_y) + 0.035f;
+            Vector3 center = {tile_x, height, -tile_y};
+            DrawCube(center, 0.94f, 0.02f, 0.94f, fill);
+        }
+    }
+
+    float min_x = (float)entity->x + 0.03f;
+    float max_x = (float)(entity->x + entity->size) - 0.03f;
+    float min_y = (float)entity->y + 0.03f;
+    float max_y = (float)(entity->y + entity->size) - 0.03f;
+    Vector3 northwest = {
+        min_x, ground_y_smooth(v, min_x, min_y) + 0.055f, -min_y};
+    Vector3 northeast = {
+        max_x, ground_y_smooth(v, max_x, min_y) + 0.055f, -min_y};
+    Vector3 southeast = {
+        max_x, ground_y_smooth(v, max_x, max_y) + 0.055f, -max_y};
+    Vector3 southwest = {
+        min_x, ground_y_smooth(v, min_x, max_y) + 0.055f, -max_y};
+    DrawLine3D(northwest, northeast, outline);
+    DrawLine3D(northeast, southeast, outline);
+    DrawLine3D(southeast, southwest, outline);
+    DrawLine3D(southwest, northwest, outline);
+}
+
+static void draw_scene(ViewerState* v) {
+    if (v->camera_locked) {
+        v->camera.target = camera_follow_target(v);
+    }
+    v->camera.position = (Vector3){
+        v->camera.target.x + v->cam_dist*cosf(v->cam_pitch)*sinf(v->cam_yaw),
+        v->cam_dist*sinf(v->cam_pitch),
+        v->camera.target.z + v->cam_dist*cosf(v->cam_pitch)*cosf(v->cam_yaw) };
+    BeginMode3D(v->camera);
+
+    /* Terrain + objects */
+    if (v->terrain && v->terrain->loaded) {
+        rlDisableBackfaceCulling();
+        DrawModel(v->terrain->model, (Vector3){0,0,0}, 1.0f, WHITE);
+        rlEnableBackfaceCulling();
+    }
+    if (v->objects && v->objects->loaded) {
+        rlDisableBackfaceCulling();
+        DrawModel(v->objects->model, (Vector3){0,0,0}, 1.0f, WHITE);
+        rlEnableBackfaceCulling();
+    }
+    draw_animated_objects(v);
+
+    /* Grid overlay */
+    if (v->show_grid) {
+        for (int x = 0; x <= FC_ARENA_WIDTH; x++)
+            DrawLine3D((Vector3){(float)x,0.01f,0}, (Vector3){(float)x,0.01f,-(float)FC_ARENA_HEIGHT}, COL_GRID);
+        for (int z = 0; z <= FC_ARENA_HEIGHT; z++)
+            DrawLine3D((Vector3){0,0.01f,-(float)z}, (Vector3){(float)FC_ARENA_WIDTH,0.01f,-(float)z}, COL_GRID);
+    }
+
+    /* Collision overlay */
+    if (v->show_collision) {
+        for (int tx = 0; tx < FC_ARENA_WIDTH; tx++) {
+            for (int ty = 0; ty < FC_ARENA_HEIGHT; ty++) {
+                Color c = v->state.walkable[tx][ty] ? COL_WALKABLE : COL_BLOCKED;
+                DrawCube((Vector3){tx+0.5f, 0.02f, -(ty+0.5f)}, 0.9f, 0.02f, 0.9f, c);
+            }
+        }
+    }
+
+    /* Movement feedback is immediate, even though the selected action remains
+     * buffered until the next authoritative simulation tick. */
+    draw_click_destination_3d(v);
+
+    /* Entities */
+    for (int i = 0; i < v->entity_count; i++) {
+        FcRenderEntity* e = &v->entities[i];
+
+        EntityRenderPose pose = entity_render_pose(v, e);
+        float ex = pose.x;
+        float ey = -pose.y;
+
+        /* Sample terrain continuously along the interpolated movement path. */
+        float gy = ground_y_smooth(v, pose.x, pose.y);
+
+        if (e->entity_type == ENTITY_PLAYER) {
+            draw_actor_footprint(v, e);
+
+            /* Player model or fallback cylinder */
+            NpcModelEntry* pm = fc_actor_player_model_entry(
+                v->appearance.model, v->active_loadout);
+            if (pm && pm->loaded) {
+                Vector3 pos = {ex, gy, ey};
+                float face_angle = pose.face_angle;
+                rlDisableBackfaceCulling();
+                DrawModelEx(pm->model, pos, (Vector3){0,1,0}, face_angle, (Vector3){1,1,1}, WHITE);
+                rlEnableBackfaceCulling();
+            } else {
+                DrawCylinder((Vector3){ex, gy, ey}, 0.4f, 0.4f, 2.0f, 8, COL_PLAYER);
+                DrawCylinderWires((Vector3){ex, gy, ey}, 0.4f, 0.4f, 2.0f, 8, WHITE);
+            }
+
+            /* Prayer icon above player — rendered as 2D text after EndMode3D */
+            /* (handled below in the 2D overlay section) */
+        } else {
+            draw_actor_footprint(v, e);
+
+            /* NPC: try to render actual model, fallback to colored cube */
+            uint32_t mid = fc_npc_type_to_model_id(e->npc_type);
+            NpcModelEntry* nme = v->npc_models ? fc_npc_model_find(v->npc_models, mid) : NULL;
+
+            if (nme) {
+                /* Facing is maintained by the client-style actor runtime. */
+                Vector3 pos = {ex, gy, ey};
+                float face_angle = pose.face_angle;
+                if (e->npc_slot >= 0 && e->npc_slot < FC_MAX_NPCS &&
+                    v->actor_animation.npc_states[e->npc_slot]) {
+                    /* Same-type NPCs share an asset mesh. Upload this actor's
+                     * transformed vertices immediately before its draw call. */
+                    fc_actor_animation_upload_npc(
+                        &v->actor_animation, e->npc_slot, nme);
+                }
+                rlDisableBackfaceCulling();
+                DrawModelEx(nme->model, pos, (Vector3){0,1,0}, face_angle, (Vector3){1,1,1}, WHITE);
+                rlEnableBackfaceCulling();
+            } else {
+                /* Fallback: colored cube */
+                float s = (float)e->size * 0.45f;
+                float h = 1.0f + (float)e->size * 0.5f;
+                Color col = (e->npc_type > 0 && e->npc_type < 9) ? NPC_COLORS[e->npc_type] : GRAY;
+                if (e->died_this_tick &&
+                    !fc_combat_presentation_npc_death_deferred(
+                        v->combat_presentation, &v->state, e->npc_slot)) {
+                    h *= 0.3f;
+                    col.a = 100;
+                }
+                DrawCube((Vector3){ex, gy + h*0.5f, ey}, s*2, h, s*2, col);
+                DrawCubeWires((Vector3){ex, gy + h*0.5f, ey}, s*2, h, s*2, WHITE);
+            }
+
+        }
+    }
+
+    FcCombatPresentationContext combat_context = {
+        .state = &v->state,
+        .events = &v->render_events,
+        .scene = &v->actor_animation.scene,
+        .terrain = v->terrain,
+        .anim_cache = v->anim_cache,
+        .player_profile = fc_player_visual_profile(fc_player_equipment_visual_profile(&v->state.player)),
+        .tps = v->tps,
+    };
+    fc_combat_presentation_draw_world(v->combat_presentation,
+                                      &combat_context, GetFrameTime());
+    /* Debug overlays — 3D collision tiles (before EndMode3D) */
+    if (v->dbg_flags) debug_overlay_3d(&v->state, v->dbg_flags);
+
+    EndMode3D();
+
+    FcCombatPresentationDrawContext combat_draw_context = {
+        .presentation = combat_context,
+        .entities = v->entities,
+        .entity_count = v->entity_count,
+        .player_models = v->appearance.model,
+        .npc_models = v->npc_models,
+        .active_loadout = v->active_loadout,
+        .ui_assets = &v->ui.assets,
+        .camera = v->camera,
+    };
+    /* Native client actor overheads are fixed-size screen-space sprites. */
+    fc_combat_presentation_draw_healthbars(v->combat_presentation,
+                                            &combat_draw_context);
+
+    /* Debug overlays — 2D screen-space (LOS, path, range — after EndMode3D) */
+    if (v->dbg_flags) {
+        int debug_flags = v->dbg_flags;
+        if (v->click_feedback.destination_active)
+            debug_flags &= ~DBG_PATH;
+        debug_overlay_screen(&v->state, v->camera, debug_flags);
+        draw_npc_prayer_window_indicators(v);
+    }
+
+    draw_click_route_2d(v);
+
+    fc_combat_presentation_draw_hitsplats(v->combat_presentation,
+                                          &combat_draw_context);
+
+    /* Prayer overhead icon — 2D projected from player head position */
+    int rendered_prayer = fc_actor_animation_render_prayer(
+        &v->actor_animation, &v->state);
+    if (v->entity_count > 0 && rendered_prayer != PRAYER_NONE) {
+        EntityRenderPose pose = entity_render_pose(v, &v->entities[0]);
+        float p_gy = ground_y_smooth(v, pose.x, pose.y);
+        Vector3 head_pos = {pose.x, p_gy + 3.0f, -pose.y};
+        Vector2 scr = GetWorldToScreen(head_pos, v->camera);
+        int px = (int)scr.x, py = (int)scr.y;
+
+        /* Draw actual prayer sprite texture */
+        Texture2D tex = {0};
+        if (rendered_prayer == PRAYER_PROTECT_MELEE && v->pray_melee_tex.id > 0)
+            tex = v->pray_melee_tex;
+        else if (rendered_prayer == PRAYER_PROTECT_RANGE && v->pray_missiles_tex.id > 0)
+            tex = v->pray_missiles_tex;
+        else if (rendered_prayer == PRAYER_PROTECT_MAGIC && v->pray_magic_tex.id > 0)
+            tex = v->pray_magic_tex;
+
+        if (tex.id > 0) {
+            /* Scale sprite to ~28x28 pixels and center on projected position */
+            float scale = 28.0f / (float)tex.width;
+            int dw = (int)(tex.width * scale);
+            int dh = (int)(tex.height * scale);
+            DrawTextureEx(tex, (Vector2){(float)(px - dw/2), (float)(py - dh/2)},
+                          0.0f, scale, WHITE);
+        } else {
+            /* Fallback: letter if textures not loaded */
+            const char* icon_txt;
+            if (rendered_prayer == PRAYER_PROTECT_MELEE) icon_txt = "M";
+            else if (rendered_prayer == PRAYER_PROTECT_RANGE) icon_txt = "R";
+            else icon_txt = "W";
+            DrawCircle(px, py, 14, (Color){255,255,255,220});
+            int itw = fc_osrs_measure_text(icon_txt, 18);
+            fc_osrs_draw_text(icon_txt, px - itw/2, py - 9, 18, (Color){0,0,0,255});
+        }
+    }
+}
+
+/* ======================================================================== */
+/* UI drawing                                                                */
+/* ======================================================================== */
+
+static Rectangle runec_side_content_rect(void) {
+    int screen_w = GetScreenWidth();
+    int screen_h = GetScreenHeight();
+
+    Rectangle side = {
+        (float)screen_w - RUNEC_OSRS_SIDE_MENU_W,
+        (float)screen_h - RUNEC_OSRS_SIDE_MENU_H,
+        RUNEC_OSRS_SIDE_MENU_W,
+        RUNEC_OSRS_SIDE_MENU_H
+    };
+    return (Rectangle){
+        side.x + RUNEC_OSRS_SIDE_CONTENT_X,
+        side.y + RUNEC_OSRS_SIDE_CONTENT_Y,
+        RUNEC_OSRS_SIDE_CONTENT_W,
+        RUNEC_OSRS_SIDE_CONTENT_H
+    };
+}
+
+#define RUNEC_CONSOLE_TAB_COUNT 6
+#define RUNEC_CONSOLE_NPC_ROWS 8
+#define RUNEC_CONSOLE_NPC_ROW_H 13
+#define RUNEC_CONSOLE_TPS_COLS 4
+
+static Rectangle runec_console_panel_rect(void) {
+    return runec_ui_chat_panel_rect(GetScreenWidth(), GetScreenHeight());
+}
+
+static Rectangle runec_console_body_rect(Rectangle panel) {
+    return (Rectangle){panel.x + 7.0f, panel.y + 7.0f,
+                       panel.width - 13.0f, panel.height - 39.0f};
+}
+
+static Rectangle runec_console_tab_rect(Rectangle panel, int index) {
+    float width = (panel.width - 6.0f) / (float)RUNEC_CONSOLE_TAB_COUNT;
+    return (Rectangle){panel.x + 3.0f + width * (float)index,
+                       panel.y + panel.height - 23.0f,
+                       width, 21.0f};
+}
+
+static Rectangle runec_console_debug_button_rect(Rectangle body) {
+    float right_x = body.x + 286.0f;
+    float width = body.x + body.width - right_x;
+    return (Rectangle){right_x, body.y + 15.0f,
+                       (width - 4.0f) * 0.5f, 18.0f};
+}
+
+static Rectangle runec_console_god_button_rect(Rectangle body) {
+    Rectangle debug = runec_console_debug_button_rect(body);
+    return (Rectangle){debug.x + debug.width + 4.0f, debug.y,
+                       debug.width, debug.height};
+}
+
+static Rectangle runec_console_wave_button_rect(Rectangle body) {
+    return (Rectangle){body.x + 286.0f, body.y + 37.0f,
+                       body.width - 286.0f, 20.0f};
+}
+
+static Rectangle runec_console_tps_button_rect(Rectangle body,
+                                               int index) {
+    float box_x = body.x + 286.0f;
+    float box_w = body.width - 286.0f;
+    const float gap = 3.0f;
+    float button_w = (box_w - gap * (RUNEC_CONSOLE_TPS_COLS - 1)) /
+                     RUNEC_CONSOLE_TPS_COLS;
+    int row = index / RUNEC_CONSOLE_TPS_COLS;
+    int col = index % RUNEC_CONSOLE_TPS_COLS;
+    return (Rectangle){box_x + col * (button_w + gap),
+                       body.y + 78.0f + row * 20.0f,
+                       button_w, 17.0f};
+}
+
+static Rectangle runec_console_target_row_rect(Rectangle body,
+                                               int row) {
+    return (Rectangle){body.x + 1.0f,
+                       body.y + 16.0f + row * RUNEC_CONSOLE_NPC_ROW_H,
+                       277.0f, RUNEC_CONSOLE_NPC_ROW_H};
+}
+
+static Rectangle runec_console_wave_cell_rect(Rectangle body,
+                                              int wave) {
+    const int columns = 9;
+    const float gap = 1.0f;
+    float cell_w = (body.width - 6.0f - gap * (columns - 1)) / columns;
+    int index = wave - 1;
+    int row = index / columns;
+    int col = index % columns;
+    return (Rectangle){body.x + 3.0f + col * (cell_w + gap),
+                       body.y + 18.0f + row * 15.0f,
+                       cell_w, 14.0f};
+}
+
+static void draw_runec_console_button(Rectangle rect, const char* label,
+                                      int selected) {
+    int hovered = CheckCollisionPointRec(GetMousePosition(), rect);
+    Color background = selected ? CLITERAL(Color){82, 73, 61, 245}
+        : (hovered ? CLITERAL(Color){72, 63, 51, 245}
+                   : CLITERAL(Color){42, 36, 28, 235});
+    Color text = selected ? COL_TEXT_YELLOW : COL_TEXT_WHITE;
+    DrawRectangleRec(rect, background);
+    DrawRectangleLinesEx(rect, 1, COL_PANEL_BORDER);
+    int font_size = 8;
+    fc_osrs_draw_text(label,
+             (int)(rect.x + (rect.width - fc_osrs_measure_text(label, font_size)) * 0.5f),
+             (int)(rect.y + (rect.height - font_size) * 0.5f),
+             font_size, text);
+}
+
+static void draw_runec_console_wave_grid(ViewerState* v, Rectangle body) {
+    Vector2 mouse = GetMousePosition();
+    DrawRectangleRec(body, CLITERAL(Color){18, 16, 13, 252});
+    DrawRectangleLinesEx(body, 1, COL_PANEL_BORDER);
+    fc_osrs_draw_text("Select Wave", (int)body.x + 4, (int)body.y + 3,
+             9, COL_TEXT_YELLOW);
+    fc_osrs_draw_text("click current selection to close",
+             (int)(body.x + body.width) - 155, (int)body.y + 4,
+             7, COL_TEXT_DIM);
+    for (int wave = 1; wave <= FC_NUM_WAVES; wave++) {
+        Rectangle cell = runec_console_wave_cell_rect(body, wave);
+        int current = wave == v->state.current_wave;
+        int hovered = CheckCollisionPointRec(mouse, cell);
+        Color bg = current ? CLITERAL(Color){60, 80, 40, 250}
+            : (hovered ? CLITERAL(Color){72, 63, 51, 245}
+                       : CLITERAL(Color){35, 30, 24, 240});
+        DrawRectangleRec(cell, bg);
+        DrawRectangleLinesEx(cell, 1, COL_PANEL_BORDER);
+        char label[8];
+        snprintf(label, sizeof(label), "%d", wave);
+        fc_osrs_draw_text(label,
+                 (int)(cell.x + (cell.width - fc_osrs_measure_text(label, 8)) * 0.5f),
+                 (int)cell.y + 3, 8,
+                 current ? COL_TEXT_YELLOW : COL_TEXT_WHITE);
+    }
+}
+
+static void draw_runec_console_controls(ViewerState* v, Rectangle body) {
+    static const char* NPC_SHORT[] = {
+        "?", "Tz-Kih", "Tz-Kek", "Kek-Sm", "Tok-Xil",
+        "MejKot", "Ket-Zek", "Jad", "HurKot"
+    };
+    Vector2 mouse = GetMousePosition();
+    int x = (int)body.x + 4;
+    char text[128];
+
+    fc_osrs_draw_text("NPC Targets", x, (int)body.y + 3, 9, COL_TEXT_YELLOW);
+    int shown = 0;
+    for (int ni = 0; ni < FC_MAX_NPCS && shown < RUNEC_CONSOLE_NPC_ROWS; ni++) {
+        FcNpc* npc = &v->state.npcs[ni];
+        if (!npc->active || npc->is_dead) continue;
+        Rectangle row = runec_console_target_row_rect(body, shown);
+        int selected = ni == v->state.player.attack_target_idx;
+        int hovered = CheckCollisionPointRec(mouse, row);
+        if (selected || hovered) {
+            DrawRectangleRec(row, selected
+                ? CLITERAL(Color){82, 73, 61, 205}
+                : CLITERAL(Color){52, 45, 35, 190});
+        }
+        const char* name = npc->npc_type > 0 && npc->npc_type < 9
+            ? NPC_SHORT[npc->npc_type] : "?";
+        snprintf(text, sizeof(text), "%s%s[%d] d:%d",
+                 selected ? ">" : " ", name, ni,
+                 fc_distance_to_npc(v->state.player.x,
+                                    v->state.player.y, npc));
+        fc_osrs_draw_text(text, (int)row.x + 2, (int)row.y + 3, 8,
+                 selected ? COL_TEXT_YELLOW : COL_TEXT_WHITE);
+
+        int bar_x = (int)row.x + 116;
+        int bar_w = 116;
+        float hp = npc->max_hp > 0
+            ? (float)npc->current_hp / (float)npc->max_hp : 0.0f;
+        if (hp < 0.0f) hp = 0.0f;
+        if (hp > 1.0f) hp = 1.0f;
+        DrawRectangle(bar_x, (int)row.y + 3, bar_w, 7, COL_HP_RED);
+        DrawRectangle(bar_x, (int)row.y + 3,
+                      (int)((float)bar_w * hp), 7, COL_HP_GREEN);
+        snprintf(text, sizeof(text), "%d", npc->current_hp / 10);
+        fc_osrs_draw_text(text, bar_x + bar_w + 4, (int)row.y + 2,
+                 8, COL_TEXT_DIM);
+        shown++;
+    }
+    if (shown == 0)
+        fc_osrs_draw_text("No NPCs alive", x + 2, (int)body.y + 20,
+                 8, COL_TEXT_DIM);
+
+    int right_x = (int)body.x + 286;
+    DrawLine(right_x - 5, (int)body.y + 2,
+             right_x - 5, (int)(body.y + body.height) - 2,
+             COL_PANEL_BORDER);
+    fc_osrs_draw_text("Viewer Controls", right_x, (int)body.y + 3,
+             9, COL_TEXT_YELLOW);
+
+    char debug_label[24];
+    snprintf(debug_label, sizeof(debug_label), "Debug: %s",
+             v->dbg_flags ? "ON" : "OFF");
+    draw_runec_console_button(runec_console_debug_button_rect(body),
+                              debug_label, v->dbg_flags != 0);
+    char god_label[24];
+    snprintf(god_label, sizeof(god_label), "God: %s",
+             v->godmode ? "ON" : "OFF");
+    draw_runec_console_button(runec_console_god_button_rect(body),
+                              god_label, v->godmode);
+
+    Rectangle wave = runec_console_wave_button_rect(body);
+    snprintf(text, sizeof(text), "Jump to Wave: %d  v",
+             v->state.current_wave);
+    draw_runec_console_button(wave, text, 0);
+
+    fc_osrs_draw_text(v->policy_replay ? "Replay TPS" : "TPS Presets",
+             right_x, (int)body.y + 62, 8, COL_TEXT_DIM);
+    for (int i = 0; i < NUM_MANUAL_TPS_PRESETS; i++) {
+        draw_runec_console_button(runec_console_tps_button_rect(body, i),
+                                  MANUAL_TPS_LABELS[i],
+                                  float_near(v->tps, MANUAL_TPS_PRESETS[i]));
+    }
+
+    if (v->console_wave_dropdown_open)
+        draw_runec_console_wave_grid(v, body);
+}
+
+static void draw_runec_console_diagnostics(ViewerState* v, Rectangle body) {
+    int debug_tab = v->console_tab - 1;
+    int available_height = (int)body.height - 6;
+    int scroll = 0;
+    if (debug_tab >= 0 && debug_tab < 4) {
+        int max_scroll = v->console_content_height[debug_tab] - available_height;
+        if (max_scroll < 0) max_scroll = 0;
+        if (v->console_scroll[debug_tab] < 0)
+            v->console_scroll[debug_tab] = 0;
+        if (v->console_scroll[debug_tab] > max_scroll)
+            v->console_scroll[debug_tab] = max_scroll;
+        scroll = v->console_scroll[debug_tab];
+    }
+
+    int content_y = (int)body.y + 3 - scroll;
+    BeginScissorMode((int)body.x, (int)body.y,
+                     (int)body.width, (int)body.height);
+    int end_y = dbg_draw_panel_tabs(
+        &v->state,
+        &v->reward_breakdown, &v->reward_runtime,
+        v->reward_config_loaded, v->reward_config_path,
+        (int)body.x, (int)body.x + 4, content_y,
+        (int)body.width, debug_tab, 0, available_height);
+    EndScissorMode();
+
+    if (debug_tab >= 0 && debug_tab < 4) {
+        int height = end_y - content_y;
+        v->console_content_height[debug_tab] = height > 0 ? height : 0;
+        int max_scroll = height - available_height;
+        if (max_scroll < 0) max_scroll = 0;
+        if (v->console_scroll[debug_tab] > max_scroll)
+            v->console_scroll[debug_tab] = max_scroll;
+        if (max_scroll > 0) {
+            int track_x = (int)(body.x + body.width) - 6;
+            int track_y = (int)body.y + 3;
+            int track_h = available_height;
+            DrawRectangle(track_x, track_y, 4, track_h,
+                          CLITERAL(Color){30, 26, 20, 230});
+            float visible_fraction =
+                (float)available_height / (float)height;
+            int thumb_h = (int)((float)track_h * visible_fraction);
+            if (thumb_h < 12) thumb_h = 12;
+            float scroll_fraction = max_scroll > 0
+                ? (float)v->console_scroll[debug_tab] / (float)max_scroll
+                : 0.0f;
+            int thumb_y = track_y +
+                (int)((float)(track_h - thumb_h) * scroll_fraction);
+            DrawRectangle(track_x, thumb_y, 4, thumb_h,
+                          CLITERAL(Color){120, 110, 90, 255});
+        }
+    }
+}
+
+static void draw_runec_console(ViewerState* v) {
+    static const char* labels[RUNEC_CONSOLE_TAB_COUNT] = {
+        "Controls", "Player", "Obs", "Mask", "Reward", "Log"
+    };
+    Rectangle panel = runec_console_panel_rect();
+    Rectangle body = runec_console_body_rect(panel);
+    DrawRectangleRec(body, CLITERAL(Color){0, 0, 0, 76});
+    if (v->console_tab == 0)
+        draw_runec_console_controls(v, body);
+    else
+        draw_runec_console_diagnostics(v, body);
+
+    for (int tab = 0; tab < RUNEC_CONSOLE_TAB_COUNT; tab++) {
+        Rectangle rect = runec_console_tab_rect(panel, tab);
+        runec_ui_draw_asset(&v->ui.assets, "chat_tab_button_0", rect, WHITE);
+        int selected = tab == v->console_tab;
+        int hovered = CheckCollisionPointRec(GetMousePosition(), rect);
+        DrawRectangleRec(rect, selected
+            ? CLITERAL(Color){82, 73, 61, 96}
+            : (hovered ? CLITERAL(Color){90, 78, 62, 72}
+                       : CLITERAL(Color){0, 0, 0, 18}));
+        if (selected)
+            DrawLine((int)rect.x + 2, (int)(rect.y + rect.height) - 2,
+                     (int)(rect.x + rect.width) - 2,
+                     (int)(rect.y + rect.height) - 2,
+                     COL_TEXT_YELLOW);
+        fc_osrs_draw_text(labels[tab],
+                 (int)(rect.x +
+                     (rect.width - fc_osrs_measure_text(labels[tab], 8)) * 0.5f),
+                 (int)rect.y + 7, 8,
+                 selected ? COL_TEXT_YELLOW : COL_TEXT_WHITE);
+    }
+}
+
+static int process_runec_console_input(ViewerState* v) {
+    if (!v) return 0;
+    Rectangle panel = runec_console_panel_rect();
+    Vector2 mouse = GetMousePosition();
+    if (!CheckCollisionPointRec(mouse, panel))
+        return 0;
+
+    int clicked = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+    if (clicked) {
+        for (int tab = 0; tab < RUNEC_CONSOLE_TAB_COUNT; tab++) {
+            if (!CheckCollisionPointRec(mouse,
+                                        runec_console_tab_rect(panel, tab)))
+                continue;
+            v->console_tab = tab;
+            v->console_wave_dropdown_open = 0;
+            return 1;
+        }
+    }
+
+    Rectangle body = runec_console_body_rect(panel);
+    if (v->console_tab == 0 && clicked) {
+        if (v->console_wave_dropdown_open) {
+            for (int wave = 1; wave <= FC_NUM_WAVES; wave++) {
+                if (!CheckCollisionPointRec(
+                        mouse, runec_console_wave_cell_rect(body, wave)))
+                    continue;
+                if (wave != v->state.current_wave)
+                    viewer_jump_to_wave(v, wave);
+                v->console_wave_dropdown_open = 0;
+                return 1;
+            }
+            v->console_wave_dropdown_open = 0;
+            return 1;
+        }
+
+        if (CheckCollisionPointRec(mouse,
+                                   runec_console_debug_button_rect(body))) {
+            toggle_debug_overlay(v);
+            return 1;
+        }
+        if (CheckCollisionPointRec(mouse,
+                                   runec_console_god_button_rect(body))) {
+            toggle_godmode(v);
+            return 1;
+        }
+        if (CheckCollisionPointRec(mouse,
+                                   runec_console_wave_button_rect(body))) {
+            v->console_wave_dropdown_open = 1;
+            return 1;
+        }
+        for (int i = 0; i < NUM_MANUAL_TPS_PRESETS; i++) {
+            if (!CheckCollisionPointRec(
+                    mouse, runec_console_tps_button_rect(body, i)))
+                continue;
+            set_manual_speed(v, MANUAL_TPS_PRESETS[i]);
+            return 1;
+        }
+
+        int shown = 0;
+        for (int ni = 0; ni < FC_MAX_NPCS &&
+                 shown < RUNEC_CONSOLE_NPC_ROWS; ni++) {
+            FcNpc* npc = &v->state.npcs[ni];
+            if (!npc->active || npc->is_dead) continue;
+            if (CheckCollisionPointRec(
+                    mouse, runec_console_target_row_rect(body, shown))) {
+                queue_player_attack_request(v, ni, mouse.x, mouse.y);
+                fprintf(stderr, "CONSOLE CLICK -> ATTACK npc_idx=%d\n", ni);
+                return 1;
+            }
+            shown++;
+        }
+    }
+
+    if (v->console_tab >= 1 && v->console_tab <= 4 &&
+        CheckCollisionPointRec(mouse, body)) {
+        float wheel = GetMouseWheelMove();
+        if (wheel != 0.0f) {
+            int index = v->console_tab - 1;
+            int max_scroll = v->console_content_height[index] -
+                             ((int)body.height - 6);
+            if (max_scroll < 0) max_scroll = 0;
+            v->console_scroll[index] -= (int)wheel * 24;
+            if (v->console_scroll[index] < 0)
+                v->console_scroll[index] = 0;
+            if (v->console_scroll[index] > max_scroll)
+                v->console_scroll[index] = max_scroll;
+        }
+    }
+    return 1;
+}
+
+static void draw_tex_fit(Texture2D tex, int dx, int dy, int dw, int dh,
+                         Color tint) {
+    if (tex.id == 0) return;
+    Rectangle src = {0, 0, (float)tex.width, (float)tex.height};
+    float sx = (float)dw / (float)tex.width;
+    float sy = (float)dh / (float)tex.height;
+    float scale = sx < sy ? sx : sy;
+    int rw = (int)(tex.width * scale);
+    int rh = (int)(tex.height * scale);
+    Rectangle dst = {
+        (float)(dx + (dw - rw) / 2),
+        (float)(dy + (dh - rh) / 2),
+        (float)rw,
+        (float)rh,
+    };
+    DrawTexturePro(tex, src, dst, (Vector2){0, 0}, 0, tint);
+}
+
+static Rectangle runec_prayer_button_rect(Rectangle content, int index) {
+    const int btn_h = 34;
+    const int gap = 3;
+    int x = (int)content.x + 8;
+    int y = (int)content.y + 8 + 34 + index * (btn_h + gap);
+    int w = (int)content.width - 16;
+    if (w < 120) w = 120;
+    return (Rectangle){(float)x, (float)y, (float)w, (float)btn_h};
+}
+
+static void draw_runec_prayer_tab(ViewerState* v, Rectangle content) {
+    BeginScissorMode((int)content.x, (int)content.y,
+                     (int)content.width, (int)content.height);
+
+    DrawRectangleRec(content, COL_PANEL);
+
+    FcPlayer* p = &v->state.player;
+    int rendered_prayer = fc_actor_animation_render_prayer(
+        &v->actor_animation, &v->state);
+    int x = (int)content.x + 8;
+    int by = (int)content.y + 8;
+    int right = (int)(content.x + content.width) - 4;
+    char b[64];
+
+    snprintf(b, sizeof(b), "Prayer: %d / %d",
+             p->current_prayer / 10, p->max_prayer / 10);
+    text_s(b, x, by, 10, COL_PRAY_BLUE);
+    by += 16;
+
+    if (rendered_prayer != PRAYER_NONE) {
+        int resistance = 60 + 2 * p->prayer_bonus;
+        snprintf(b, sizeof(b), "Drain rate: 12 / %d resist", resistance);
+        text_s(b, x, by, 8, COL_TEXT_DIM);
+    } else {
+        text_s("No prayer active", x, by, 8, COL_TEXT_DIM);
+    }
+    by += 14;
+
+    DrawLine((int)content.x + 4, by - 2, right, by - 2, COL_PANEL_BORDER);
+
+    static const char* pray_names[] = {
+        "Prot. Melee", "Prot. Range", "Prot. Magic"
+    };
+    static const int pray_vals[] = {
+        PRAYER_PROTECT_MELEE, PRAYER_PROTECT_RANGE, PRAYER_PROTECT_MAGIC
+    };
+    Color pray_colors[] = { COL_TEXT_YELLOW, COL_TEXT_GREEN, COL_PRAY_BLUE };
+    Texture2D tex_on[] = {
+        v->tex_pray_melee_on, v->tex_pray_range_on, v->tex_pray_magic_on
+    };
+    Texture2D tex_off[] = {
+        v->tex_pray_melee_off, v->tex_pray_range_off, v->tex_pray_magic_off
+    };
+
+    int no_points = (p->current_prayer <= 0);
+    Vector2 mouse = GetMousePosition();
+    const Color slot_empty = CLITERAL(Color){30, 26, 20, 255};
+    const Color pray_active = CLITERAL(Color){60, 120, 200, 200};
+    const Color tab_hover = CLITERAL(Color){72, 63, 51, 255};
+    const Color pray_button = CLITERAL(Color){50, 44, 36, 255};
+    for (int i = 0; i < 3; i++) {
+        Rectangle br = runec_prayer_button_rect(content, i);
+        int is_active = (rendered_prayer == pray_vals[i]);
+        int hovered = CheckCollisionPointRec(mouse, br);
+
+        Color bg;
+        if (no_points) {
+            bg = slot_empty;
+        } else if (is_active) {
+            bg = pray_active;
+        } else if (hovered) {
+            bg = tab_hover;
+        } else {
+            bg = pray_button;
+        }
+        DrawRectangleRec(br, bg);
+        DrawRectangleLinesEx(br, is_active ? 2 : 1,
+                             is_active ? pray_colors[i] : COL_PANEL_BORDER);
+
+        Texture2D icon = is_active ? tex_on[i] : tex_off[i];
+        Color icon_tint = no_points ? CLITERAL(Color){80,80,80,255} : WHITE;
+        draw_tex_fit(icon, (int)br.x + 4, (int)br.y + 2, 30, 30, icon_tint);
+
+        Color tc = no_points ? COL_TEXT_DIM
+            : (is_active ? COL_TEXT_WHITE : pray_colors[i]);
+        text_s(pray_names[i], (int)br.x + 38, (int)br.y + 7, 10, tc);
+
+        snprintf(b, sizeof(b), "[%d]", i + 1);
+        text_s(b, (int)br.x + 38, (int)br.y + 21, 8, COL_TEXT_DIM);
+        if (is_active) {
+            text_s("ACTIVE", (int)(br.x + br.width) - 44,
+                   (int)br.y + 21, 8, COL_TEXT_WHITE);
+        }
+    }
+
+    by = (int)runec_prayer_button_rect(content, 2).y + 34 + 9;
+    snprintf(b, sizeof(b), "Prayer bonus: +%d", p->prayer_bonus);
+    text_s(b, x, by, 8, COL_TEXT_DIM);
+
+    EndScissorMode();
+}
+
+static void draw_runec_side_overrides(ViewerState* v) {
+    Rectangle content = runec_side_content_rect();
+    if (v->ui.active_tab == RUNEC_UI_TAB_PRAYER)
+        draw_runec_prayer_tab(v, content);
+}
+
+static int process_runec_prayer_click(ViewerState* v) {
+    if (!v || v->ui.active_tab != RUNEC_UI_TAB_PRAYER)
+        return 0;
+    int left_click = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+    int right_click = IsMouseButtonPressed(MOUSE_BUTTON_RIGHT);
+    if (!left_click && !right_click)
+        return 0;
+
+    Rectangle content = runec_side_content_rect();
+    Vector2 mouse = GetMousePosition();
+    if (!CheckCollisionPointRec(mouse, content))
+        return 0;
+
+    static const struct {
+        int prayer;
+        int action;
+        int ui_slot;
+    } buttons[] = {
+        {PRAYER_PROTECT_MELEE, FC_PRAYER_MELEE, 18},
+        {PRAYER_PROTECT_RANGE, FC_PRAYER_RANGE, 17},
+        {PRAYER_PROTECT_MAGIC, FC_PRAYER_MAGIC, 16},
+    };
+
+    for (int i = 0; i < (int)(sizeof(buttons) / sizeof(buttons[0])); i++) {
+        Rectangle r = runec_prayer_button_rect(content, i);
+        if (!CheckCollisionPointRec(mouse, r))
+            continue;
+        if (right_click)
+            runec_ui_open_prayer_context(&v->ui, mouse, buttons[i].ui_slot);
+        else
+            queue_viewer_prayer_button(v, buttons[i].prayer, buttons[i].action);
+        return 1;
+    }
+
+    return 1;
+}
+/* ======================================================================== */
+/* Main                                                                      */
+/* ======================================================================== */
+
+/* The same viewer serves the standalone game, optional CPU compatibility
+ * replay, and Puffer's puf_render(). No graphics are allocated by training. */
+static void fc_viewer_destroy(ViewerState* v) {
+    if (!v) return;
+    if (v->pray_melee_tex.id > 0) UnloadTexture(v->pray_melee_tex);
+    if (v->pray_missiles_tex.id > 0) UnloadTexture(v->pray_missiles_tex);
+    if (v->pray_magic_tex.id > 0) UnloadTexture(v->pray_magic_tex);
+    for (int i = 0; i < FC_CLICK_CROSS_FRAME_COUNT * 2; i++) {
+        if (v->click_cross_tex[i].id > 0)
+            UnloadTexture(v->click_cross_tex[i]);
+    }
+    if (v->tex_pray_melee_on.id > 0) UnloadTexture(v->tex_pray_melee_on);
+    if (v->tex_pray_melee_off.id > 0) UnloadTexture(v->tex_pray_melee_off);
+    if (v->tex_pray_range_on.id > 0) UnloadTexture(v->tex_pray_range_on);
+    if (v->tex_pray_range_off.id > 0) UnloadTexture(v->tex_pray_range_off);
+    if (v->tex_pray_magic_on.id > 0) UnloadTexture(v->tex_pray_magic_on);
+    if (v->tex_pray_magic_off.id > 0) UnloadTexture(v->tex_pray_magic_off);
+    fc_combat_presentation_destroy(v->combat_presentation);
+    fc_actor_animation_shutdown(&v->actor_animation);
+    if (v->object_anim_runtimes) {
+        for (int i = 0; i < v->object_anim_runtime_count; i++) {
+            if (v->object_anim_runtimes[i].anim_state)
+                anim_model_state_free(v->object_anim_runtimes[i].anim_state);
+        }
+        free(v->object_anim_runtimes);
+    }
+    if (v->anim_cache) anim_cache_free(v->anim_cache);
+    fc_player_appearance_free(&v->appearance);
+    if (v->npc_models) fc_npc_models_unload(v->npc_models);
+    if (v->object_anim_models) fc_npc_models_unload(v->object_anim_models);
+    fc_animated_atlas_unload(&v->shared_model_atlas);
+    if (v->object_anims) object_anims_free(v->object_anims);
+    objects_free(v->objects);
+    fc_minimap_scene_free(&v->minimap_scene);
+    terrain_free(v->terrain);
+    fc_osrs_text_shutdown();
+    runec_ui_shutdown(&v->ui);
+    CloseWindow();
+    fc_destroy(&v->state);
+    free(v);
+}
+
+static ViewerState* fc_viewer_create(int replay) {
+#if defined(__linux__)
+    /* Raylib's X11 build can crash inside InitWindow without DISPLAY. */
+    const char* display = getenv("DISPLAY");
+    if (!display || !display[0]) {
+        fprintf(stderr, "error: no graphical DISPLAY is configured; provide X11 "
+                "display access, or use --headless for checkpoint evaluation\n");
+        return NULL;
+    }
+#endif
+    fprintf(stderr,"=== Fight Caves Viewer (Phase 8 — Playable) ===\n");
+    /* Keep graphical diagnostics off the native evaluator's stdout. */
+    if (replay) {
+        SetTraceLogCallback(viewer_trace_log_to_stderr);
+        SetTraceLogLevel(LOG_WARNING);
+    }
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE|FLAG_MSAA_4X_HINT);
+    InitWindow(DEFAULT_WINDOW_W, DEFAULT_WINDOW_H, replay
+               ? "Fight Caves RL — Checkpoint Viewer"
+               : "Fight Caves RL — Playable Viewer");
+    SetExitKey(KEY_NULL); /* Escape first dismisses menus; handled below. */
+    if (!IsWindowReady()) {
+        fprintf(stderr,
+                "error: viewer window initialization failed; verify the "
+                "graphical display and OpenGL driver\n");
+        return NULL;
+    }
+    SetTargetFPS(60);
+
+    ViewerState* v = calloc(1, sizeof(*v));
+    if (!v) {
+        fprintf(stderr, "error: cannot allocate Fight Caves viewer state\n");
+        CloseWindow();
+        return NULL;
+    }
+    fc_init(&v->state);
+    fc_actor_animation_init(&v->actor_animation);
+    runec_ui_init(&v->ui);
+    if (!fc_osrs_text_init()) {
+        fprintf(stderr,
+                "error: required OSRS viewer fonts failed to load\n");
+        fc_viewer_destroy(v);
+        return NULL;
+    }
+    int item_icons_ready = load_fc_ui_item_icons(v);
+    v->paused = 1; v->tps = NORMAL_TPS;
+    v->active_loadout = FC_ACTIVE_LOADOUT;
+    v->attack_target = -1;
+    v->cam_yaw = 0; v->cam_pitch = 0.8f; v->cam_dist = 30;
+    v->camera_locked = 1;
+    v->camera.up = (Vector3){0,1,0}; v->camera.fovy = 32;
+    v->camera.projection = CAMERA_PERSPECTIVE;
+    v->camera.target = (Vector3){FC_ARENA_WIDTH * 0.5f, 0.5f, -(FC_ARENA_HEIGHT * 0.5f)};
+
+    v->terrain = load_terrain(v);
+    /* OSRS rasterizes the current 104x104 scene from cache terrain and
+     * locations into a 512x512 minimap. This asset contains the Fight Caves
+     * mapsquare centered in that same scene format; runtime only crops and
+     * rotates it around the player. */
+    Image minimap_image = fc_load_image_asset("fightcaves.minimap.png");
+    if (minimap_image.data) {
+        Color* minimap_pixels = LoadImageColors(minimap_image);
+        if (!minimap_pixels || !fc_minimap_scene_load_pixels(
+                &v->minimap_scene, minimap_pixels,
+                minimap_image.width, minimap_image.height)) {
+            fprintf(stderr, "error: Fight Caves minimap failed to load\n");
+        } else {
+            fprintf(stderr,
+                    "minimap: loaded cache scene raster %dx%d\n",
+                    minimap_image.width, minimap_image.height);
+        }
+        UnloadImageColors(minimap_pixels);
+        UnloadImage(minimap_image);
+    } else {
+        fprintf(stderr, "error: missing fightcaves.minimap.png\n");
+    }
+    v->objects = load_objects_with_terrain(v->terrain);
+    if (fc_asset_exists("fightcaves.oanim"))
+        v->object_anims = object_anims_load("fightcaves.oanim");
+    if (v->object_anims)
+        object_anims_offset(v->object_anims, FC_WORLD_ORIGIN_X, FC_WORLD_ORIGIN_Y);
+    if (!fc_animated_atlas_load(&v->shared_model_atlas, "fightcaves.atlas", 0))
+        fprintf(stderr, "error: shared model atlas failed to load\n");
+    if (fc_asset_exists("fightcaves.object_anim.models"))
+        v->object_anim_models = fc_npc_models_load(
+            "fightcaves.object_anim.models", v->shared_model_atlas.texture);
+    if (v->object_anims && v->object_anims->count > 0) {
+        v->object_anim_runtimes = (ObjectAnimRuntime*)calloc(
+            (size_t)v->object_anims->count, sizeof(*v->object_anim_runtimes));
+        if (v->object_anim_runtimes)
+            v->object_anim_runtime_count = v->object_anims->count;
+    }
+    if (!v->terrain || !v->terrain->loaded) v->show_grid = 1;
+
+    /* Load NPC models */
+    {
+        if (fc_asset_exists("fc_npcs.models"))
+            v->npc_models = fc_npc_models_load("fc_npcs.models", (Texture2D){0});
+        if (!v->npc_models) fprintf(stderr, "error: NPC models failed to load\n");
+    }
+
+    /* Load composable player body and equipment models. */
+    if (!fc_player_appearance_load(&v->appearance)) {
+        fprintf(stderr, "Required player appearance assets are missing or invalid.\n");
+        fc_viewer_destroy(v);
+        return NULL;
+    }
+
+    /* Load the animation cache shared by actor and combat presentation. */
+    if (fc_asset_exists("fc_all.anims"))
+        v->anim_cache = anim_cache_load("fc_all.anims");
+    v->combat_presentation = fc_combat_presentation_create(
+        v->shared_model_atlas.texture);
+    if (!v->combat_presentation)
+        fprintf(stderr, "error: combat presentation initialization failed\n");
+
+    /* Load prayer overhead icon textures */
+    {
+        if (fc_asset_exists("data/sprites/ui/prayeron_14.png")) {
+            v->pray_melee_tex = fc_load_texture_asset("data/sprites/ui/prayeron_14.png");
+            v->pray_missiles_tex = fc_load_texture_asset("data/sprites/ui/prayeron_13.png");
+            v->pray_magic_tex = fc_load_texture_asset("data/sprites/ui/prayeron_12.png");
+            fprintf(stderr, "Prayer icons loaded from %s\n", fc_asset_root());
+        } else {
+            fprintf(stderr, "error: prayer icons not found under asset root %s\n",
+                    fc_asset_root());
+        }
+    }
+
+    /* Native b237 click crosses: frames 0-3 are movement (yellow), frames
+     * 4-7 are interaction (red). RuneC advances one frame every 100 ms. */
+    int click_cross_loaded = 0;
+    {
+        for (int i = 0; i < FC_CLICK_CROSS_FRAME_COUNT * 2; i++) {
+            char path[64];
+            snprintf(path, sizeof(path),
+                     "data/sprites/ui/cross_%d.png", i);
+            v->click_cross_tex[i] = fc_load_texture_asset(path);
+            if (v->click_cross_tex[i].id > 0) {
+                SetTextureFilter(v->click_cross_tex[i], TEXTURE_FILTER_POINT);
+                click_cross_loaded++;
+            }
+        }
+        fprintf(stderr, "Click cross sprites loaded: %d/8\n",
+                click_cross_loaded);
+        if (click_cross_loaded != FC_CLICK_CROSS_FRAME_COUNT * 2)
+            fprintf(stderr, "error: required click cross sprites failed to load\n");
+    }
+
+    /* Load prayer icons used by the active RuneC prayer override. */
+    {
+        v->tex_pray_melee_on = fc_load_texture_asset(
+            "data/sprites/ui/prayeron_14.png");
+        v->tex_pray_melee_off = fc_load_texture_asset(
+            "data/sprites/ui/prayeroff_14.png");
+        v->tex_pray_range_on = fc_load_texture_asset(
+            "data/sprites/ui/prayeron_13.png");
+        v->tex_pray_range_off = fc_load_texture_asset(
+            "data/sprites/ui/prayeroff_13.png");
+        v->tex_pray_magic_on = fc_load_texture_asset(
+            "data/sprites/ui/prayeron_12.png");
+        v->tex_pray_magic_off = fc_load_texture_asset(
+            "data/sprites/ui/prayeroff_12.png");
+    }
+
+    int required_resources_ready = 1;
+#define REQUIRE_VIEWER_RESOURCE(condition, description) do {                 \
+        if (!(condition)) {                                                  \
+            fprintf(stderr, "error: required viewer resource failed: %s\n", \
+                    description);                                            \
+            required_resources_ready = 0;                                    \
+        }                                                                    \
+    } while (0)
+    REQUIRE_VIEWER_RESOURCE(v->ui.assets.missing_required_count == 0,
+                            "RuneC UI sprites");
+    REQUIRE_VIEWER_RESOURCE(v->ui.assets.font_loaded &&
+                            v->ui.assets.small_font_loaded,
+                            "RuneC UI fonts");
+    REQUIRE_VIEWER_RESOURCE(v->ui.minimap_texture_ready,
+                            "minimap render texture");
+    REQUIRE_VIEWER_RESOURCE(item_icons_ready, "Fight Caves item icons");
+    REQUIRE_VIEWER_RESOURCE(v->terrain && v->terrain->loaded, "terrain mesh");
+    REQUIRE_VIEWER_RESOURCE(v->minimap_scene.ready, "minimap scene raster");
+    REQUIRE_VIEWER_RESOURCE(v->objects && v->objects->loaded &&
+                            v->objects->atlas.texture.id > 0,
+                            "terrain objects and atlas");
+    REQUIRE_VIEWER_RESOURCE(v->object_anims && v->object_anims->loaded,
+                            "object animation placements");
+    REQUIRE_VIEWER_RESOURCE(v->shared_model_atlas.texture.id > 0,
+                            "shared model atlas");
+    REQUIRE_VIEWER_RESOURCE(v->object_anim_models &&
+                            v->object_anim_models->loaded,
+                            "animated object models");
+    REQUIRE_VIEWER_RESOURCE(!v->object_anims || v->object_anims->count == 0 ||
+                            v->object_anim_runtimes,
+                            "object animation runtime allocation");
+    REQUIRE_VIEWER_RESOURCE(v->npc_models && v->npc_models->loaded,
+                            "NPC models");
+    REQUIRE_VIEWER_RESOURCE(v->appearance.parts && v->appearance.parts->loaded,
+                            "player equipment and body models");
+    REQUIRE_VIEWER_RESOURCE(v->anim_cache, "actor animation data");
+    REQUIRE_VIEWER_RESOURCE(
+        fc_combat_presentation_ready(v->combat_presentation),
+        "projectile, spot-animation, healthbar, and hitsplat data");
+    REQUIRE_VIEWER_RESOURCE(v->pray_melee_tex.id > 0 &&
+                            v->pray_missiles_tex.id > 0 &&
+                            v->pray_magic_tex.id > 0,
+                            "overhead Prayer icons");
+    REQUIRE_VIEWER_RESOURCE(
+        click_cross_loaded == FC_CLICK_CROSS_FRAME_COUNT * 2,
+        "click cross sprites");
+    REQUIRE_VIEWER_RESOURCE(v->tex_pray_melee_on.id > 0 &&
+                            v->tex_pray_melee_off.id > 0 &&
+                            v->tex_pray_range_on.id > 0 &&
+                            v->tex_pray_range_off.id > 0 &&
+                            v->tex_pray_magic_on.id > 0 &&
+                            v->tex_pray_magic_off.id > 0,
+                            "Prayer interface icons");
+#undef REQUIRE_VIEWER_RESOURCE
+    if (!required_resources_ready) {
+        fprintf(stderr,
+                "error: viewer startup aborted instead of using reduced "
+                "graphics; restore assets with: ./build.sh fight_caves --cpu\n");
+        fc_viewer_destroy(v);
+        return NULL;
+    }
+
+    v->combat_style = 1;
+    v->policy_replay = replay;
+    v->paused = !replay;
+    return v;
+}
+
+static void fc_viewer_ingest_tick(ViewerState* v) {
+    fc_fill_render_events(&v->state, &v->render_events);
+    fc_actor_animation_ingest_tick(&v->actor_animation, &v->state,
+                                   &v->render_events);
+    fc_actor_animation_ingest_events(
+        &v->actor_animation, &v->render_events, v->anim_cache,
+        fc_player_equipment_visual_profile(&v->state.player), v->tps);
+
+    /* Debug event log — record events from this tick */
+    dbg_log_tick(&v->state);
+
+    /* Snap prev positions for newly spawned NPCs so they don't fly.
+     * An NPC that wasn't active last tick but is now = new spawn. */
+    for (int ni = 0; ni < FC_MAX_NPCS; ni++) {
+        if (v->state.npcs[ni].active &&
+            !fc_actor_animation_previous_npc_active(
+                &v->actor_animation, ni)) {
+            fc_combat_presentation_clear_npc_healthbar(
+                v->combat_presentation, ni);
+        }
+    }
+
+    fc_fill_render_entities(&v->state, v->entities, &v->entity_count);
+    v->last_hash = fc_state_hash(&v->state);
+
+    FcCombatPresentationContext combat_context = {
+        .state = &v->state,
+        .events = &v->render_events,
+        .scene = &v->actor_animation.scene,
+        .terrain = v->terrain,
+        .anim_cache = v->anim_cache,
+        .player_profile = fc_player_visual_profile(fc_player_equipment_visual_profile(&v->state.player)),
+        .tps = v->tps,
+    };
+    fc_combat_presentation_ingest_tick(v->combat_presentation,
+                                        &combat_context);
+    /* Sync viewer attack_target with player's backend target */
+    v->attack_target = v->state.player.attack_target_idx;
+    /* Auto-clear if target NPC died */
+    if (v->state.player.attack_target_idx >= 0) {
+        FcNpc* tn = &v->state.npcs[v->state.player.attack_target_idx];
+        if (!tn->active || tn->is_dead) {
+            v->attack_target = -1;
+        }
+    }
+
+}
+
+/* Return 1 when a simulation tick is due, 0 for another display frame,
+ * and -1 when the window closes. External evaluation never steps a copy. */
+static int fc_viewer_frame(ViewerState* v, int external) {
+    if (WindowShouldClose()) return -1;
+    int ui_capture = 0;
+    /* Age the previous click before capturing this frame's input. A newly
+     * clicked cross must start at frame zero, even after a slow frame. */
+    fc_click_feedback_update(&v->click_feedback, GetFrameTime());
+
+    /* Global keys (always active) */
+    if (IsKeyPressed(KEY_Q)) return -1;
+    if (IsKeyPressed(KEY_ESCAPE) && !v->ui.context_open) return -1;
+    if (IsKeyPressed(KEY_SPACE)) v->paused = !v->paused;
+    if (IsKeyPressed(KEY_RIGHT)) v->step_once = 1;
+    if (v->policy_replay) {
+        if (IsKeyPressed(KEY_ONE)) set_policy_replay_speed(v, 1);
+        if (IsKeyPressed(KEY_TWO)) set_policy_replay_speed(v, 2);
+        if (!IsKeyDown(KEY_LEFT_SHIFT) && !IsKeyDown(KEY_RIGHT_SHIFT) &&
+            IsKeyPressed(KEY_FOUR)) set_policy_replay_speed(v, 4);
+        if (IsKeyPressed(KEY_ZERO)) set_policy_replay_speed(v, 10);
+        if (IsKeyPressed(KEY_UP)) cycle_policy_replay_speed(v, +1);
+        if (IsKeyPressed(KEY_DOWN)) cycle_policy_replay_speed(v, -1);
+    }
+    if (!v->policy_replay && IsKeyPressed(KEY_R)) reset_ep(v);
+    if (IsKeyPressed(KEY_L)) {
+        if (v->camera_locked) {
+            v->camera.target = camera_follow_target(v);
+        }
+        v->camera_locked = !v->camera_locked;
+    }
+
+    /* Toggle keys */
+    if (IsKeyPressed(KEY_G)) v->show_grid = !v->show_grid;
+    if (IsKeyPressed(KEY_C)) v->show_collision = !v->show_collision;
+    /* O: cycle debug overlay modes. O=all on/off, Shift+O=cycle sub-modes */
+    if (IsKeyPressed(KEY_O)) {
+        if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
+            /* Cycle through individual modes */
+            if (v->dbg_flags == 0) v->dbg_flags = DBG_COLLISION;
+            else if (v->dbg_flags == DBG_COLLISION) v->dbg_flags = DBG_LOS;
+            else if (v->dbg_flags == DBG_LOS) v->dbg_flags = DBG_PATH | DBG_RANGE;
+            else v->dbg_flags = 0;
+        } else {
+            /* Toggle all on/off */
+            toggle_debug_overlay(v);
+        }
+    }
+    /* D: match the on-screen controls without interfering with east movement */
+    if (IsKeyPressed(KEY_D) && !IsKeyDown(KEY_W) && !IsKeyDown(KEY_A) && !IsKeyDown(KEY_S)) {
+        toggle_debug_overlay(v);
+    }
+    /* Camera presets */
+    if ((!v->policy_replay && IsKeyPressed(KEY_FOUR)) ||
+        (v->policy_replay &&
+         (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) &&
+         IsKeyPressed(KEY_FOUR))) {
+        v->cam_yaw=0; v->cam_pitch=1.35f; v->cam_dist=120;
+    }
+    if ((!v->policy_replay && IsKeyPressed(KEY_FIVE)) ||
+        (v->policy_replay &&
+         (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) &&
+         IsKeyPressed(KEY_FIVE))) {
+        v->cam_yaw=0; v->cam_pitch=0.6f; v->cam_dist=50;
+    }
+
+    sync_fc_ui(v);
+    if (v->ui.context_open) {
+        ui_capture = runec_ui_handle_input(&v->ui, GetScreenWidth(), GetScreenHeight());
+        handle_runec_ui_intent(v);
+    } else {
+        ui_capture = process_runec_prayer_click(v);
+        if (!ui_capture)
+            ui_capture = process_runec_console_input(v);
+        if (!ui_capture) {
+            ui_capture = runec_ui_handle_input(&v->ui, GetScreenWidth(), GetScreenHeight());
+            handle_runec_ui_intent(v);
+        } else {
+            v->ui.last_intent.kind = RUNEC_UI_INTENT_NONE;
+        }
+    }
+
+    /* RuneC: open on right press; a real drag dismisses the menu and
+     * retains the viewer's existing camera gesture. No game action fires. */
+    if (!ui_capture && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
+        v->scene_right_tracking = 1;
+        v->scene_right_dragged = 0;
+        v->scene_right_start = GetMousePosition();
+        open_scene_context_menu(v);
+        ui_capture = 1;
+    }
+    if (v->scene_right_tracking && IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
+        Vector2 mouse = GetMousePosition();
+        float dx = mouse.x - v->scene_right_start.x;
+        float dy = mouse.y - v->scene_right_start.y;
+        if (dx * dx + dy * dy > 9.0f) v->scene_right_dragged = 1;
+        if (v->scene_right_dragged) {
+            runec_ui_close_context(&v->ui);
+            Vector2 d = GetMouseDelta();
+            v->cam_yaw += d.x*0.005f; v->cam_pitch -= d.y*0.005f;
+            if (v->cam_pitch < 0.1f) v->cam_pitch = 0.1f;
+            if (v->cam_pitch > 1.4f) v->cam_pitch = 1.4f;
+        }
+    }
+    if (IsMouseButtonReleased(MOUSE_BUTTON_RIGHT)) {
+        v->scene_right_tracking = v->scene_right_dragged = 0;
+    }
+    float wh = GetMouseWheelMove();
+    if (!ui_capture && wh != 0) {
+        v->cam_dist *= (wh > 0) ? (1.0f/1.15f) : 1.15f;
+        if (v->cam_dist < 5) v->cam_dist = 5;
+        if (v->cam_dist > 300) v->cam_dist = 300;
+    }
+
+    /* Tick processing */
+    int tick = 0;
+    if (!v->paused) {
+        v->tick_acc += GetFrameTime() * (float)v->tps;
+        if (v->tick_acc >= 1.0f) {
+            v->tick_acc = fmodf(v->tick_acc, 1.0f);
+            tick = 1;
+        }
+    }
+    if (v->step_once) { tick = 1; v->step_once = 0; }
+
+    /* Capture clicks and key presses EVERY frame (60fps).
+     * These set routes/targets/buffers on the player struct.
+     * The tick loop reads them when the next tick fires. */
+    if (!v->policy_replay && v->state.terminal == TERMINAL_NONE) {
+        process_human_clicks(v, ui_capture);
+        process_human_keys(v);
+    }
+
+    if (!external && tick && v->state.terminal == TERMINAL_NONE) {
+        build_human_actions(v);
+
+        fc_actor_animation_capture_tick_start(&v->actor_animation,
+                                              &v->state);
+
+        /* Step simulation */
+        fc_step(&v->state, v->actions);
+        if (v->actions[5] > 0 && v->actions[6] > 0)
+            fc_click_feedback_accept_move_tick(&v->click_feedback,
+                                               &v->state);
+        fc_click_feedback_sync(&v->click_feedback, &v->state);
+
+        /* Playable-viewer test aid only. The simulator has already
+         * resolved the hit; keep the local session alive at one HP. */
+        if (v->godmode &&
+            v->state.terminal == TERMINAL_PLAYER_DEATH) {
+            v->state.player.current_hp = 10;
+            v->state.terminal = TERMINAL_NONE;
+        }
+        update_reward_breakdown(v);
+        fc_viewer_ingest_tick(v);
+
+        if (v->state.terminal != TERMINAL_NONE) v->paused = 1;
+    }
+
+    float frame_dt = GetFrameTime();
+    sync_player_appearance(v);
+    if (v->item_message_seconds > 0) v->item_message_seconds -= frame_dt;
+    FcCombatPresentationContext combat_context = {
+        .state = &v->state,
+        .events = &v->render_events,
+        .scene = &v->actor_animation.scene,
+        .terrain = v->terrain,
+        .anim_cache = v->anim_cache,
+        .player_profile = fc_player_visual_profile(fc_player_equipment_visual_profile(&v->state.player)),
+        .tps = v->tps,
+    };
+    unsigned char deferred_deaths[FC_MAX_NPCS];
+    fc_combat_presentation_deferred_deaths(
+        v->combat_presentation, &v->state, deferred_deaths);
+    fc_actor_animation_update_scene(
+        &v->actor_animation, &v->state, v->anim_cache, v->tps, frame_dt,
+        !v->paused || v->policy_replay, deferred_deaths);
+    if (v->objects)
+        fc_animated_atlas_update(&v->objects->atlas, frame_dt);
+    fc_combat_presentation_update(v->combat_presentation,
+                                  &combat_context, frame_dt);
+    fc_combat_presentation_deferred_deaths(
+        v->combat_presentation, &v->state, deferred_deaths);
+    for (int i = 0; i < FC_MAX_NPCS; i++) {
+        if (!v->state.npcs[i].active && !v->state.npcs[i].died_this_tick)
+            fc_combat_presentation_clear_npc_healthbar(
+                v->combat_presentation, i);
+    }
+    fc_actor_animation_update_models(
+        &v->actor_animation, &v->state, v->appearance.model, v->npc_models,
+        v->anim_cache, v->active_loadout, v->tps, frame_dt, deferred_deaths);
+    /* Draw */
+    BeginDrawing();
+    ClearBackground(COL_BG);
+    draw_scene(v);
+    sync_fc_ui(v);
+    runec_ui_draw(&v->ui, GetScreenWidth(), GetScreenHeight());
+    draw_runec_side_overrides(v);
+    draw_runec_console(v);
+    draw_click_cross(v);
+    if (v->item_message_seconds > 0) {
+        DrawRectangle(8, GetScreenHeight() - 34, 490, 26, (Color){20, 16, 12, 240});
+        text_s(v->item_message, 16, GetScreenHeight() - 29, 16, YELLOW);
+    }
+    /* Menus must cover the console and prayer overrides, not sit behind them. */
+    runec_ui_draw_context(&v->ui);
+
+    EndDrawing();
+    return tick;
+}
+
+#ifdef FC_VIEWER_EMBEDDED
+
+/* Consume the latest authoritative transition, including a terminal snapshot
+ * saved before Puffer's same-step autoreset. State is copied, never advanced. */
+static void fc_viewer_present_pending(ViewerState* v) {
+    if (!v->pending_frame) return;
+    if (v->pending_state.rng_seed != v->state.rng_seed ||
+        v->pending_state.tick <= v->state.tick) {
+        v->state = v->reset_state;
+        fc_viewer_reset_presentation(v);
+    }
+    fc_actor_animation_capture_tick_start(&v->actor_animation, &v->state);
+    v->state = v->pending_state;
+    v->reward_runtime = v->pending_reward_runtime;
+    v->reward_breakdown = v->pending_reward_breakdown;
+    v->reward_breakdown_tick = v->state.tick;
+    memcpy(v->actions, v->pending_actions, sizeof(v->actions));
+    fc_viewer_ingest_tick(v);
+    if (fc_is_terminal(&v->state)) {
+        print_replay_episode_summary(v);
+        v->replay_episode_count++;
+    }
+    v->pending_frame = 0;
+}
+
+#endif
+
+int fc_viewer_main(int argc, char** argv) {
+    const char* screenshot_path = NULL;
+    int start_wave = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
+            screenshot_path = argv[++i];
+        } else if (strcmp(argv[i], "--start-wave") == 0 && i + 1 < argc) {
+            char* end;
+            long wave = strtol(argv[++i], &end, 10);
+            if (*end || wave < 1 || wave > 63) {
+                fprintf(stderr, "--start-wave requires a wave from 1 to 63.\n");
+                return EXIT_FAILURE;
+            }
+            start_wave = (int)wave;
+        } else {
+            int help = strcmp(argv[i], "--help") == 0;
+            fprintf(help ? stdout : stderr,
+                "Usage: %s [--start-wave 1..63] [--screenshot FILE]\n"
+                "For policy replay, use the native trainer: ./puffer eval CHECKPOINT\n",
+                argv[0]);
+            return help ? EXIT_SUCCESS : EXIT_FAILURE;
+        }
+    }
+    ViewerState* v = fc_viewer_create(0);
+    if (!v) return EXIT_FAILURE;
+    v->start_wave = start_wave;
+    reset_ep(v);
+    int frame_count = 0;
+    while (fc_viewer_frame(v, 0) >= 0) {
+        if (screenshot_path && ++frame_count == 6) {
+            TakeScreenshot(screenshot_path);
+            break;
+        }
+    }
+    fc_viewer_destroy(v);
+    return EXIT_SUCCESS;
+}
+
+#ifndef FC_VIEWER_EMBEDDED
+int main(int argc, char** argv) {
+    return fc_viewer_main(argc, argv);
+}
+#endif
