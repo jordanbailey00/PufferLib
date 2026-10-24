@@ -1094,10 +1094,10 @@ void fc_write_mask(const FcState* state, float* out);
 /*
  * Compute a deterministic hash of the game state.
  *
- * Implementation: FNV-1a hash over explicit field values written to a
- * canonical byte sequence. Does NOT hash raw struct padding bytes.
- * This guarantees that two states with identical logical content produce
- * identical hashes regardless of compiler padding or uninitialized bytes.
+ * Implementation: FNV-1a over the state's fields (all but render_events) in
+ * declaration order, least-significant byte first. The hashed structs are
+ * asserted to have no padding, so two states with identical content produce
+ * identical hashes.
  *
  * Usage: Call after each fc_step to verify determinism. Two runs with
  * the same (seed, action_sequence) must produce identical hashes at every tick.
@@ -1583,258 +1583,69 @@ static void fc_episode_summary_build(const FcState* state, const FcRewardRuntime
 /* Hash */
 
 /*
- * The state hash serializes every FcState field except render_events
- * explicitly in the order below, including whole-tile, directional movement,
- * and projectile collision maps. Signed integers and floats are represented
- * by 32 bits, then fed least-significant byte first. Arena bytes are fed
- * directly. This order is the canonical contract: never hash struct storage,
- * padding, or pointers.
+ * The state hash is FNV-1a over FcState's bytes in declaration order, except
+ * that render_events is skipped and route_x/route_y are fed as interleaved
+ * (x, y) pairs. Every hashed field is a 4-byte int, uint32_t or float, or an
+ * arena map byte, so on a little-endian target this feeds each value
+ * least-significant byte first. The asserts below pin that layout: a field
+ * added to a hashed struct (or any padding) changes these sizes, which must
+ * then be updated together with FC_STATE_HASH_VERSION and the pinned
+ * contract hash.
  */
+#if !defined(__BYTE_ORDER__) || __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
+#error "fc_state_hash hashes state bytes and needs a little-endian target"
+#endif
+_Static_assert(sizeof(int) == 4 && sizeof(float) == 4 && sizeof(uint32_t) == 4,
+               "fc_state_hash needs 4-byte int, float and uint32_t");
+_Static_assert(sizeof(FcPendingHit) == 8 * 4, "FcPendingHit: 8 ints");
+_Static_assert(sizeof(FcItemStack) == 3 * 4, "FcItemStack: 3 ints");
+_Static_assert(sizeof(FcNpc) == (28 + 8 * FC_MAX_PENDING_HITS + 1) * 4,
+               "FcNpc: 28 ints, the pending hits, num_pending_hits");
+_Static_assert(offsetof(FcPlayer, route_y) ==
+                   offsetof(FcPlayer, route_x) + FC_MAX_ROUTE * 4 &&
+               offsetof(FcPlayer, route_len) ==
+                   offsetof(FcPlayer, route_y) + FC_MAX_ROUTE * 4,
+               "FcPlayer: route_x, route_y and route_len are adjacent");
+/* FcPlayer: 38 ints, the route, route_len to approach_target_size (8), the
+ * pending hits, num_pending_hits and the 5 per-tick flags, the item stacks
+ * and 4 trailing ints. */
+_Static_assert(sizeof(FcPlayer) ==
+                   (38 + 2 * FC_MAX_ROUTE + 8 + 8 * FC_MAX_PENDING_HITS + 6 +
+                    3 * (FC_INVENTORY_SLOTS + FC_EQUIPMENT_SLOTS) + 4) * 4,
+               "FcPlayer layout changed");
+_Static_assert(offsetof(FcState, npcs) == sizeof(FcPlayer) &&
+               offsetof(FcState, active_loadout) ==
+                   offsetof(FcState, npcs) + FC_MAX_NPCS * sizeof(FcNpc) &&
+               offsetof(FcState, render_events) ==
+                   offsetof(FcState, active_loadout) + 4 &&
+               offsetof(FcState, current_wave) ==
+                   offsetof(FcState, render_events) + sizeof(FcRenderEvents),
+               "FcState: player, npcs, active_loadout, render_events, current_wave");
+_Static_assert(sizeof(FcState) - offsetof(FcState, current_wave) ==
+                   46 * 4 + 3 * FC_ARENA_WIDTH * FC_ARENA_HEIGHT,
+               "FcState from current_wave: 46 4-byte fields and 3 arena maps");
 
-#define FC_HASH_FNV_OFFSET UINT32_C(0x811c9dc5)
-#define FC_HASH_FNV_PRIME UINT32_C(0x01000193)
-
-_Static_assert(sizeof(int) == sizeof(int32_t),
-               "canonical state hash requires 32-bit int");
-_Static_assert(sizeof(float) == sizeof(uint32_t),
-               "canonical state hash requires 32-bit float");
-
-static uint32_t fc_hash_u8(uint32_t hash, uint8_t value) {
-    return (hash ^ value) * FC_HASH_FNV_PRIME;
-}
-
-static uint32_t fc_hash_u32(uint32_t hash, uint32_t value) {
-    for (unsigned shift = 0; shift < 32; shift += 8) {
-        hash = fc_hash_u8(hash, (uint8_t)(value >> shift));
-    }
-    return hash;
-}
-
-static uint32_t fc_hash_i32(uint32_t hash, int value) {
-    return fc_hash_u32(hash, (uint32_t)(int32_t)value);
-}
-
-static uint32_t fc_hash_f32(uint32_t hash, float value) {
-    uint32_t bits;
-    memcpy(&bits, &value, sizeof(bits));
-    return fc_hash_u32(hash, bits);
-}
-
-#define FC_HASH_I32(value) hash = fc_hash_i32(hash, (value))
-#define FC_HASH_U32(value) hash = fc_hash_u32(hash, (value))
-#define FC_HASH_F32(value) hash = fc_hash_f32(hash, (value))
-
-static uint32_t fc_hash_pending_hit(uint32_t hash, const FcPendingHit* hit) {
-    FC_HASH_I32(hit->active);
-    FC_HASH_I32(hit->damage);
-    FC_HASH_I32(hit->ticks_remaining);
-    FC_HASH_I32(hit->attack_style);
-    FC_HASH_I32(hit->source_npc_idx);
-    FC_HASH_I32(hit->prayer_drain);
-    FC_HASH_I32(hit->prayer_snapshot);
-    FC_HASH_I32(hit->prayer_lock_tick);
-    return hash;
-}
-
-static uint32_t fc_hash_player(uint32_t hash, const FcPlayer* player) {
-    FC_HASH_I32(player->x);
-    FC_HASH_I32(player->y);
-    FC_HASH_I32(player->current_hp);
-    FC_HASH_I32(player->max_hp);
-    FC_HASH_I32(player->current_prayer);
-    FC_HASH_I32(player->max_prayer);
-    FC_HASH_I32(player->prayer);
-    FC_HASH_I32(player->prayer_at_tick_start);
-    FC_HASH_I32(player->prayer_drain_counter);
-    FC_HASH_I32(player->sharks_remaining);
-    FC_HASH_I32(player->prayer_doses_remaining);
-    FC_HASH_I32(player->attack_timer);
-    FC_HASH_I32(player->food_timer);
-    FC_HASH_I32(player->potion_timer);
-    FC_HASH_I32(player->combo_timer);
-    FC_HASH_I32(player->run_energy);
-    FC_HASH_I32(player->is_running);
-    FC_HASH_I32(player->attack_level);
-    FC_HASH_I32(player->strength_level);
-    FC_HASH_I32(player->defence_level);
-    FC_HASH_I32(player->ranged_level);
-    FC_HASH_I32(player->prayer_level);
-    FC_HASH_I32(player->magic_level);
-    FC_HASH_I32(player->weapon_kind);
-    FC_HASH_I32(player->weapon_uses_ammo);
-    FC_HASH_I32(player->crystal_piece_mask);
-    FC_HASH_I32(player->weapon_speed);
-    FC_HASH_I32(player->weapon_range);
-    FC_HASH_I32(player->ranged_attack_bonus);
-    FC_HASH_I32(player->ranged_strength_bonus);
-    FC_HASH_I32(player->defence_stab);
-    FC_HASH_I32(player->defence_slash);
-    FC_HASH_I32(player->defence_crush);
-    FC_HASH_I32(player->defence_magic);
-    FC_HASH_I32(player->defence_ranged);
-    FC_HASH_I32(player->prayer_bonus);
-    FC_HASH_I32(player->ammo_count);
-    FC_HASH_I32(player->hp_regen_counter);
-    for (int i = 0; i < FC_MAX_ROUTE; ++i) {
-        FC_HASH_I32(player->route_x[i]);
-        FC_HASH_I32(player->route_y[i]);
-    }
-    FC_HASH_I32(player->route_len);
-    FC_HASH_I32(player->route_idx);
-    FC_HASH_F32(player->facing_angle);
-    FC_HASH_I32(player->attack_target_idx);
-    FC_HASH_I32(player->approach_target);
-    FC_HASH_I32(player->approach_target_x);
-    FC_HASH_I32(player->approach_target_y);
-    FC_HASH_I32(player->approach_target_size);
-    for (int i = 0; i < FC_MAX_PENDING_HITS; ++i) {
-        hash = fc_hash_pending_hit(hash, &player->pending_hits[i]);
-    }
-    FC_HASH_I32(player->num_pending_hits);
-    FC_HASH_I32(player->damage_taken_this_tick);
-    FC_HASH_I32(player->hit_landed_this_tick);
-    FC_HASH_I32(player->food_eaten_this_tick);
-    FC_HASH_I32(player->potion_used_this_tick);
-    FC_HASH_I32(player->prayer_changed_this_tick);
-    for (int i = 0; i < FC_INVENTORY_SLOTS; i++) {
-        FC_HASH_I32(player->inventory[i].item_id);
-        FC_HASH_I32(player->inventory[i].quantity);
-        FC_HASH_I32(player->inventory[i].charges);
-    }
-    for (int i = 0; i < FC_EQUIPMENT_SLOTS; i++) {
-        FC_HASH_I32(player->equipment[i].item_id);
-        FC_HASH_I32(player->equipment[i].quantity);
-        FC_HASH_I32(player->equipment[i].charges);
-    }
-    FC_HASH_I32(player->melee_attack_bonus);
-    FC_HASH_I32(player->melee_strength_bonus);
-    FC_HASH_I32(player->selected_food_slot);
-    FC_HASH_I32(player->selected_potion_slot);
-    return hash;
-}
-
-static uint32_t fc_hash_npc(uint32_t hash, const FcNpc* npc) {
-    FC_HASH_I32(npc->active);
-    FC_HASH_I32(npc->npc_type);
-    FC_HASH_I32(npc->spawn_index);
-    FC_HASH_I32(npc->x);
-    FC_HASH_I32(npc->y);
-    FC_HASH_I32(npc->size);
-    FC_HASH_I32(npc->current_hp);
-    FC_HASH_I32(npc->max_hp);
-    FC_HASH_I32(npc->is_dead);
-    FC_HASH_I32(npc->death_timer);
-    FC_HASH_I32(npc->attack_style);
-    FC_HASH_I32(npc->attack_timer);
-    FC_HASH_I32(npc->attack_speed);
-    FC_HASH_I32(npc->attack_range);
-    FC_HASH_I32(npc->movement_speed);
-    FC_HASH_I32(npc->heal_timer);
-    FC_HASH_I32(npc->heal_amount);
-    FC_HASH_I32(npc->healer_distracted);
-    FC_HASH_I32(npc->heal_target_idx);
-    FC_HASH_I32(npc->is_respawned_jad_healer);
-    FC_HASH_I32(npc->damage_taken_this_tick);
-    FC_HASH_I32(npc->prayer_drain_dealt_this_tick);
-    FC_HASH_I32(npc->healing_received_this_tick);
-    FC_HASH_I32(npc->healing_given_this_tick);
-    FC_HASH_I32(npc->healed_by_mejkot_this_tick);
-    FC_HASH_I32(npc->healed_by_hurkot_this_tick);
-    FC_HASH_I32(npc->healed_self_this_tick);
-    FC_HASH_I32(npc->died_this_tick);
-    for (int i = 0; i < FC_MAX_PENDING_HITS; ++i) {
-        hash = fc_hash_pending_hit(hash, &npc->pending_hits[i]);
-    }
-    FC_HASH_I32(npc->num_pending_hits);
+static uint32_t fc_hash_bytes(uint32_t hash, const void* data, size_t size) {
+    const uint8_t* bytes = data;
+    for (size_t i = 0; i < size; i++) hash = (hash ^ bytes[i]) * 0x01000193u;
     return hash;
 }
 
 uint32_t fc_state_hash(const FcState* state) {
-    uint32_t hash = FC_HASH_FNV_OFFSET;
-
-    hash = fc_hash_player(hash, &state->player);
-    for (int i = 0; i < FC_MAX_NPCS; ++i) {
-        hash = fc_hash_npc(hash, &state->npcs[i]);
+    const FcPlayer* p = &state->player;
+    uint32_t hash = 0x811c9dc5u;
+    hash = fc_hash_bytes(hash, p, offsetof(FcPlayer, route_x));
+    for (int i = 0; i < FC_MAX_ROUTE; i++) {
+        hash = fc_hash_bytes(hash, &p->route_x[i], sizeof(int));
+        hash = fc_hash_bytes(hash, &p->route_y[i], sizeof(int));
     }
-
-    FC_HASH_I32(state->active_loadout);
-    FC_HASH_I32(state->current_wave);
-    FC_HASH_I32(state->rotation_id);
-    FC_HASH_I32(state->npcs_remaining);
-    FC_HASH_I32(state->next_spawn_index);
-    FC_HASH_I32(state->tick);
-    FC_HASH_I32(state->terminal);
-    FC_HASH_U32(state->rng_state);
-    FC_HASH_U32(state->rng_seed);
-    for (int x = 0; x < FC_ARENA_WIDTH; ++x) {
-        for (int y = 0; y < FC_ARENA_HEIGHT; ++y) {
-            hash = fc_hash_u8(hash, state->walkable[x][y]);
-        }
-    }
-    for (int x = 0; x < FC_ARENA_WIDTH; ++x) {
-        for (int y = 0; y < FC_ARENA_HEIGHT; ++y) {
-            hash = fc_hash_u8(hash, state->movement_flags[x][y]);
-        }
-    }
-    for (int x = 0; x < FC_ARENA_WIDTH; ++x) {
-        for (int y = 0; y < FC_ARENA_HEIGHT; ++y) {
-            hash = fc_hash_u8(hash, state->los_flags[x][y]);
-        }
-    }
-
-    FC_HASH_I32(state->jad_healers_spawned);
-    FC_HASH_I32(state->jad_healer_spawn_generations);
-
-    FC_HASH_I32(state->damage_dealt_this_tick);
-    FC_HASH_I32(state->hits_landed_this_tick);
-    FC_HASH_I32(state->damage_taken_this_tick);
-    FC_HASH_I32(state->prayer_lost_this_tick);
-    FC_HASH_I32(state->overhead_prayer_lost_this_tick);
-    FC_HASH_I32(state->tz_kih_prayer_drain_this_tick);
-    FC_HASH_I32(state->npcs_killed_this_tick);
-    FC_HASH_I32(state->respawned_jad_healers_killed_this_tick);
-    FC_HASH_I32(state->wave_just_cleared);
-    FC_HASH_I32(state->jad_damage_this_tick);
-    FC_HASH_I32(state->jad_killed);
-    FC_HASH_I32(state->correct_jad_prayer);
-    FC_HASH_I32(state->wrong_jad_prayer);
-    FC_HASH_I32(state->correct_danger_prayer);
-    FC_HASH_I32(state->wrong_danger_prayer);
-    FC_HASH_I32(state->attack_attempt_this_tick);
-    FC_HASH_I32(state->invalid_action_this_tick);
-    FC_HASH_I32(state->movement_this_tick);
-    FC_HASH_I32(state->idle_this_tick);
-    FC_HASH_I32(state->food_used_this_tick);
-    FC_HASH_I32(state->prayer_potion_used_this_tick);
-    FC_HASH_I32(state->jad_heal_procs_this_tick);
-    FC_HASH_I32(state->npc_heal_procs_this_tick);
-    FC_HASH_I32(state->npc_heal_amount_this_tick);
-    FC_HASH_I32(state->jad_heal_amount_this_tick);
-
-    FC_HASH_F32(state->progress_required_work_start);
-    FC_HASH_F32(state->progress_required_work_remaining);
-    FC_HASH_F32(state->progress_current_wave_progress);
-    FC_HASH_F32(state->progress_cave_progress);
-    FC_HASH_I32(state->progress_ticks_since_positive);
-
-    FC_HASH_I32(state->ep_ticks_pray_melee);
-    FC_HASH_I32(state->ep_ticks_pray_range);
-    FC_HASH_I32(state->ep_ticks_pray_magic);
-    FC_HASH_I32(state->ep_wrong_prayer_hits);
-    FC_HASH_I32(state->ep_reached_wave_63);
-    FC_HASH_I32(state->ep_jad_killed);
-    return hash;
+    hash = fc_hash_bytes(hash, &p->route_len,
+                         sizeof(FcPlayer) - offsetof(FcPlayer, route_len));
+    hash = fc_hash_bytes(hash, state->npcs, sizeof(state->npcs));
+    hash = fc_hash_bytes(hash, &state->active_loadout, sizeof(int));
+    return fc_hash_bytes(hash, &state->current_wave,
+                         sizeof(FcState) - offsetof(FcState, current_wave));
 }
-
-#undef FC_HASH_I32
-#undef FC_HASH_U32
-#undef FC_HASH_F32
-
-#undef FC_HASH_FNV_OFFSET
-#undef FC_HASH_FNV_PRIME
-#undef FC_HASH_I32
-#undef FC_HASH_U32
-#undef FC_HASH_F32
 
 /* Items */
 
