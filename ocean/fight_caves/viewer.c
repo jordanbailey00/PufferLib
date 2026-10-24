@@ -5243,8 +5243,6 @@ typedef struct {
     uint32_t projectile_travel_spot;
     uint32_t projectile_launch_spot;
     uint32_t projectile_impact_spot;
-    Color projectile_color;
-    float projectile_radius;
     float projectile_start_height;
     float projectile_end_height;
     float projectile_launch_delay_client_ticks;
@@ -5310,7 +5308,7 @@ static const FcPlayerVisualProfile PLAYER_VISUALS[FC_NUM_LOADOUTS] = {
         PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
         PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
         PLAYER_ANIM_XBOW_RUN, PLAYER_ANIM_XBOW_ATTACK,
-        27, 0, 0, {200, 200, 50, 255}, 0.12f,
+        27, 0, 0,
         155.0f, 146.0f, 41.0f, 5.0f, 5.0f, 11.0f, 5.0f,
     },
     [FC_LOADOUT_SOTA_TBOW] = {
@@ -5318,7 +5316,7 @@ static const FcPlayerVisualProfile PLAYER_VISUALS[FC_NUM_LOADOUTS] = {
         PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
         PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
         PLAYER_ANIM_HUMAN_RUN, PLAYER_ANIM_BOW_ATTACK,
-        1120, 1116, 0, {190, 120, 55, 255}, 0.13f,
+        1120, 1116, 0,
         163.0f, 146.0f, 41.0f, 15.0f, 5.0f, 11.0f, 5.0f,
     },
     [FC_LOADOUT_LOW_DEF_RCB] = {
@@ -5326,7 +5324,7 @@ static const FcPlayerVisualProfile PLAYER_VISUALS[FC_NUM_LOADOUTS] = {
         PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
         PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
         PLAYER_ANIM_XBOW_RUN, PLAYER_ANIM_XBOW_ATTACK,
-        27, 0, 0, {200, 200, 50, 255}, 0.12f,
+        27, 0, 0,
         155.0f, 146.0f, 41.0f, 5.0f, 5.0f, 11.0f, 5.0f,
     },
     [FC_LOADOUT_RCB_PURE] = {
@@ -5334,7 +5332,7 @@ static const FcPlayerVisualProfile PLAYER_VISUALS[FC_NUM_LOADOUTS] = {
         PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
         PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
         PLAYER_ANIM_XBOW_RUN, PLAYER_ANIM_XBOW_ATTACK,
-        27, 0, 0, {200, 200, 50, 255}, 0.12f,
+        27, 0, 0,
         155.0f, 146.0f, 41.0f, 5.0f, 5.0f, 11.0f, 5.0f,
     },
     [FC_LOADOUT_MSBI_PURE] = {
@@ -5342,7 +5340,7 @@ static const FcPlayerVisualProfile PLAYER_VISUALS[FC_NUM_LOADOUTS] = {
         PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
         PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
         PLAYER_ANIM_HUMAN_RUN, PLAYER_ANIM_BOW_ATTACK,
-        15, 24, 0, {145, 155, 165, 255}, 0.10f,
+        15, 24, 0,
         163.0f, 146.0f, 41.0f, 15.0f, 5.0f, 11.0f, 5.0f,
     },
     [FC_LOADOUT_BLOWPIPE_PURE] = {
@@ -5350,7 +5348,7 @@ static const FcPlayerVisualProfile PLAYER_VISUALS[FC_NUM_LOADOUTS] = {
         PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
         PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
         PLAYER_ANIM_HUMAN_RUN, PLAYER_ANIM_BLOWPIPE_ATTACK,
-        230, 236, 0, {115, 175, 85, 255}, 0.09f,
+        230, 236, 0,
         163.0f, 146.0f, 32.0f, 15.0f, 0.0f, 11.0f, 5.0f,
     },
     [FC_LOADOUT_ACB_ARMADYL] = {
@@ -5358,7 +5356,7 @@ static const FcPlayerVisualProfile PLAYER_VISUALS[FC_NUM_LOADOUTS] = {
         PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
         PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
         PLAYER_ANIM_XBOW_RUN, PLAYER_ANIM_XBOW_ATTACK,
-        1468, 0, 0, {165, 210, 240, 255}, 0.12f,
+        1468, 0, 0,
         155.0f, 146.0f, 41.0f, 5.0f, 5.0f, 11.0f, 5.0f,
     },
     [FC_LOADOUT_BOWFA_CRYSTAL] = {
@@ -5366,7 +5364,7 @@ static const FcPlayerVisualProfile PLAYER_VISUALS[FC_NUM_LOADOUTS] = {
         PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
         PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
         PLAYER_ANIM_HUMAN_RUN, PLAYER_ANIM_BOW_ATTACK,
-        1922, 1923, 0, {120, 235, 225, 255}, 0.13f,
+        1922, 1923, 0,
         163.0f, 146.0f, 41.0f, 15.0f, 5.0f, 11.0f, 5.0f,
     },
     [FC_LOADOUT_TBOW_MASORI] = {
@@ -5374,7 +5372,7 @@ static const FcPlayerVisualProfile PLAYER_VISUALS[FC_NUM_LOADOUTS] = {
         PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
         PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
         PLAYER_ANIM_HUMAN_RUN, PLAYER_ANIM_BOW_ATTACK,
-        1120, 1116, 0, {190, 120, 55, 255}, 0.13f,
+        1120, 1116, 0,
         163.0f, 146.0f, 41.0f, 15.0f, 5.0f, 11.0f, 5.0f,
     },
 };
@@ -5928,7 +5926,6 @@ typedef struct {
     float y;
     float z;
     float velocity_x;
-    float velocity_y;
     float velocity_z;
 } FcProjectileSample;
 
@@ -6020,7 +6017,6 @@ int fc_projectile_path_sample(const FcProjectilePath* path,
                 0.5f * acceleration_y * t * t;
     sample->z = source_z + velocity_z * t;
     sample->velocity_x = velocity_x;
-    sample->velocity_y = velocity_y + acceleration_y * t;
     sample->velocity_z = velocity_z;
     return 1;
 }
@@ -6245,7 +6241,6 @@ typedef struct {
     float y;
     float z;
     float velocity_x;
-    float velocity_y;
     float velocity_z;
     float total_time;
     float elapsed;
@@ -6267,8 +6262,6 @@ typedef struct {
     float hitsplat_world_y;
     float hitsplat_world_z;
     int hitsplat_damage;
-    Color color;
-    float radius;
     uint32_t spot_id;
     uint32_t launch_spot_id;
     uint32_t impact_spot_id;
@@ -6285,8 +6278,6 @@ typedef struct {
     float z;
     float total_time;
     float elapsed;
-    Color color;
-    float radius;
     uint32_t spot_id;
     float yaw_degrees;
     int attached;
@@ -6380,12 +6371,9 @@ static void clear_visuals(FcCombatPresentation *presentation) {
 FcCombatPresentation *fc_combat_presentation_create(Texture2D shared_atlas) {
     FcCombatPresentation *presentation = calloc(1, sizeof(*presentation));
     if (!presentation) return NULL;
-    if (fc_asset_exists("fc_projectiles.models")) {
-        presentation->projectile_models = models_load(
-            "fc_projectiles.models", shared_atlas);
-    }
-    if (fc_asset_exists("fc_spotanims.bin"))
-        presentation->spotanims = spotanims_load("fc_spotanims.bin");
+    presentation->projectile_models = models_load("fc_projectiles.models",
+                                                  shared_atlas);
+    presentation->spotanims = spotanims_load("fc_spotanims.bin");
     int loaded = 0;
     for (int i = 0; i < OVERLAY_SPRITE_COUNT; i++) {
         Texture2D *sprite = &presentation->overlay_sprites[i];
@@ -6442,8 +6430,7 @@ void fc_combat_presentation_clear_npc_healthbar(
 
 static VisualEffect *spawn_effect(FcCombatPresentation *presentation,
                                   uint32_t spot_id, float x, float y, float z,
-                                  float duration, Color color, float radius,
-                                  float yaw_degrees) {
+                                  float duration, float yaw_degrees) {
     if (!presentation || spot_id == 0) return NULL;
     for (int i = 0; i < MAX_VISUAL_EFFECTS; i++) {
         if (!presentation->effects[i].active) {
@@ -6454,8 +6441,6 @@ static VisualEffect *spawn_effect(FcCombatPresentation *presentation,
             effect->y = y;
             effect->z = z;
             effect->total_time = duration;
-            effect->color = color;
-            effect->radius = radius;
             effect->spot_id = spot_id;
             effect->yaw_degrees = yaw_degrees;
             return effect;
@@ -6466,8 +6451,7 @@ static VisualEffect *spawn_effect(FcCombatPresentation *presentation,
 
 static VisualProjectile *spawn_projectile(FcCombatPresentation *presentation,
     float source_x, float source_y, float source_z,
-    float target_x, float target_y, float target_z,
-    float travel_seconds, Color color, float radius,
+    float target_x, float target_y, float target_z, float travel_seconds,
     uint32_t travel_spot, uint32_t launch_spot, uint32_t impact_spot) {
     if (!presentation ||
         (travel_spot == 0 && launch_spot == 0 && impact_spot == 0)) return NULL;
@@ -6486,8 +6470,6 @@ static VisualProjectile *spawn_projectile(FcCombatPresentation *presentation,
             projectile->y = source_y;
             projectile->z = source_z;
             projectile->total_time = travel_seconds;
-            projectile->color = color;
-            projectile->radius = radius;
             projectile->spot_id = travel_spot;
             projectile->launch_spot_id = launch_spot;
             projectile->impact_spot_id = impact_spot;
@@ -6600,8 +6582,7 @@ static void configure_tracking(FcCombatPresentation *presentation,
                            projectile->dst_z - projectile->src_z) * RAD2DEG;
         VisualEffect *effect = spawn_effect(presentation,
             projectile->launch_spot_id, projectile->src_x, projectile->src_y,
-            projectile->src_z, duration, projectile->color,
-            projectile->radius * 1.4f, yaw);
+            projectile->src_z, duration, yaw);
         if (effect) {
             effect->attached = 1;
             effect->attached_kind = source_kind;
@@ -6776,7 +6757,6 @@ static void ingest_player_attack(FcCombatPresentation *presentation,
         profile->projectile_step_multiplier, tile_distance(sx, sy, tx, ty));
     VisualProjectile *projectile = spawn_projectile(presentation,
         source_x, source_y, source_z, target_x, target_y, target_z, 0.1f,
-        profile->projectile_color, profile->projectile_radius,
         profile->projectile_travel_spot, profile->projectile_launch_spot,
         profile->projectile_impact_spot);
     configure_tracking(presentation, context, projectile,
@@ -6812,10 +6792,6 @@ static void ingest_npc_attack(FcCombatPresentation *presentation,
     float target_world_x = (float)attack->target_x + 0.5f;
     float target_world_y = target_ground + 1.5f;
     float target_world_z = -((float)attack->target_y + 0.5f);
-    Color color = attack->attack_style == ATTACK_MAGIC
-        ? CLITERAL(Color){255, 104, 36, 235}
-        : CLITERAL(Color){218, 178, 92, 235};
-    float radius = attack->npc_type == NPC_TZTOK_JAD ? 0.3f : 0.15f;
     uint32_t travel_spot = 0;
     uint32_t launch_spot = 0;
     uint32_t impact_spot = 0;
@@ -6879,7 +6855,7 @@ static void ingest_npc_attack(FcCombatPresentation *presentation,
     VisualProjectile *projectile = spawn_projectile(presentation,
         source_world_x, source_world_y, source_world_z,
         target_world_x, target_world_y, target_world_z,
-        0.1f, color, radius, travel_spot, launch_spot, impact_spot);
+        0.1f, travel_spot, launch_spot, impact_spot);
     configure_tracking(presentation, context, projectile,
         FC_VISUAL_TARGET_NPC, attack->npc_slot,
         FC_VISUAL_TARGET_PLAYER, 0, attack->attack_style,
@@ -7004,7 +6980,6 @@ static int update_projectile(const FcCombatPresentationContext *context,
         projectile->y = sample.y;
         projectile->z = sample.z;
         projectile->velocity_x = sample.velocity_x;
-        projectile->velocity_y = sample.velocity_y;
         projectile->velocity_z = sample.velocity_z;
     }
     projectile->elapsed = end;
@@ -7048,8 +7023,7 @@ void fc_combat_presentation_update(
         float duration = effect_duration(presentation, context,
                                          projectile->impact_spot_id, 90.0f);
         spawn_effect(presentation, projectile->impact_spot_id,
-            projectile->x, projectile->y, projectile->z, duration,
-            projectile->color, projectile->radius * 1.4f, 0.0f);
+            projectile->x, projectile->y, projectile->z, duration, 0.0f);
         if (projectile->has_deferred_hitsplat) {
             spawn_hitsplat(presentation, projectile->hitsplat_actor_kind,
                 projectile->hitsplat_actor_slot, projectile->hitsplat_world_x,
@@ -7067,22 +7041,35 @@ void fc_combat_presentation_update(
     }
 }
 
-static ModelEntry *projectile_model_for_spot(
-    FcCombatPresentation *presentation, uint32_t spot_id,
-    const SpotAnimDef **out_spot) {
-    const SpotAnimDef *spot = presentation && presentation->spotanims
-        ? spotanim_find(presentation->spotanims, (int)spot_id) : NULL;
-    if (out_spot) *out_spot = spot;
-    if (!presentation || spot_id == 0 || !presentation->projectile_models)
-        return NULL;
-    ModelEntry *entry = model_find(presentation->projectile_models,
-                                   PROJ_SPOTANIM_MODEL_BASE + spot_id);
-    if (!entry && spot && spot->model_id >= 0)
-        entry = model_find(presentation->projectile_models,
-                           (uint32_t)spot->model_id);
-    if (!entry)
-        entry = model_find(presentation->projectile_models, spot_id);
-    return entry;
+/* A spot animation's definition and model. Both ship for every spot id the
+ * projectile profiles name; the viewer requires those files at startup. */
+static ModelEntry *spot_model(const FcCombatPresentation *presentation,
+                              uint32_t spot_id, const SpotAnimDef **spot) {
+    *spot = spotanim_find(presentation->spotanims, (int)spot_id);
+    if (!*spot) return NULL;
+    return model_find(presentation->projectile_models,
+                      PROJ_SPOTANIM_MODEL_BASE + spot_id);
+}
+
+/* Draws a spot animation's model at its current animation frame, resized by
+ * its definition and turned by axis/angle (degrees). */
+static void draw_spot_model(const FcCombatPresentationContext *context,
+                            ModelEntry *entry, const SpotAnimDef *spot,
+                            AnimModelState **anim_state, AnimTrack *anim,
+                            Vector3 position, Vector3 axis, float angle,
+                            float dt) {
+    float scale_xy = spot->resize_xy > 0
+        ? (float)spot->resize_xy / 128.0f : 1.0f;
+    float scale_z = spot->resize_z > 0
+        ? (float)spot->resize_z / 128.0f : 1.0f;
+    if (spot->animation_id >= 0) {
+        fc_model_animation_update(entry, context->anim_cache, anim_state,
+            anim, spot->animation_id, dt, 0.0f);
+    }
+    rlDisableBackfaceCulling();
+    DrawModelEx(entry->model, position, axis, angle,
+                (Vector3){scale_xy, scale_z, scale_xy}, WHITE);
+    rlEnableBackfaceCulling();
 }
 
 void fc_combat_presentation_draw_world(
@@ -7096,48 +7083,30 @@ void fc_combat_presentation_draw_world(
         if (!projectile->active || projectile->spot_id == 0 ||
             !projectile->launched) continue;
         const SpotAnimDef *spot = NULL;
-        ModelEntry *entry = projectile_model_for_spot(
-            presentation, projectile->spot_id, &spot);
-        if (entry) {
-            float horizontal_speed = sqrtf(
-                projectile->velocity_x * projectile->velocity_x +
-                projectile->velocity_z * projectile->velocity_z);
-            float angle = atan2f(projectile->velocity_x,
-                                 projectile->velocity_z) * RAD2DEG;
-            float pitch = spot ? 0.0f
-                : atan2f(projectile->velocity_y, horizontal_speed);
-            float scale_xy = spot && spot->resize_xy > 0
-                ? (float)spot->resize_xy / 128.0f : 1.0f;
-            float scale_z = spot && spot->resize_z > 0
-                ? (float)spot->resize_z / 128.0f : 1.0f;
-            if (spot) angle += (float)spot->rotation;
-            if (spot && spot->animation_id >= 0) {
-                fc_model_animation_update(entry, context->anim_cache,
-                    &projectile->anim_state, &projectile->anim,
-                    spot->animation_id, animation_dt, 0.0f);
-            }
-            Quaternion yaw = QuaternionFromAxisAngle(
-                (Vector3){0, 1, 0}, angle * DEG2RAD);
-            Quaternion tilt = QuaternionFromAxisAngle(
-                (Vector3){1, 0, 0}, -pitch);
-            Quaternion rotation = QuaternionMultiply(yaw, tilt);
-            Vector3 axis = {0, 1, 0};
-            float rotation_angle = 0.0f;
-            QuaternionToAxisAngle(rotation, &axis, &rotation_angle);
-            rlDisableBackfaceCulling();
-            DrawModelEx(entry->model,
-                (Vector3){projectile->x, projectile->y, projectile->z},
-                axis, rotation_angle * RAD2DEG,
-                (Vector3){scale_xy, scale_z, scale_xy}, WHITE);
-            rlEnableBackfaceCulling();
-        } else if (projectile->radius > 0.0f) {
-            DrawSphere((Vector3){projectile->x, projectile->y, projectile->z},
-                       projectile->radius, projectile->color);
-        }
+        ModelEntry *entry = spot_model(presentation, projectile->spot_id,
+                                       &spot);
+        if (!entry) continue;
+        /* Face along the flight. The quaternion's axis and angle round
+         * slightly differently from a plain yaw; keep them. */
+        float angle = atan2f(projectile->velocity_x,
+                             projectile->velocity_z) * RAD2DEG;
+        angle += (float)spot->rotation;
+        Quaternion yaw = QuaternionFromAxisAngle(
+            (Vector3){0, 1, 0}, angle * DEG2RAD);
+        Vector3 axis = {0, 1, 0};
+        float rotation_angle = 0.0f;
+        QuaternionToAxisAngle(yaw, &axis, &rotation_angle);
+        draw_spot_model(context, entry, spot, &projectile->anim_state,
+            &projectile->anim,
+            (Vector3){projectile->x, projectile->y, projectile->z},
+            axis, rotation_angle * RAD2DEG, animation_dt);
     }
     for (int i = 0; i < MAX_VISUAL_EFFECTS; i++) {
         VisualEffect *effect = &presentation->effects[i];
         if (!effect->active) continue;
+        const SpotAnimDef *spot = NULL;
+        ModelEntry *entry = spot_model(presentation, effect->spot_id, &spot);
+        if (!entry) continue;
         float x = effect->x;
         float y = effect->y;
         float z = effect->z;
@@ -7163,28 +7132,9 @@ void fc_combat_presentation_draw_world(
                 yaw = atan2f(target_x - x, target_z - z) * RAD2DEG;
             }
         }
-        const SpotAnimDef *spot = NULL;
-        ModelEntry *entry = projectile_model_for_spot(
-            presentation, effect->spot_id, &spot);
-        if (entry) {
-            float scale_xy = spot && spot->resize_xy > 0
-                ? (float)spot->resize_xy / 128.0f : 1.0f;
-            float scale_z = spot && spot->resize_z > 0
-                ? (float)spot->resize_z / 128.0f : 1.0f;
-            if (spot && spot->animation_id >= 0) {
-                fc_model_animation_update(entry, context->anim_cache,
-                    &effect->anim_state, &effect->anim,
-                    spot->animation_id, animation_dt, 0.0f);
-            }
-            rlDisableBackfaceCulling();
-            DrawModelEx(entry->model, (Vector3){x, y, z},
-                (Vector3){0, 1, 0},
-                yaw + (spot ? (float)spot->rotation : 0.0f),
-                (Vector3){scale_xy, scale_z, scale_xy}, WHITE);
-            rlEnableBackfaceCulling();
-        } else {
-            DrawSphere((Vector3){x, y, z}, effect->radius, effect->color);
-        }
+        draw_spot_model(context, entry, spot, &effect->anim_state,
+            &effect->anim, (Vector3){x, y, z}, (Vector3){0, 1, 0},
+            yaw + (float)spot->rotation, animation_dt);
     }
 }
 
@@ -7279,17 +7229,12 @@ void fc_combat_presentation_draw_healthbars(
         if (fill > 30) fill = 30;
         int x = (int)roundf(screen.x) - 15;
         int y = (int)roundf(screen.y) - 3;
-        Texture2D empty = presentation->overlay_sprites[OVERLAY_HEALTHBAR_EMPTY];
-        Texture2D full = presentation->overlay_sprites[OVERLAY_HEALTHBAR_FULL];
-        if (empty.id > 0 && full.id > 0) {
-            DrawTexture(empty, x, y, WHITE);
-            if (fill > 0) {
-                Rectangle source = {0.0f, 0.0f, (float)fill, 5.0f};
-                DrawTextureRec(full, source, (Vector2){(float)x, (float)y}, WHITE);
-            }
-        } else {
-            DrawRectangle(x, y, 30, 5, RED);
-            DrawRectangle(x, y, fill, 5, GREEN);
+        DrawTexture(presentation->overlay_sprites[OVERLAY_HEALTHBAR_EMPTY],
+                    x, y, WHITE);
+        if (fill > 0) {
+            Rectangle source = {0.0f, 0.0f, (float)fill, 5.0f};
+            DrawTextureRec(presentation->overlay_sprites[OVERLAY_HEALTHBAR_FULL],
+                           source, (Vector2){(float)x, (float)y}, WHITE);
         }
     }
 }
@@ -8032,7 +7977,6 @@ int dbg_draw_panel_tabs(const FcState* state,
 #define COL_HP_GREEN    CLITERAL(Color){  30, 255,  30, 255 }
 #define COL_HP_RED      CLITERAL(Color){ 120,   0,   0, 255 }
 #define COL_PRAY_BLUE   CLITERAL(Color){  50, 120, 210, 255 }
-#define COL_PLAYER      CLITERAL(Color){  80, 140, 255, 255 }
 #define COL_GRID        CLITERAL(Color){  30,  30,  30, 80  }
 #define COL_BLOCKED     CLITERAL(Color){ 180,  30,  30, 60  }
 #define COL_WALKABLE    CLITERAL(Color){  30, 120,  30, 30  }
@@ -8042,19 +7986,6 @@ typedef struct {
     AnimModelState* anim_state;
     AnimTrack anim;
 } ObjectAnimRuntime;
-
-/* NPC colors by type */
-static const Color NPC_COLORS[] = {
-    {128,128,128,255}, /* 0: none */
-    {180,160,60,255},  /* 1: Tz-Kih (yellow) */
-    {100,180,60,255},  /* 2: Tz-Kek (green) */
-    {80,150,50,255},   /* 3: Tz-Kek small */
-    {60,60,200,255},   /* 4: Tok-Xil (blue) */
-    {200,100,60,255},  /* 5: Yt-MejKot (orange) */
-    {160,40,160,255},  /* 6: Ket-Zek (purple) */
-    {200,40,40,255},   /* 7: TzTok-Jad (RED) */
-    {60,200,200,255},  /* 8: Yt-HurKot (cyan) */
-};
 
 /* The protection prayers the simulator models, in Prayer tab order. Each row
  * drives its hotkey, tab button, menu and overhead icon; sprite is the
@@ -8899,19 +8830,9 @@ static int find_clicked_npc_idx(ViewerState* v) {
         Vector3 position = {pose.x, ground_y_smooth(v, pose.x, pose.y), -pose.y};
         const ModelEntry *model = npc_model_find(v->npc_models,
                                                  entity->npc_type);
-        float depth = -1;
-        if (model) {
-            const AnimModelState *animation = v->actor_animation.npcs[slot].state;
-            depth = models_pick_depth(model, animation ? animation->verts : NULL,
-                position, pose.yaw_degrees, v->camera, mouse, GetScreenWidth(), GetScreenHeight());
-        } else {
-            /* Match the existing missing-model cube, not an invisible tile halo. */
-            float s = entity->size * 0.45f, h = 1.0f + entity->size * 0.5f;
-            BoundingBox box = {{position.x - s, position.y, position.z - s},
-                               {position.x + s, position.y + h, position.z + s}};
-            RayCollision hit = GetRayCollisionBox(GetScreenToWorldRay(mouse, v->camera), box);
-            if (hit.hit) depth = hit.distance;
-        }
+        const AnimModelState *animation = v->actor_animation.npcs[slot].state;
+        float depth = models_pick_depth(model, animation ? animation->verts : NULL,
+            position, pose.yaw_degrees, v->camera, mouse, GetScreenWidth(), GetScreenHeight());
         if (depth >= 0 && depth < best_depth) { best_depth = depth; best = slot; }
     }
     return best;
@@ -9332,61 +9253,28 @@ static void draw_scene(ViewerState* v) {
         /* Sample terrain continuously along the interpolated movement path. */
         float gy = ground_y_smooth(v, pose.x, pose.y);
 
+        draw_actor_footprint(v, e);
+        /* sync_player_appearance composes the player model every frame and
+         * startup requires every NPC type's model. Facing comes from the
+         * client-style actor runtime. */
+        ModelEntry* model;
         if (e->entity_type == ENTITY_PLAYER) {
-            draw_actor_footprint(v, e);
-
-            /* Player model or fallback cylinder */
-            ModelEntry* pm = fc_actor_player_model_entry(
-                v->appearance.model, v->active_loadout);
-            if (pm) {
-                Vector3 pos = {ex, gy, ey};
-                float face_angle = pose.face_angle;
-                rlDisableBackfaceCulling();
-                DrawModelEx(pm->model, pos, (Vector3){0,1,0}, face_angle, (Vector3){1,1,1}, WHITE);
-                rlEnableBackfaceCulling();
-            } else {
-                DrawCylinder((Vector3){ex, gy, ey}, 0.4f, 0.4f, 2.0f, 8, COL_PLAYER);
-                DrawCylinderWires((Vector3){ex, gy, ey}, 0.4f, 0.4f, 2.0f, 8, WHITE);
-            }
-
-            /* Prayer icon above player — rendered as 2D text after EndMode3D */
-            /* (handled below in the 2D overlay section) */
+            model = fc_actor_player_model_entry(v->appearance.model,
+                                                v->active_loadout);
         } else {
-            draw_actor_footprint(v, e);
-
-            /* NPC: try to render actual model, fallback to colored cube */
-            ModelEntry* nme = npc_model_find(v->npc_models, e->npc_type);
-
-            if (nme) {
-                /* Facing is maintained by the client-style actor runtime. */
-                Vector3 pos = {ex, gy, ey};
-                float face_angle = pose.face_angle;
-                if (e->npc_slot >= 0 && e->npc_slot < FC_MAX_NPCS &&
-                    v->actor_animation.npcs[e->npc_slot].state) {
-                    /* Same-type NPCs share an asset mesh. Upload this actor's
-                     * transformed vertices immediately before its draw call. */
-                    fc_actor_animation_upload_npc(
-                        &v->actor_animation, e->npc_slot, nme);
-                }
-                rlDisableBackfaceCulling();
-                DrawModelEx(nme->model, pos, (Vector3){0,1,0}, face_angle, (Vector3){1,1,1}, WHITE);
-                rlEnableBackfaceCulling();
-            } else {
-                /* Fallback: colored cube */
-                float s = (float)e->size * 0.45f;
-                float h = 1.0f + (float)e->size * 0.5f;
-                Color col = (e->npc_type > 0 && e->npc_type < 9) ? NPC_COLORS[e->npc_type] : GRAY;
-                if (e->died_this_tick &&
-                    !fc_combat_presentation_npc_death_deferred(
-                        v->combat_presentation, &v->state, e->npc_slot)) {
-                    h *= 0.3f;
-                    col.a = 100;
-                }
-                DrawCube((Vector3){ex, gy + h*0.5f, ey}, s*2, h, s*2, col);
-                DrawCubeWires((Vector3){ex, gy + h*0.5f, ey}, s*2, h, s*2, WHITE);
+            model = npc_model_find(v->npc_models, e->npc_type);
+            if (e->npc_slot >= 0 && e->npc_slot < FC_MAX_NPCS &&
+                v->actor_animation.npcs[e->npc_slot].state) {
+                /* Same-type NPCs share an asset mesh. Upload this actor's
+                 * transformed vertices immediately before its draw call. */
+                fc_actor_animation_upload_npc(
+                    &v->actor_animation, e->npc_slot, model);
             }
-
         }
+        rlDisableBackfaceCulling();
+        DrawModelEx(model->model, (Vector3){ex, gy, ey}, (Vector3){0,1,0},
+                    pose.face_angle, (Vector3){1,1,1}, WHITE);
+        rlEnableBackfaceCulling();
     }
 
     FcCombatPresentationContext combat_context = {
@@ -10101,11 +9989,9 @@ static ViewerState* fc_viewer_create(int replay) {
                                 "fightcaves.tanim"))
         fprintf(stderr, "error: texture atlas failed to load\n");
     v->objects = objects_load("fightcaves.objects", v->atlas.texture);
-    if (fc_asset_exists("fightcaves.oanim"))
-        v->object_anims = object_anims_load("fightcaves.oanim");
-    if (fc_asset_exists("fightcaves.object_anim.models"))
-        v->object_anim_models = models_load(
-            "fightcaves.object_anim.models", v->atlas.texture);
+    v->object_anims = object_anims_load("fightcaves.oanim");
+    v->object_anim_models = models_load("fightcaves.object_anim.models",
+                                        v->atlas.texture);
     if (v->object_anims && v->object_anims->count > 0) {
         v->object_anim_runtimes = (ObjectAnimRuntime*)calloc(
             (size_t)v->object_anims->count, sizeof(*v->object_anim_runtimes));
@@ -10114,12 +10000,12 @@ static ViewerState* fc_viewer_create(int replay) {
     }
     if (!v->terrain) v->show_grid = 1;
 
-    /* Load NPC models */
-    {
-        if (fc_asset_exists("fc_npcs.models"))
-            v->npc_models = models_load("fc_npcs.models", (Texture2D){0});
-        if (!v->npc_models) fprintf(stderr, "error: NPC models failed to load\n");
-    }
+    /* NPC models: the scene draws and picks every NPC type with its own. */
+    v->npc_models = models_load("fc_npcs.models", (Texture2D){0});
+    if (!v->npc_models) fprintf(stderr, "error: NPC models failed to load\n");
+    int npc_models_ready = 1;
+    for (int type = NPC_NONE + 1; type < NPC_TYPE_COUNT; type++)
+        if (!npc_model_find(v->npc_models, type)) npc_models_ready = 0;
 
     /* Load composable player body and equipment models. */
     if (!fc_player_appearance_load(&v->appearance)) {
@@ -10129,8 +10015,7 @@ static ViewerState* fc_viewer_create(int replay) {
     }
 
     /* Load the animation cache shared by actor and combat presentation. */
-    if (fc_asset_exists("fc_all.anims"))
-        v->anim_cache = anim_cache_load("fc_all.anims");
+    v->anim_cache = anim_cache_load("fc_all.anims");
     v->combat_presentation = fc_combat_presentation_create(v->atlas.texture);
     if (!v->combat_presentation)
         fprintf(stderr, "error: combat presentation initialization failed\n");
@@ -10196,7 +10081,7 @@ static ViewerState* fc_viewer_create(int replay) {
     REQUIRE_VIEWER_RESOURCE(!v->object_anims || v->object_anims->count == 0 ||
                             v->object_anim_runtimes,
                             "object animation runtime allocation");
-    REQUIRE_VIEWER_RESOURCE(v->npc_models, "NPC models");
+    REQUIRE_VIEWER_RESOURCE(npc_models_ready, "NPC models");
     REQUIRE_VIEWER_RESOURCE(v->appearance.parts,
                             "player equipment and body models");
     REQUIRE_VIEWER_RESOURCE(v->anim_cache, "actor animation data");
