@@ -1012,52 +1012,6 @@ static const int FC_PUFFER_ACTION_DIMS[FC_PUFFER_NUM_ATNS] = FC_PUFFER_ACT_SIZES
  */
 
 
-/* Combat */
-
-/* OSRS accuracy formula: returns hit probability in [0,1] */
-float fc_hit_chance(int att_roll, int def_roll);
-
-/* NPC combat */
-int fc_npc_attack_roll(int att_level, int att_bonus);
-
-/* Player combat */
-int fc_player_def_roll(const FcPlayer* p, FcAttackType attack_type);
-int fc_player_ranged_base_attack_roll(const FcPlayer* p);
-int fc_player_ranged_attack_roll(const FcPlayer* p, const FcNpc* target);
-int fc_player_ranged_base_max_hit_hp(const FcPlayer* p);
-int fc_player_ranged_final_max_hit_hp(const FcPlayer* p, const FcNpc* target);
-
-/* Damage helpers accept a whole-HP maximum and return tenths storage units. */
-int fc_roll_player_damage_tenths(FcState* state, int final_max_hit_hp);
-int fc_roll_npc_damage_tenths(FcState* state, int final_max_hit_hp);
-
-/* Twisted-bow staged multiplier boundaries. */
-int fc_tbow_accuracy_multiplier_pct(int target_magic_level);
-int fc_tbow_damage_multiplier_pct(int target_magic_level);
-
-/* PvM prayer: returns 1 if prayer blocks the attack style (100% block) */
-int fc_prayer_blocks_style(int prayer, int attack_style);
-
-/* Distance to multi-tile NPC (Chebyshev) */
-int fc_distance_to_npc(int px, int py, const FcNpc* npc);
-
-/* Hit delay */
-int fc_ranged_hit_delay(int distance);  /* player ranged projectile */
-int fc_npc_hit_delay(int npc_type, int attack_style, int distance);  /* per-NPC exact timing */
-
-/* NPC defence roll (for player accuracy against NPC) */
-int fc_npc_def_roll(int def_level, int def_bonus);
-
-/* Pending hit queue */
-int fc_queue_pending_hit(FcPendingHit hits[], int* num_hits, int max_hits,
-                         int damage, int ticks, int style, int source_idx,
-                         int prayer_drain);
-
-/* Resolve pending hits (call each tick) */
-void fc_resolve_player_pending_hits(FcState* state);
-void fc_resolve_npc_pending_hits(FcState* state, int npc_idx);
-
-
 /* Npc */
 
 /* NPC stat table entry (one per NPC_TYPE) */
@@ -1085,163 +1039,11 @@ typedef struct {
     int heal_interval;      /* ticks between independent Yt-HurKot heals */
 } FcNpcStats;
 
-/* Get stats for a given NPC type */
-const FcNpcStats* fc_npc_get_stats(int npc_type);
-
-/* Unit-explicit style maximum boundaries. Unsupported/invalid styles return
- * zero. The HP accessor rejects non-integral tenths values by returning zero. */
-int fc_npc_max_hit_tenths_for_style(const FcNpcStats* stats, int attack_style);
-int fc_npc_max_hit_hp_for_style(const FcNpcStats* stats, int attack_style);
-
-/* Returns nonzero when every populated style maximum is valid tenths data. */
-int fc_npc_stats_valid(const FcNpcStats* stats);
-
-/* Initialize an NPC slot from type and spawn position */
-void fc_npc_spawn(FcNpc* npc, int npc_type, int x, int y, int spawn_index);
-
-/* True when the NPC could attack the player if its top-left footprint stood
- * at candidate_x,candidate_y. This checks attack style, range, melee contact,
- * and static LOS. */
-int fc_npc_position_can_attack_player(const FcState* state, const FcNpc* npc,
-                                      int candidate_x, int candidate_y);
-
-/* Run NPC AI for one tick: movement + attack decision */
-void fc_npc_tick(FcState* state, int npc_idx);
-
-/* Tz-Kek split-on-death: spawn 2 NPC_TZ_KEK_SM at death position */
-void fc_npc_tz_kek_split(FcState* state, int dead_x, int dead_y);
-
 
 /* Pathfinding */
 
 /* Attack-route range 0 means cardinal melee contact, not ranged LOS. */
 #define FC_ROUTE_MELEE_RANGE 0
-
-/* ======================================================================== */
-/* Tile queries                                                              */
-/* ======================================================================== */
-
-/* Check if a single tile is walkable (bounds + collision). */
-int fc_tile_walkable(int x, int y,
-                     const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]);
-
-/* Check if an entity of given size can stand at (x,y).
- * All tiles in the [x..x+size-1, y..y+size-1] footprint must be walkable. */
-int fc_footprint_walkable(int x, int y, int size,
-                          const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]);
-
-/* Check one sized step using the native client/RSMod leading-edge collision
- * masks, including the distinct size-1, size-2, and large-actor rules. */
-int fc_footprint_step_walkable(
-    int x, int y, int dx, int dy, int size,
-    const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-    const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]);
-
-/* ======================================================================== */
-/* Dynamic occupancy                                                         */
-/* ======================================================================== */
-
-/* Clear an occupancy grid to all-free. */
-void fc_clear_occupancy(uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]);
-
-/* Mark all in-bounds tiles in a footprint occupied. Out-of-bounds tiles are
- * ignored here; availability checks still reject out-of-bounds footprints via
- * the static walkability check. */
-void fc_mark_footprint_occupied(uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-                                int x, int y, int size);
-
-/* Build an occupancy grid from the current live entities. Pass ignore_npc_idx
- * to omit the moving NPC's own current footprint. Set ignore_player when
- * validating player movement or intentionally ignoring the player. */
-void fc_build_occupancy(const FcState* state,
-                        uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-                        int ignore_npc_idx,
-                        int ignore_player);
-
-/* Check static terrain plus a caller-provided dynamic occupancy grid. */
-int fc_footprint_available_dynamic(
-    int x, int y, int size,
-    const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-    const uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]);
-
-/* Dynamic equivalent of the native sized-step rule. Occupied tiles behave as
- * whole-tile blockers on the exact leading-edge cells checked by that rule. */
-int fc_footprint_step_available_dynamic(
-    int x, int y, int dx, int dy, int size,
-    const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-    const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-    const uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]);
-
-/* ======================================================================== */
-/* Movement                                                                  */
-/* ======================================================================== */
-
-/* Move a size-1 entity from (x,y) toward offset (dx,dy) for up to max_steps.
- * Diagonal-first fallback. Returns number of tiles moved. Updates *x,*y. */
-int fc_move_toward(int* x, int* y, int dx, int dy, int max_steps,
-                   const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-                   const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]);
-
-/* Same movement operation, additionally returning each successfully consumed
- * tile in step_x/step_y up to step_capacity entries. */
-int fc_move_toward_traced(
-    int* x, int* y, int dx, int dy, int max_steps,
-    const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-    const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-    int* step_x, int* step_y, int step_capacity);
-
-/* Dynamic-aware sized step. Diagonal movement checks the final footprint and
- * both cardinal side footprints to prevent static or dynamic corner clipping. */
-int fc_npc_step_toward_sized_dynamic(
-    int* x, int* y, int target_x, int target_y, int size,
-    const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-    const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-    const uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]);
-
-/* ======================================================================== */
-/* Line of sight                                                             */
-/* ======================================================================== */
-
-/* Chebyshev distance between the nearest tiles of two rectangular areas. */
-int fc_distance_between_areas(int src_x, int src_y, int src_size,
-                              int dst_x, int dst_y, int dst_size);
-
-/* Footprint-aware LOS using the closest coordinate from each rectangle, as in
- * the native line validator. */
-int fc_has_los_between_areas(
-    int src_x, int src_y, int src_size,
-    int dst_x, int dst_y, int dst_size,
-    const uint8_t los_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]);
-
-/* Rectangular-exclusive melee reach: only an open shared cardinal edge is
- * valid. Diagonal contact and overlapping footprints are rejected. */
-int fc_npc_can_melee_player(int player_x, int player_y,
-                            int npc_x, int npc_y, int npc_size,
-                            const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-                            const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]);
-
-/* ======================================================================== */
-/* BFS pathfinding (for click-to-move)                                       */
-/* ======================================================================== */
-
-/* Native move-near fallback for human click-to-move. If the exact destination
- * is unreachable, chooses the reachable tile within ten tiles with the lowest
- * squared destination distance, breaking ties by route length. */
-int fc_pathfind_bfs_move_near(
-    int sx, int sy, int dx, int dy,
-    const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-    const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-    int out_x[], int out_y[], int max_steps);
-
-/* Route to the first shortest-path tile outside a target rectangle that has
- * both the requested attack range and authoritative projectile LOS. */
-int fc_pathfind_attack_position(
-    int sx, int sy, int target_x, int target_y, int target_size,
-    int attack_range,
-    const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-    const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-    const uint8_t los_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-    int out_x[], int out_y[], int max_steps);
 
 
 /* Prayer */
@@ -1257,22 +1059,6 @@ typedef struct {
     int explicit_off_then_on;
     int final_state_changed;
 } FcPrayerTransition;
-
-/* Drain prayer points based on active prayer and bonus.
- * prayer_active_at_tick_start should reflect the prayer state before the
- * current tick's input actions were applied, so 1-tick flicks do not drain. */
-int fc_prayer_drain_tick(FcPlayer* p, int prayer_at_tick_start,
-                         const FcPrayerTransition* transition);
-
-/* Apply a prayer action (from FC_PRAYER_* constants in fc_contracts.h) */
-FcPrayerTransition fc_prayer_apply_action(FcPlayer* p, int prayer_action);
-
-/* Apply capped Prayer loss in tenths. Every Prayer-loss source uses this
- * boundary so depletion always deactivates the overhead and clears fraction. */
-int fc_prayer_apply_loss_tenths(FcPlayer* p, int requested_loss_tenths);
-
-/* Prayer potion restore amount in tenths (level-dependent) */
-int fc_prayer_potion_restore(int prayer_level);
 
 
 /* Reward */
@@ -1343,9 +1129,6 @@ typedef struct {
     int episode_length;
 } FcEpisodeSummary;
 
-void fc_episode_summary_build(const FcState* state, const FcRewardRuntime* runtime,
-                              int episode_length, FcEpisodeSummary* summary);
-
 
 typedef struct {
     float raw[FC_REWARD_FEATURES];
@@ -1377,43 +1160,9 @@ typedef struct {
 } FcRewardBreakdown;
 
 FcRewardParams fc_reward_default_params(void);
-void fc_reward_runtime_reset(FcRewardRuntime* runtime);
-float fc_reward_player_death_scale(const FcRewardParams* params,
-                                   float cave_progress);
-float fc_reward_required_work_remaining(const FcState* state);
-void fc_reward_sync_progress_state(FcState* state,
-                                   const FcRewardRuntime* runtime);
-void fc_reward_runtime_begin_episode(FcRewardRuntime* runtime, FcState* state);
-FcRewardBreakdown fc_reward_compute_breakdown(
-    const FcState* state, const FcRewardParams* params, FcRewardRuntime* runtime);
 
 
 /* Wave */
-
-/*
- * fc_wave.h — Wave system for Fight Caves.
- *
- * 63 waves, 15 spawn rotations per wave.
- * Wave table sourced from OSRS wiki + Kotlin archive TOML data.
- *
- * Spawn directions map to arena coordinates:
- *   SPAWN_SOUTH      → (32, 5)   bottom center
- *   SPAWN_SOUTH_WEST → (8, 8)    bottom left
- *   SPAWN_NORTH_WEST → (8, 55)   top left
- *   SPAWN_SOUTH_EAST → (55, 8)   bottom right
- *   SPAWN_CENTER     → (32, 32)  arena center
- */
-
-/* Spawn direction → arena coordinate mapping */
-void fc_spawn_position(int spawn_dir, int* x, int* y);
-
-/* Spawn all NPCs for the given wave using the state's rotation_id */
-void fc_wave_spawn(FcState* state, int wave_num);
-
-/* Check if wave is cleared and advance to next wave.
- * Called from check_terminal in fc_tick.c.
- * Returns 1 if wave was advanced, 0 otherwise. */
-int fc_wave_check_advance(FcState* state);
 
 /* Jad healer spawn threshold: spawn 4 Yt-HurKot when Jad HP drops below this.
  * Respawns are re-armed only if the previous healers restored Jad to full HP. */
@@ -1440,27 +1189,6 @@ int fc_wave_check_advance(FcState* state);
  * Must be called once before the first reset. */
 void fc_init(FcState* state);
 
-/* Reset the episode with the given seed. Seeds the RNG, resets player/NPCs,
- * selects a random wave rotation, sets up the arena.
- * After reset, state is at tick 0 with wave 1 ready. */
-void fc_reset(FcState* state, uint32_t seed);
-
-/* Advance the simulation by one tick with the given actions.
- * actions[0..FC_NUM_ACTION_HEADS-1] are the canonical core action head values.
- * After step, per-tick event flags and terminal status are set. */
-void fc_step(FcState* state, const int actions[FC_NUM_ACTION_HEADS]);
-
-/* Canonical client preference request used by playable frontends. Gameplay
- * movement still occurs only through fc_step(). */
-void fc_request_set_running(FcState* state, int enabled);
-
-/* Internal tick loop (called by fc_step). Exposed for testing. */
-void fc_tick(FcState* state, const int actions[FC_NUM_ACTION_HEADS]);
-
-/* Free any resources (currently none — FcState is stack/caller-allocated).
- * Called for API symmetry and future-proofing. */
-void fc_destroy(FcState* state);
-
 /* ======================================================================== */
 /* Observation / Mask / Reward                                               */
 /* ======================================================================== */
@@ -1470,39 +1198,10 @@ void fc_destroy(FcState* state);
  * Values are normalized to [0,1] via divisor tables. */
 void fc_write_obs(const FcState* state, float* out);
 
-/* Zero specific observation slots in-place (for obs-ablation experiments).
- * Apply AFTER fc_write_obs. Each flag, when non-zero, zeroes the
- * corresponding region of the policy obs (does not touch reward features
- * or the action mask):
- *   ablate_npc_distance         — zeroes FC_NPC_DISTANCE for all 8 NPC slots
- *   ablate_incoming_aggregates  — zeroes the 6 player-block IN_*_1T/2T fields
- *                                  + the 3 meta-block IN_*_3T fields
- *   ablate_npc_valid            — zeroes FC_NPC_VALID for all 8 NPC slots
- *
- * out must point to the same buffer fc_write_obs filled (length FC_TOTAL_OBS).
- * No-op when all three flags are 0. */
-void fc_apply_obs_ablation(float* out,
-                           int ablate_npc_distance,
-                           int ablate_incoming_aggregates,
-                           int ablate_npc_valid);
-
-/* Fill out_indices with the active NPC array indices currently visible in
- * policy NPC slots, using the same ordering as fc_write_obs and fc_write_mask.
- * Returns the number of filled slots, capped at FC_VISIBLE_NPCS. */
-int fc_visible_npc_indices(const FcState* state, int out_indices[FC_VISIBLE_NPCS]);
-
 /* Write the action mask buffer.
  * out must have room for FC_ACTION_MASK_SIZE floats.
  * 1.0 = valid action, 0.0 = invalid. */
 void fc_write_mask(const FcState* state, float* out);
-
-/* Compute and write reward features for the current tick.
- * out must have room for FC_REWARD_FEATURES floats.
- * These are raw feature values; the C reward implementation applies weights. */
-void fc_write_reward_features(const FcState* state, float* out);
-
-/* Returns 1 if the episode has terminated (player death, cave complete, tick cap). */
-int fc_is_terminal(const FcState* state);
 
 /* ======================================================================== */
 /* Determinism                                                               */
@@ -1524,39 +1223,6 @@ int fc_is_terminal(const FcState* state);
  * the same (seed, action_sequence) must produce identical hashes at every tick.
  */
 uint32_t fc_state_hash(const FcState* state);
-
-/* ======================================================================== */
-/* Rendering                                                                 */
-/* ======================================================================== */
-
-/*
- * Fill an array of render entities for the viewer.
- * The viewer calls this each tick to get a snapshot of all visible entities.
- * entities[] must have room for FC_MAX_RENDER_ENTITIES entries.
- * *count is set to the number of filled entries.
- *
- * Entity 0 is always the player. Entities 1..count-1 are active NPCs.
- */
-void fc_fill_render_entities(const FcState* state, FcRenderEntity* entities, int* count);
-
-/* Copy the authoritative transition facts captured during the last tick. */
-void fc_fill_render_events(const FcState* state, FcRenderEvents* events);
-
-/* ======================================================================== */
-/* RNG (exposed for testing; normal callers use fc_reset to seed)             */
-/* ======================================================================== */
-
-/* Seed the RNG state. Called internally by fc_reset. */
-void fc_rng_seed(FcState* state, uint32_t seed);
-
-/* Generate a random uint32. Advances the RNG state. */
-uint32_t fc_rng_next(FcState* state);
-
-/* Generate a random int in [0, max) */
-int fc_rng_int(FcState* state, int max);
-
-/* Generate a random float in [0.0, 1.0) */
-float fc_rng_float(FcState* state);
 
 
 /* Items */
@@ -1581,48 +1247,44 @@ typedef enum {
     FC_ITEM_BUSY
 } FcItemResult;
 
-const FcItemDef *fc_item_definition(int item_id);
-const char *fc_item_result_message(FcItemResult result);
-/* Immediate inventory transactions between ticks. They do not advance time,
- * reset cooldowns, roll RNG, or alter already-launched attacks. */
-FcItemResult fc_equip_item(FcState *state, int inventory_slot);
-FcItemResult fc_unequip_item(FcState *state, int equipment_slot);
-FcItemResult fc_inventory_swap(FcState *state, int first, int second);
-/* Select the actual slot consumed by the next canonical food/potion action. */
-FcItemResult fc_select_consumable(FcState *state, int inventory_slot);
-void fc_set_initial_supplies(FcState *state, int sharks, int prayer_doses);
-
-
-/* Action Internal */
-
-/* An already-active run may consume its remaining energy below 1%. Starting
- * run mode follows the OSRS client/server minimum of one displayed percent. */
-static inline int fc_player_can_run(const FcPlayer* player) {
-    return player->run_energy > 0 &&
-           (player->is_running ||
-            player->run_energy >= FC_RUN_ENERGY_MIN_START);
-}
-
-int fc_eat_action_valid(const FcState* state, int action);
-int fc_drink_action_valid(const FcState* state, int action);
-
-
-/* Items Internal */
-void fc_items_init(FcPlayer *player, const FcLoadout *loadout);
-void fc_items_consume(FcPlayer *player, int potion);
-void fc_items_spend_ammo(FcPlayer *player);
-
-/* Spawn Internal */
-
-int fc_spawn_find_available_footprint(const FcState* state,
-                                      int preferred_x, int preferred_y,
-                                      int size, int max_radius,
-                                      int* out_x, int* out_y);
-
-int fc_spawn_npc_first_free(FcState* state, int npc_type, int x, int y);
-
 
 #ifdef FC_CORE_IMPLEMENTATION
+
+/* Used before their definitions below. */
+static const FcNpcStats* fc_npc_get_stats(int npc_type);
+static int fc_rng_int(FcState* state, int max);
+static float fc_rng_float(FcState* state);
+static int fc_distance_between_areas(int src_x, int src_y, int src_size,
+                                     int dst_x, int dst_y, int dst_size);
+static int fc_has_los_between_areas(
+    int src_x, int src_y, int src_size,
+    int dst_x, int dst_y, int dst_size,
+    const uint8_t los_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]);
+static int fc_npc_can_melee_player(int player_x, int player_y,
+                                   int npc_x, int npc_y, int npc_size,
+                                   const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
+                                   const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]);
+static void fc_build_occupancy(const FcState* state,
+                               uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
+                               int ignore_npc_idx,
+                               int ignore_player);
+static int fc_npc_step_toward_sized_dynamic(
+    int* x, int* y, int target_x, int target_y, int size,
+    const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
+    const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
+    const uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]);
+static int fc_prayer_apply_loss_tenths(FcPlayer* p, int requested_loss_tenths);
+static void fc_npc_tz_kek_split(FcState* state, int dead_x, int dead_y);
+static int fc_spawn_find_available_footprint(const FcState* state,
+                                             int preferred_x, int preferred_y,
+                                             int size, int max_radius,
+                                             int* out_x, int* out_y);
+static int fc_spawn_npc_first_free(FcState* state, int npc_type, int x, int y);
+static void fc_write_reward_features(const FcState* state, float* out);
+static void fc_wave_spawn(FcState* state, int wave_num);
+static void fc_tick(FcState* state, const int actions[FC_NUM_ACTION_HEADS]);
+static void fc_spawn_position(int spawn_dir, int* x, int* y);
+static int fc_wave_check_advance(FcState* state);
 
 /* Combat */
 #include <limits.h>
@@ -1644,7 +1306,7 @@ int fc_spawn_npc_first_free(FcState* state, int npc_type, int x, int y);
 /* OSRS accuracy formula                                                     */
 /* ======================================================================== */
 
-float fc_hit_chance(int att_roll, int def_roll) {
+static float fc_hit_chance(int att_roll, int def_roll) {
     if (att_roll > def_roll)
         return 1.0f - (float)(def_roll + 2) / (2.0f * (float)(att_roll + 1));
     else
@@ -1652,19 +1314,19 @@ float fc_hit_chance(int att_roll, int def_roll) {
 }
 
 /* ======================================================================== */
-/* NPC attack/max-hit formulas                                               */
+/* NPC attack and defence rolls                                              */
 /* ======================================================================== */
 
-int fc_npc_attack_roll(int att_level, int att_bonus) {
+static int fc_npc_roll(int level, int bonus) {
     /* NPCs use level + invisible_boost(9) × (bonus + 64) */
-    return (att_level + 9) * (att_bonus + 64);
+    return (level + 9) * (bonus + 64);
 }
 
 /* ======================================================================== */
 /* Player defence roll                                                       */
 /* ======================================================================== */
 
-int fc_player_def_roll(const FcPlayer* p, FcAttackType attack_type) {
+static int fc_player_def_roll(const FcPlayer* p, FcAttackType attack_type) {
     int def_bonus;
     switch (attack_type) {
         case FC_ATTACK_TYPE_STAB:   def_bonus = p->defence_stab; break;
@@ -1695,7 +1357,7 @@ static int fc_player_effective_ranged_level(const FcPlayer* p) {
     return p->ranged_level + 8;
 }
 
-int fc_player_ranged_base_attack_roll(const FcPlayer* p) {
+static int fc_player_ranged_base_attack_roll(const FcPlayer* p) {
     int eff_ranged = fc_player_effective_ranged_level(p);
     return eff_ranged * (p->ranged_attack_bonus + 64);
 }
@@ -1709,7 +1371,8 @@ static int fc_tbow_target_magic_level(const FcNpc* target) {
     return magic_level;
 }
 
-int fc_tbow_accuracy_multiplier_pct(int target_magic_level) {
+/* Twisted-bow staged multipliers (percent) against the target's Magic level. */
+static int fc_tbow_accuracy_multiplier_pct(int target_magic_level) {
     int64_t magic = target_magic_level;
     if (magic < 0) magic = 0;
     if (magic > 250) magic = 250;
@@ -1723,7 +1386,7 @@ int fc_tbow_accuracy_multiplier_pct(int target_magic_level) {
     return (int)pct;
 }
 
-int fc_tbow_damage_multiplier_pct(int target_magic_level) {
+static int fc_tbow_damage_multiplier_pct(int target_magic_level) {
     int64_t magic = target_magic_level;
     if (magic < 0) magic = 0;
     if (magic > 250) magic = 250;
@@ -1761,7 +1424,7 @@ static int fc_apply_basis_points(int value, int bonus_bp) {
     return (int)((int64_t)value * (10000 + bonus_bp) / 10000);
 }
 
-int fc_player_ranged_attack_roll(const FcPlayer* p, const FcNpc* target) {
+static int fc_player_ranged_attack_roll(const FcPlayer* p, const FcNpc* target) {
     int attack_roll = fc_player_ranged_base_attack_roll(p);
 
     if (p->weapon_kind == FC_WEAPON_TWISTED_BOW && target) {
@@ -1780,13 +1443,13 @@ int fc_player_ranged_attack_roll(const FcPlayer* p, const FcNpc* target) {
     return attack_roll;
 }
 
-int fc_player_ranged_base_max_hit_hp(const FcPlayer* p) {
+static int fc_player_ranged_base_max_hit_hp(const FcPlayer* p) {
     int eff_str = fc_player_effective_ranged_level(p);
     return (int)(((int64_t)eff_str * (p->ranged_strength_bonus + 64) + 320) /
                  640);
 }
 
-int fc_player_ranged_final_max_hit_hp(const FcPlayer* p, const FcNpc* target) {
+static int fc_player_ranged_final_max_hit_hp(const FcPlayer* p, const FcNpc* target) {
     int base_hp = fc_player_ranged_base_max_hit_hp(p);
 
     if (p->weapon_kind == FC_WEAPON_TWISTED_BOW && target) {
@@ -1810,7 +1473,8 @@ static int fc_damage_max_valid(const FcState* state, int final_max_hit_hp) {
            final_max_hit_hp <= INT_MAX / 10;
 }
 
-int fc_roll_player_damage_tenths(FcState* state, int final_max_hit_hp) {
+/* Damage helpers accept a whole-HP maximum and return tenths storage units. */
+static int fc_roll_player_damage_tenths(FcState* state, int final_max_hit_hp) {
     if (!fc_damage_max_valid(state, final_max_hit_hp) ||
         final_max_hit_hp == 0) {
         return 0;
@@ -1820,7 +1484,7 @@ int fc_roll_player_damage_tenths(FcState* state, int final_max_hit_hp) {
     return rolled_hp * 10;
 }
 
-int fc_roll_npc_damage_tenths(FcState* state, int final_max_hit_hp) {
+static int fc_roll_npc_damage_tenths(FcState* state, int final_max_hit_hp) {
     if (!fc_damage_max_valid(state, final_max_hit_hp) ||
         final_max_hit_hp == 0) {
         return 0;
@@ -1832,7 +1496,7 @@ int fc_roll_npc_damage_tenths(FcState* state, int final_max_hit_hp) {
 /* Prayer check                                                              */
 /* ======================================================================== */
 
-int fc_prayer_blocks_style(int prayer, int attack_style) {
+static int fc_prayer_blocks_style(int prayer, int attack_style) {
     /*
      * PvM: correct protection prayer blocks 100% of matching style.
      * Our enum mapping:
@@ -1848,7 +1512,7 @@ int fc_prayer_blocks_style(int prayer, int attack_style) {
 /* Chebyshev distance to multi-tile NPC                                      */
 /* ======================================================================== */
 
-int fc_distance_to_npc(int px, int py, const FcNpc* npc) {
+static int fc_distance_to_npc(int px, int py, const FcNpc* npc) {
     return fc_distance_between_areas(px, py, 1,
                                      npc->x, npc->y, npc->size);
 }
@@ -1872,7 +1536,7 @@ int fc_distance_to_npc(int px, int py, const FcNpc* npc) {
  */
 
 /* Player ranged projectile timing */
-int fc_ranged_hit_delay(int distance) {
+static int fc_ranged_hit_delay(int distance) {
     /* Keep the existing lightweight projectile timing for player ranged attacks. */
     int travel = 5 * distance;  /* default multiplier for player ranged */
     return travel / 30 + 1;
@@ -1882,7 +1546,7 @@ int fc_ranged_hit_delay(int distance) {
  * Per-NPC-type hit delay — uses exact projectile timing from Void 634 gfx.toml.
  * Called from NPC attack code for precise parity with RSPS.
  */
-int fc_npc_hit_delay(int npc_type, int attack_style, int distance) {
+static int fc_npc_hit_delay(int npc_type, int attack_style, int distance) {
     if (attack_style == ATTACK_MELEE) return 1;
 
     switch (npc_type) {
@@ -1913,21 +1577,12 @@ int fc_npc_hit_delay(int npc_type, int attack_style, int distance) {
 }
 
 /* ======================================================================== */
-/* NPC defence roll (for player attack accuracy against NPC)                 */
-/* ======================================================================== */
-
-int fc_npc_def_roll(int def_level, int def_bonus) {
-    /* NPC defence: (def_level + 9) × (def_bonus + 64) */
-    return (def_level + 9) * (def_bonus + 64);
-}
-
-/* ======================================================================== */
 /* Queue a pending hit                                                       */
 /* ======================================================================== */
 
-int fc_queue_pending_hit(FcPendingHit hits[], int* num_hits, int max_hits,
-                         int damage, int ticks, int style, int source_idx,
-                         int prayer_drain) {
+static int fc_queue_pending_hit(FcPendingHit hits[], int* num_hits, int max_hits,
+                                int damage, int ticks, int style, int source_idx,
+                                int prayer_drain) {
     if (*num_hits >= max_hits) return 0;
     FcPendingHit* h = &hits[*num_hits];
     h->active = 1;
@@ -1961,7 +1616,7 @@ static void record_render_hit(FcState* state, int target_entity_type,
     hit->blocked = blocked;
 }
 
-void fc_resolve_player_pending_hits(FcState* state) {
+static void fc_resolve_player_pending_hits(FcState* state) {
     FcPlayer* p = &state->player;
     int write = 0;
 
@@ -2094,7 +1749,7 @@ static void resolve_npc_death(FcState* state, FcNpc* npc) {
     }
 }
 
-void fc_resolve_npc_pending_hits(FcState* state, int npc_idx) {
+static void fc_resolve_npc_pending_hits(FcState* state, int npc_idx) {
     FcNpc* npc = &state->npcs[npc_idx];
     int write = 0;
 
@@ -2147,8 +1802,8 @@ void fc_resolve_npc_pending_hits(FcState* state, int npc_idx) {
 /* Episode Summary */
 #include <string.h>
 
-void fc_episode_summary_build(const FcState* state, const FcRewardRuntime* runtime,
-                              int episode_length, FcEpisodeSummary* summary) {
+static void fc_episode_summary_build(const FcState* state, const FcRewardRuntime* runtime,
+                                     int episode_length, FcEpisodeSummary* summary) {
     memset(summary, 0, sizeof(*summary));
     summary->episode_length = episode_length;
     summary->wave_reached = state->current_wave;
@@ -2553,7 +2208,7 @@ static const FcItemDef ITEMS[] = {
     {.id=229, .name="Vial", .slot=-1},
 };
 
-const FcItemDef *fc_item_definition(int item_id) {
+static const FcItemDef *fc_item_definition(int item_id) {
     for (unsigned i = 0; i < sizeof(ITEMS) / sizeof(ITEMS[0]); i++)
         if (ITEMS[i].id == item_id) return &ITEMS[i];
     return NULL;
@@ -2630,13 +2285,13 @@ static void reset_supplies(FcPlayer *p, int sharks, int doses) {
     p->selected_food_slot = p->selected_potion_slot = -1;
 }
 
-void fc_set_initial_supplies(FcState *state, int sharks, int prayer_doses) {
+static void fc_set_initial_supplies(FcState *state, int sharks, int prayer_doses) {
     /* Reset-time configuration only, not a gameplay inventory refill API. */
     if (state && state->tick == 0)
         reset_supplies(&state->player, sharks, prayer_doses);
 }
 
-void fc_items_init(FcPlayer *p, const FcLoadout *loadout) {
+static void fc_items_init(FcPlayer *p, const FcLoadout *loadout) {
     memset(p->equipment, 0, sizeof(p->equipment));
     for (int i = 0; i < loadout->equipment_count; i++) {
         const FcItemDef *item = fc_item_definition(loadout->equipment[i]);
@@ -2649,7 +2304,7 @@ void fc_items_init(FcPlayer *p, const FcLoadout *loadout) {
     reset_supplies(p, FC_MAX_SHARKS, FC_MAX_PRAYER_DOSES);
 }
 
-const char *fc_item_result_message(FcItemResult result) {
+static const char *fc_item_result_message(FcItemResult result) {
     switch (result) {
         case FC_ITEM_OK: return "";
         case FC_ITEM_NO_SPACE: return "You don't have enough inventory space.";
@@ -2687,7 +2342,9 @@ static int can_change_items(const FcState *state) {
     return state && !state->terminal && state->player.current_hp > 0;
 }
 
-FcItemResult fc_equip_item(FcState *state, int index) {
+/* Immediate inventory transactions between ticks. They do not advance time,
+ * reset cooldowns, roll RNG, or alter already-launched attacks. */
+static FcItemResult fc_equip_item(FcState *state, int index) {
     if (!can_change_items(state)) return FC_ITEM_BUSY;
     FcPlayer *p = &state->player;
     if (index < 0 || index >= FC_INVENTORY_SLOTS) return FC_ITEM_INVALID;
@@ -2735,7 +2392,7 @@ FcItemResult fc_equip_item(FcState *state, int index) {
     return FC_ITEM_OK;
 }
 
-FcItemResult fc_unequip_item(FcState *state, int slot) {
+static FcItemResult fc_unequip_item(FcState *state, int slot) {
     if (!can_change_items(state)) return FC_ITEM_BUSY;
     if (slot < 0 || slot >= FC_EQUIPMENT_SLOTS ||
         !state->player.equipment[slot].item_id) return FC_ITEM_INVALID;
@@ -2750,7 +2407,7 @@ FcItemResult fc_unequip_item(FcState *state, int slot) {
     return FC_ITEM_OK;
 }
 
-FcItemResult fc_inventory_swap(FcState *state, int first, int second) {
+static FcItemResult fc_inventory_swap(FcState *state, int first, int second) {
     if (!can_change_items(state)) return FC_ITEM_BUSY;
     if (first < 0 || first >= FC_INVENTORY_SLOTS || second < 0 ||
         second >= FC_INVENTORY_SLOTS) return FC_ITEM_INVALID;
@@ -2761,7 +2418,8 @@ FcItemResult fc_inventory_swap(FcState *state, int first, int second) {
     return FC_ITEM_OK;
 }
 
-FcItemResult fc_select_consumable(FcState *state, int slot) {
+/* Select the actual slot consumed by the next canonical food/potion action. */
+static FcItemResult fc_select_consumable(FcState *state, int slot) {
     if (!can_change_items(state)) return FC_ITEM_BUSY;
     if (slot < 0 || slot >= FC_INVENTORY_SLOTS) return FC_ITEM_INVALID;
     int id = state->player.inventory[slot].item_id;
@@ -2771,7 +2429,7 @@ FcItemResult fc_select_consumable(FcState *state, int slot) {
     return FC_ITEM_OK;
 }
 
-void fc_items_consume(FcPlayer *p, int potion) {
+static void fc_items_consume(FcPlayer *p, int potion) {
     int selected = potion ? p->selected_potion_slot : p->selected_food_slot;
     for (int n = -1; n < FC_INVENTORY_SLOTS; n++) {
         int slot = n < 0 ? selected : n;
@@ -2792,7 +2450,7 @@ void fc_items_consume(FcPlayer *p, int potion) {
     else p->sharks_remaining--;
 }
 
-void fc_items_spend_ammo(FcPlayer *p) {
+static void fc_items_spend_ammo(FcPlayer *p) {
     p->ammo_count--;
     FcItemStack *weapon = &p->equipment[FC_EQUIP_SLOT_WEAPON];
     if (weapon->item_id == 12926) weapon->charges--;
@@ -3200,7 +2858,9 @@ static const FcNpcStats NPC_STATS[NPC_TYPE_COUNT] = {
     },
 };
 
-int fc_npc_max_hit_tenths_for_style(const FcNpcStats* stats, int attack_style) {
+/* Unit-explicit style maximum boundaries. Unsupported/invalid styles return
+ * zero. The HP accessor rejects non-integral tenths values by returning zero. */
+static int fc_npc_max_hit_tenths_for_style(const FcNpcStats* stats, int attack_style) {
     if (stats == NULL) return 0;
     switch (attack_style) {
         case ATTACK_MELEE: return stats->melee_max_hit_tenths;
@@ -3210,13 +2870,14 @@ int fc_npc_max_hit_tenths_for_style(const FcNpcStats* stats, int attack_style) {
     }
 }
 
-int fc_npc_max_hit_hp_for_style(const FcNpcStats* stats, int attack_style) {
+static int fc_npc_max_hit_hp_for_style(const FcNpcStats* stats, int attack_style) {
     int max_hit_tenths = fc_npc_max_hit_tenths_for_style(stats, attack_style);
     if (max_hit_tenths < 0 || max_hit_tenths % 10 != 0) return 0;
     return max_hit_tenths / 10;
 }
 
-int fc_npc_stats_valid(const FcNpcStats* stats) {
+/* Returns nonzero when every populated style maximum is valid tenths data. */
+static int fc_npc_stats_valid(const FcNpcStats* stats) {
     if (stats == NULL) return 0;
     const int maxima[] = {
         stats->melee_max_hit_tenths,
@@ -3229,7 +2890,7 @@ int fc_npc_stats_valid(const FcNpcStats* stats) {
     return 1;
 }
 
-const FcNpcStats* fc_npc_get_stats(int npc_type) {
+static const FcNpcStats* fc_npc_get_stats(int npc_type) {
     if (npc_type < 0 || npc_type >= NPC_TYPE_COUNT) return &NPC_STATS[0];
     return &NPC_STATS[npc_type];
 }
@@ -3268,7 +2929,8 @@ static FcAttackType npc_attack_type_for_style(const FcNpcStats* stats,
 /* Spawn                                                                     */
 /* ======================================================================== */
 
-void fc_npc_spawn(FcNpc* npc, int npc_type, int x, int y, int spawn_index) {
+/* Initialize an NPC slot from type and spawn position. */
+static void fc_npc_spawn(FcNpc* npc, int npc_type, int x, int y, int spawn_index) {
     const FcNpcStats* stats = fc_npc_get_stats(npc_type);
 
     npc->active = 1;
@@ -3391,8 +3053,11 @@ static void npc_naive_player_chase_destination(const FcNpc* npc,
     }
 }
 
-int fc_npc_position_can_attack_player(const FcState* state, const FcNpc* npc,
-                                      int candidate_x, int candidate_y) {
+/* True when the NPC could attack the player if its top-left footprint stood
+ * at candidate_x,candidate_y. This checks attack style, range, melee contact,
+ * and static LOS. */
+static int fc_npc_position_can_attack_player(const FcState* state, const FcNpc* npc,
+                                             int candidate_x, int candidate_y) {
     if (!state || !npc || !npc->active || npc->is_dead) return 0;
 
     const FcNpcStats* stats = fc_npc_get_stats(npc->npc_type);
@@ -3436,7 +3101,7 @@ static int npc_dynamic_step_toward_player_bounds(FcState* state, int npc_idx) {
 /* Tz-Kek: split on death — spawn 2 small Tz-Kek                            */
 /* ======================================================================== */
 
-void fc_npc_tz_kek_split(FcState* state, int dead_x, int dead_y) {
+static void fc_npc_tz_kek_split(FcState* state, int dead_x, int dead_y) {
     /* Spawn 2 NPC_TZ_KEK_SM at/near the death position.
      * Do NOT increment npcs_remaining — the parent Tz-Kek was pre-counted as 2
      * at wave spawn time. These children inherit that count and decrement normally
@@ -3494,7 +3159,7 @@ static void launch_npc_attack(FcState* state, FcNpc* npc, int npc_idx,
     int max_hit_hp = fc_npc_max_hit_hp_for_style(stats, attack_style);
     int attack_level = npc_attack_level_for_style(stats, attack_style);
     int attack_bonus = npc_attack_bonus_for_style(stats, attack_style);
-    int attack_roll = fc_npc_attack_roll(attack_level, attack_bonus);
+    int attack_roll = fc_npc_roll(attack_level, attack_bonus);
     FcAttackType attack_type =
         npc_attack_type_for_style(stats, attack_style);
     int defence_roll = fc_player_def_roll(player, attack_type);
@@ -3759,7 +3424,7 @@ static int npc_has_attack_position(FcState* state, FcNpc* npc) {
 /* NPC AI tick — type dispatch                                               */
 /* ======================================================================== */
 
-void fc_npc_tick(FcState* state, int npc_idx) {
+static void fc_npc_tick(FcState* state, int npc_idx) {
     FcNpc* npc = &state->npcs[npc_idx];
     if (!npc->active || npc->is_dead) return;
 
@@ -3825,14 +3490,17 @@ void fc_npc_tick(FcState* state, int npc_idx) {
 /* Tile queries                                                              */
 /* ======================================================================== */
 
-int fc_tile_walkable(int x, int y,
-                     const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
+/* Check if a single tile is walkable (bounds + collision). */
+static int fc_tile_walkable(int x, int y,
+                            const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
     if (x < 0 || x >= FC_ARENA_WIDTH || y < 0 || y >= FC_ARENA_HEIGHT) return 0;
     return walkable[x][y];
 }
 
-int fc_footprint_walkable(int x, int y, int size,
-                          const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
+/* An entity of this size can stand at (x,y) when every tile of its
+ * [x..x+size-1, y..y+size-1] footprint is walkable. */
+static int fc_footprint_walkable(int x, int y, int size,
+                                 const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
     /* Check all tiles in the NPC's [x..x+size-1, y..y+size-1] footprint */
     for (int dx = 0; dx < size; dx++) {
         for (int dy = 0; dy < size; dy++) {
@@ -3846,7 +3514,7 @@ int fc_footprint_walkable(int x, int y, int size,
 /* Dynamic occupancy                                                         */
 /* ======================================================================== */
 
-void fc_clear_occupancy(uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
+static void fc_clear_occupancy(uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
     for (int x = 0; x < FC_ARENA_WIDTH; x++) {
         for (int y = 0; y < FC_ARENA_HEIGHT; y++) {
             occupied[x][y] = 0;
@@ -3854,8 +3522,11 @@ void fc_clear_occupancy(uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
     }
 }
 
-void fc_mark_footprint_occupied(uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-                                int x, int y, int size) {
+/* Mark all in-bounds tiles in a footprint occupied. Out-of-bounds tiles are
+ * ignored here; availability checks still reject out-of-bounds footprints via
+ * the static walkability check. */
+static void fc_mark_footprint_occupied(uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
+                                       int x, int y, int size) {
     for (int dx = 0; dx < size; dx++) {
         for (int dy = 0; dy < size; dy++) {
             int tx = x + dx;
@@ -3868,10 +3539,13 @@ void fc_mark_footprint_occupied(uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT
     }
 }
 
-void fc_build_occupancy(const FcState* state,
-                        uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-                        int ignore_npc_idx,
-                        int ignore_player) {
+/* Build an occupancy grid from the current live entities. Pass ignore_npc_idx
+ * to omit the moving NPC's own current footprint. Set ignore_player to leave
+ * the player's tile free. */
+static void fc_build_occupancy(const FcState* state,
+                               uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
+                               int ignore_npc_idx,
+                               int ignore_player) {
     fc_clear_occupancy(occupied);
 
     if (!ignore_player) {
@@ -3886,7 +3560,8 @@ void fc_build_occupancy(const FcState* state,
     }
 }
 
-int fc_footprint_available_dynamic(
+/* Check static terrain plus a caller-provided dynamic occupancy grid. */
+static int fc_footprint_available_dynamic(
     int x, int y, int size,
     const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
     const uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
@@ -3940,6 +3615,10 @@ static int fc_step_tile_blocked(
            (occupied && occupied[x][y]);
 }
 
+/* Check one sized step using the native client/RSMod leading-edge collision
+ * masks, including the distinct size-1, size-2, and large-actor rules. With an
+ * occupancy grid, occupied tiles behave as whole-tile blockers on the exact
+ * leading-edge cells checked by that rule. */
 static int fc_footprint_step_valid(
     int x, int y, int dx, int dy, int size,
     const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
@@ -4036,7 +3715,7 @@ static int fc_footprint_step_valid(
     return 0;
 }
 
-int fc_footprint_step_walkable(
+static int fc_footprint_step_walkable(
     int x, int y, int dx, int dy, int size,
     const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
     const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
@@ -4044,7 +3723,7 @@ int fc_footprint_step_walkable(
                                    movement_flags, NULL);
 }
 
-int fc_footprint_step_available_dynamic(
+static int fc_footprint_step_available_dynamic(
     int x, int y, int dx, int dy, int size,
     const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
     const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
@@ -4057,7 +3736,11 @@ int fc_footprint_step_available_dynamic(
 /* Size-1 movement (player, small NPCs)                                      */
 /* ======================================================================== */
 
-int fc_move_toward_traced(
+/* Move a size-1 entity from (x,y) toward offset (dx,dy) for up to max_steps,
+ * trying the diagonal first, then x, then y. Returns the number of tiles
+ * moved and records each reached tile in step_x/step_y, up to step_capacity
+ * entries. */
+static int fc_move_toward_traced(
     int* x, int* y, int dx, int dy, int max_steps,
     const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
     const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
@@ -4099,9 +3782,9 @@ int fc_move_toward_traced(
     return steps;
 }
 
-int fc_move_toward(int* x, int* y, int dx, int dy, int max_steps,
-                   const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-                   const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
+static int fc_move_toward(int* x, int* y, int dx, int dy, int max_steps,
+                          const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
+                          const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
     return fc_move_toward_traced(x, y, dx, dy, max_steps, walkable,
                                  movement_flags, NULL, NULL, 0);
 }
@@ -4110,7 +3793,10 @@ int fc_move_toward(int* x, int* y, int dx, int dy, int max_steps,
 /* Size-aware NPC movement                                                   */
 /* ======================================================================== */
 
-int fc_npc_step_toward_sized_dynamic(
+/* One step of a sized footprint toward (target_x, target_y): the diagonal
+ * first, then x, then y, each checked by the sized-step rule against walls
+ * and occupied tiles. Returns 1 if it moved. */
+static int fc_npc_step_toward_sized_dynamic(
     int* x, int* y, int target_x, int target_y, int size,
     const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
     const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
@@ -4146,8 +3832,9 @@ int fc_npc_step_toward_sized_dynamic(
 /* Line of sight — directional projectile collision                         */
 /* ======================================================================== */
 
-int fc_distance_between_areas(int src_x, int src_y, int src_size,
-                              int dst_x, int dst_y, int dst_size) {
+/* Chebyshev distance between the nearest tiles of two rectangular areas. */
+static int fc_distance_between_areas(int src_x, int src_y, int src_size,
+                                     int dst_x, int dst_y, int dst_size) {
     if (src_size <= 0 || dst_size <= 0) return 0;
     int src_max_x = src_x + src_size - 1;
     int src_max_y = src_y + src_size - 1;
@@ -4228,7 +3915,9 @@ static int fc_closest_area_coordinate(int anchor, int other, int size) {
     return other;
 }
 
-int fc_has_los_between_areas(
+/* Footprint-aware LOS using the closest coordinate from each rectangle, as in
+ * the native line validator. */
+static int fc_has_los_between_areas(
     int src_x, int src_y, int src_size,
     int dst_x, int dst_y, int dst_size,
     const uint8_t los_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
@@ -4248,10 +3937,10 @@ int fc_has_los_between_areas(
                                 ray_dst_x, ray_dst_y, los_flags);
 }
 
-int fc_npc_can_melee_player(int player_x, int player_y,
-                            int npc_x, int npc_y, int npc_size,
-                            const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
-                            const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
+static int fc_npc_can_melee_player(int player_x, int player_y,
+                                   int npc_x, int npc_y, int npc_size,
+                                   const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
+                                   const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT]) {
     if (npc_size <= 0) return 0;
     int npc_max_x = npc_x + npc_size - 1;
     int npc_max_y = npc_y + npc_size - 1;
@@ -4414,7 +4103,10 @@ static int fc_bfs_route(
                                 out_x, out_y, max_steps);
 }
 
-int fc_pathfind_bfs_move_near(
+/* Native move-near fallback for human click-to-move. If the exact destination
+ * is unreachable, chooses the reachable tile within ten tiles with the lowest
+ * squared destination distance, breaking ties by route length. */
+static int fc_pathfind_bfs_move_near(
     int sx, int sy, int dx, int dy,
     const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
     const uint8_t movement_flags[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
@@ -4424,7 +4116,9 @@ int fc_pathfind_bfs_move_near(
                         out_x, out_y, max_steps);
 }
 
-int fc_pathfind_attack_position(
+/* Route to the first shortest-path tile outside a target rectangle that has
+ * both the requested attack range and authoritative projectile LOS. */
+static int fc_pathfind_attack_position(
     int sx, int sy, int target_x, int target_y, int target_size,
     int attack_range,
     const uint8_t walkable[FC_ARENA_WIDTH][FC_ARENA_HEIGHT],
@@ -4479,8 +4173,10 @@ static void enforce_post_loss_invariant(FcPlayer* p) {
     p->prayer_drain_counter = 0;
 }
 
-int fc_prayer_drain_tick(FcPlayer* p, int prayer_at_tick_start,
-                         const FcPrayerTransition* transition) {
+/* Drain prayer points based on active prayer and bonus. prayer_at_tick_start
+ * is the prayer before this tick's actions, so 1-tick flicks do not drain. */
+static int fc_prayer_drain_tick(FcPlayer* p, int prayer_at_tick_start,
+                                const FcPrayerTransition* transition) {
     int prayer_before = p->current_prayer;
 
     if (p->current_prayer <= 0) {
@@ -4517,7 +4213,8 @@ int fc_prayer_drain_tick(FcPlayer* p, int prayer_at_tick_start,
     return prayer_before - p->current_prayer;
 }
 
-FcPrayerTransition fc_prayer_apply_action(FcPlayer* p, int prayer_action) {
+/* Apply an FC_PRAYER_* action. */
+static FcPrayerTransition fc_prayer_apply_action(FcPlayer* p, int prayer_action) {
     FcPrayerTransition result = {0};
     result.prior_prayer = p->prayer;
     result.requested_final_prayer = p->prayer;
@@ -4576,7 +4273,10 @@ FcPrayerTransition fc_prayer_apply_action(FcPlayer* p, int prayer_action) {
     return result;
 }
 
-int fc_prayer_apply_loss_tenths(FcPlayer* p, int requested_loss_tenths) {
+/* Apply capped Prayer loss in tenths. Every Prayer-loss source uses this
+ * boundary so depletion always deactivates the overhead and clears the drain
+ * counter. */
+static int fc_prayer_apply_loss_tenths(FcPlayer* p, int requested_loss_tenths) {
     if (p == NULL) return 0;
     int prayer_before = p->current_prayer;
     if (requested_loss_tenths > 0 && p->current_prayer > 0) {
@@ -4588,7 +4288,7 @@ int fc_prayer_apply_loss_tenths(FcPlayer* p, int requested_loss_tenths) {
     return prayer_before - p->current_prayer;
 }
 
-int fc_prayer_potion_restore(int prayer_level) {
+static int fc_prayer_potion_restore(int prayer_level) {
     /* floor(level * 0.25) + 7 points → in tenths */
     return (prayer_level / 4 + 7) * 10;
 }
@@ -4699,7 +4399,7 @@ FcRewardParams fc_reward_default_params(void) {
     return params;
 }
 
-void fc_reward_runtime_reset(FcRewardRuntime* runtime) {
+static void fc_reward_runtime_reset(FcRewardRuntime* runtime) {
     memset(runtime, 0, sizeof(*runtime));
 }
 
@@ -4709,7 +4409,7 @@ static float reward_clamp01(float value) {
     return value;
 }
 
-float fc_reward_player_death_scale(
+static float fc_reward_player_death_scale(
         const FcRewardParams* params, float cave_progress) {
     if (!params->scale_player_death_with_progress) return 1.0f;
 
@@ -4718,7 +4418,7 @@ float fc_reward_player_death_scale(
     return floor + (1.0f - floor) * progress;
 }
 
-float fc_reward_required_work_remaining(const FcState* state) {
+static float fc_reward_required_work_remaining(const FcState* state) {
     if (state->terminal == TERMINAL_CAVE_COMPLETE) {
         return 0.0f;
     }
@@ -4778,7 +4478,7 @@ static float reward_cave_progress(
         ((float)waves_cleared + current_wave_progress) / (float)FC_NUM_WAVES);
 }
 
-void fc_reward_sync_progress_state(
+static void fc_reward_sync_progress_state(
         FcState* state, const FcRewardRuntime* runtime) {
     state->progress_required_work_start = runtime->required_work_at_wave_start;
     state->progress_required_work_remaining = runtime->last_required_work_remaining;
@@ -4787,7 +4487,7 @@ void fc_reward_sync_progress_state(
     state->progress_ticks_since_positive = runtime->ticks_since_positive_progress;
 }
 
-void fc_reward_runtime_begin_episode(
+static void fc_reward_runtime_begin_episode(
         FcRewardRuntime* runtime, FcState* state) {
     fc_reward_runtime_reset(runtime);
     runtime->required_work_at_wave_start = fc_reward_required_work_remaining(state);
@@ -4813,7 +4513,7 @@ static int reward_has_threat(const FcState* state) {
     return 0;
 }
 
-FcRewardBreakdown fc_reward_compute_breakdown(
+static FcRewardBreakdown fc_reward_compute_breakdown(
         const FcState* state, const FcRewardParams* params, FcRewardRuntime* runtime) {
     FcRewardBreakdown out;
     const FcPlayer* p = &state->player;
@@ -5013,13 +4713,13 @@ FcRewardBreakdown fc_reward_compute_breakdown(
  * Adopted from PufferLib OSRS PvP (osrs_pvp_types.h).
  */
 
-void fc_rng_seed(FcState* state, uint32_t seed) {
+static void fc_rng_seed(FcState* state, uint32_t seed) {
     /* XORshift32 cannot have state 0 — if seed is 0, use a fixed nonzero value */
     state->rng_state = (seed != 0) ? seed : 0x12345678u;
     state->rng_seed = seed;
 }
 
-uint32_t fc_rng_next(FcState* state) {
+static uint32_t fc_rng_next(FcState* state) {
     uint32_t x = state->rng_state;
     x ^= x << 13;
     x ^= x >> 17;
@@ -5028,21 +4728,23 @@ uint32_t fc_rng_next(FcState* state) {
     return x;
 }
 
-int fc_rng_int(FcState* state, int max) {
+/* Uniform int in [0, max); 0 when max <= 0. */
+static int fc_rng_int(FcState* state, int max) {
     if (max <= 0) return 0;
     return (int)(fc_rng_next(state) % (uint32_t)max);
 }
 
-float fc_rng_float(FcState* state) {
+/* Uniform float in [0, 1) from the low 24 bits. */
+static float fc_rng_float(FcState* state) {
     return (float)(fc_rng_next(state) & 0x00FFFFFFu) / (float)0x01000000u;
 }
 
 
 /* Spawn */
-int fc_spawn_find_available_footprint(const FcState* state,
-                                      int preferred_x, int preferred_y,
-                                      int size, int max_radius,
-                                      int* out_x, int* out_y) {
+static int fc_spawn_find_available_footprint(const FcState* state,
+                                             int preferred_x, int preferred_y,
+                                             int size, int max_radius,
+                                             int* out_x, int* out_y) {
     uint8_t occupied[FC_ARENA_WIDTH][FC_ARENA_HEIGHT];
     fc_build_occupancy(state, occupied, -1, 0);
 
@@ -5075,7 +4777,7 @@ int fc_spawn_find_available_footprint(const FcState* state,
     return 0;
 }
 
-int fc_spawn_npc_first_free(FcState* state, int npc_type, int x, int y) {
+static int fc_spawn_npc_first_free(FcState* state, int npc_type, int x, int y) {
     for (int slot = 0; slot < FC_MAX_NPCS; slot++) {
         if (state->npcs[slot].active) continue;
         fc_npc_spawn(&state->npcs[slot], npc_type, x, y,
@@ -5308,7 +5010,9 @@ void fc_init(FcState* state) {
     state->active_loadout = FC_ACTIVE_LOADOUT;
 }
 
-void fc_reset(FcState* state, uint32_t seed) {
+/* Start an episode from the seed: seeds the RNG, selects a random wave
+ * rotation, sets up the arena and player, and spawns wave 1 at tick 0. */
+static void fc_reset(FcState* state, uint32_t seed) {
     /* Zero everything first — ensures no stale state, padding is clean */
     memset(state, 0, sizeof(FcState));
 
@@ -5334,18 +5038,22 @@ void fc_reset(FcState* state, uint32_t seed) {
     fc_wave_spawn(state, 1);
 }
 
-void fc_step(FcState* state, const int actions[FC_NUM_ACTION_HEADS]) {
+/* Advance one tick with the canonical core action heads; a terminal episode
+ * stays where it is. */
+static void fc_step(FcState* state, const int actions[FC_NUM_ACTION_HEADS]) {
     if (state->terminal != TERMINAL_NONE) return;  /* episode over */
     fc_tick(state, actions);
 }
 
-void fc_request_set_running(FcState* state, int enabled) {
+/* Canonical client preference request used by playable frontends. Gameplay
+ * movement still occurs only through fc_step(). */
+static void fc_request_set_running(FcState* state, int enabled) {
     if (!state || state->terminal != TERMINAL_NONE) return;
     state->player.is_running = enabled &&
         state->player.run_energy >= FC_RUN_ENERGY_MIN_START;
 }
 
-void fc_destroy(FcState* state) {
+static void fc_destroy(FcState* state) {
     /* Currently no heap allocations. Zero for safety. */
     memset(state, 0, sizeof(FcState));
 }
@@ -5377,7 +5085,10 @@ static void sort_npc_indices(int* indices, int count, const FcState* state) {
     }
 }
 
-int fc_visible_npc_indices(const FcState* state, int out_indices[FC_VISIBLE_NPCS]) {
+/* Fill out_indices with the active NPC array indices currently visible in
+ * policy NPC slots, using the same ordering as fc_write_obs and fc_write_mask.
+ * Returns the number of filled slots, capped at FC_VISIBLE_NPCS. */
+static int fc_visible_npc_indices(const FcState* state, int out_indices[FC_VISIBLE_NPCS]) {
     int active_indices[FC_MAX_NPCS];
     int active_count = 0;
 
@@ -5394,6 +5105,14 @@ int fc_visible_npc_indices(const FcState* state, int out_indices[FC_VISIBLE_NPCS
         out_indices[slot] = active_indices[slot];
     }
     return visible;
+}
+
+/* An already-active run may consume its remaining energy below 1%. Starting
+ * run mode follows the OSRS client/server minimum of one displayed percent. */
+static int fc_player_can_run(const FcPlayer* player) {
+    return player->run_energy > 0 &&
+           (player->is_running ||
+            player->run_energy >= FC_RUN_ENERGY_MIN_START);
 }
 
 static int move_action_valid(const FcState* state, int action) {
@@ -5430,7 +5149,7 @@ static int prayer_action_valid(int action) {
     return action >= 0 && action < FC_PRAYER_DIM;
 }
 
-int fc_eat_action_valid(const FcState* state, int action) {
+static int fc_eat_action_valid(const FcState* state, int action) {
     const FcPlayer* p = &state->player;
 
     if (action < 0 || action >= FC_EAT_DIM) return 0;
@@ -5448,7 +5167,7 @@ int fc_eat_action_valid(const FcState* state, int action) {
     return 0;
 }
 
-int fc_drink_action_valid(const FcState* state, int action) {
+static int fc_drink_action_valid(const FcState* state, int action) {
     const FcPlayer* p = &state->player;
 
     if (action < 0 || action >= FC_DRINK_DIM) return 0;
@@ -5772,10 +5491,21 @@ void fc_write_obs(const FcState* state, float* out) {
     fc_write_reward_features(state, out + FC_REWARD_START);
 }
 
-void fc_apply_obs_ablation(float* out,
-                           int ablate_npc_distance,
-                           int ablate_incoming_aggregates,
-                           int ablate_npc_valid) {
+/* Zero specific observation slots in-place (for obs-ablation experiments).
+ * Apply AFTER fc_write_obs. Each flag, when non-zero, zeroes the
+ * corresponding region of the policy obs (does not touch reward features
+ * or the action mask):
+ *   ablate_npc_distance         — zeroes FC_NPC_DISTANCE for all 8 NPC slots
+ *   ablate_incoming_aggregates  — zeroes the 6 player-block IN_*_1T/2T fields
+ *                                  + the 3 meta-block IN_*_3T fields
+ *   ablate_npc_valid            — zeroes FC_NPC_VALID for all 8 NPC slots
+ *
+ * out must point to the same buffer fc_write_obs filled (length FC_TOTAL_OBS).
+ * No-op when all three flags are 0. */
+static void fc_apply_obs_ablation(float* out,
+                                  int ablate_npc_distance,
+                                  int ablate_incoming_aggregates,
+                                  int ablate_npc_valid) {
     if (ablate_npc_distance) {
         for (int s = 0; s < FC_OBS_NPC_SLOTS; s++) {
             out[FC_OBS_NPC_START + s * FC_OBS_NPC_STRIDE + FC_NPC_DISTANCE] = 0.0f;
@@ -5799,7 +5529,9 @@ void fc_apply_obs_ablation(float* out,
     }
 }
 
-void fc_write_reward_features(const FcState* state, float* out) {
+/* Raw reward features for the current tick (FC_REWARD_FEATURES floats);
+ * fc_reward_compute_breakdown applies the weights. */
+static void fc_write_reward_features(const FcState* state, float* out) {
     memset(out, 0, sizeof(float) * FC_REWARD_FEATURES);
 
     out[FC_RWD_DAMAGE_DEALT]     = (float)state->damage_dealt_this_tick / 1000.0f;
@@ -5865,7 +5597,7 @@ void fc_write_mask(const FcState* state, float* out) {
     }
 }
 
-int fc_is_terminal(const FcState* state) {
+static int fc_is_terminal(const FcState* state) {
     return state->terminal != TERMINAL_NONE;
 }
 
@@ -5873,7 +5605,10 @@ int fc_is_terminal(const FcState* state) {
 /* Render entities                                                           */
 /* ======================================================================== */
 
-void fc_fill_render_entities(const FcState* state, FcRenderEntity* entities, int* count) {
+/* Snapshot of the visible entities for the viewer; entities[] must have room
+ * for FC_MAX_RENDER_ENTITIES. Entity 0 is always the player, followed by every
+ * active NPC and every NPC that died this tick. */
+static void fc_fill_render_entities(const FcState* state, FcRenderEntity* entities, int* count) {
     int idx = 0;
 
     /* Entity 0: player */
@@ -5914,7 +5649,8 @@ void fc_fill_render_entities(const FcState* state, FcRenderEntity* entities, int
     *count = idx;
 }
 
-void fc_fill_render_events(const FcState* state, FcRenderEvents* events) {
+/* Copy the authoritative transition facts captured during the last tick. */
+static void fc_fill_render_events(const FcState* state, FcRenderEvents* events) {
     if (!state || !events) return;
     *events = state->render_events;
 }
@@ -6126,8 +5862,8 @@ static void launch_player_attack(FcState* state, FcNpc* target, int distance) {
     int att_roll = melee ? (player->attack_level + 11) *
         (player->melee_attack_bonus + 64) : fc_player_ranged_attack_roll(player, target);
     const FcNpcStats* target_stats = fc_npc_get_stats(target->npc_type);
-    int def_roll = fc_npc_def_roll(target_stats->def_level,
-                                   melee ? 0 : target_stats->ranged_def_bonus);
+    int def_roll = fc_npc_roll(target_stats->def_level,
+                               melee ? 0 : target_stats->ranged_def_bonus);
     float chance = fc_hit_chance(att_roll, def_roll);
     int hit = fc_rng_float(state) < chance ? 1 : 0;
     int final_max_hit_hp = melee ? (320 + (player->strength_level + 8) *
@@ -6544,7 +6280,7 @@ static void lock_pending_prayers_at_boundary(FcState* state) {
 /* Main tick entry point                                                     */
 /* ======================================================================== */
 
-void fc_tick(FcState* state, const int actions[FC_NUM_ACTION_HEADS]) {
+static void fc_tick(FcState* state, const int actions[FC_NUM_ACTION_HEADS]) {
     state->player.prayer_at_tick_start = state->player.prayer;
     FcPrayerTransition prayer_transition = {0};
 
@@ -6890,7 +6626,7 @@ static const uint8_t WAVE_SPAWN_PATTERNS[FC_NUM_WAVES][FC_MAX_SPAWNS_PER_WAVE] =
  *   SOUTH_EAST: world [2416,2422]x[5080,5086] → local [48,54]x[24,30] center (51,27)
  *   CENTER:     world [2397,2403]x[5085,5091] → local [29,35]x[29,35] center (32,32)
  */
-void fc_spawn_position(int spawn_dir, int* x, int* y) {
+static void fc_spawn_position(int spawn_dir, int* x, int* y) {
     switch (spawn_dir) {
         case SPAWN_SOUTH:      *x = 37; *y = 17; break;
         case SPAWN_SOUTH_WEST: *x = 14; *y = 17; break;
@@ -6924,7 +6660,8 @@ static int fc_wave_spawn_dir(int wave_num, int rotation, int npc_index) {
 /* Spawn wave NPCs into the arena                                            */
 /* ======================================================================== */
 
-void fc_wave_spawn(FcState* state, int wave_num) {
+/* Spawn all NPCs for the given wave using the state's rotation_id. */
+static void fc_wave_spawn(FcState* state, int wave_num) {
     const FcWaveEntry* wave = fc_wave_get(wave_num);
     int rotation = state->rotation_id;
 
@@ -6952,7 +6689,9 @@ void fc_wave_spawn(FcState* state, int wave_num) {
 /* ======================================================================== */
 
 
-int fc_wave_check_advance(FcState* state) {
+/* Once the wave is cleared, flag it and spawn the next wave, or complete the
+ * cave after the last. Returns 1 if a new wave was spawned. */
+static int fc_wave_check_advance(FcState* state) {
     /* Don't advance if wave hasn't started or NPCs still alive */
     if (state->current_wave <= 0) return 0;
     if (state->npcs_remaining > 0) return 0;
