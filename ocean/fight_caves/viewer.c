@@ -1889,7 +1889,7 @@ void fc_player_appearance_free(FcPlayerAppearance *appearance) {
 #define RUNEC_OSRS_INVENTORY_SLOT_H 32.0f
 
 typedef struct RuneCUiStoneRef {
-    int logical_tab;
+    int logical_tab;              /* RuneCUiTab, or -1 for an inert stone */
     const char *stone_asset;
     const char *icon_asset;
     Rectangle rect;
@@ -1903,12 +1903,12 @@ static const RuneCUiStoneRef RUNEC_OSRS_SIDE_STONES[] = {
     {3, "side_stone_highlights_4", "side_icon_inventory", {104, 0, 33, 36}, {104, 0, 33, 36}},
     {4, "side_stone_highlights_4", "side_icon_equipment", {137, 0, 33, 36}, {137, 0, 33, 36}},
     {5, "side_stone_highlights_4", "side_icon_prayer",    {170, 0, 33, 36}, {170, 0, 33, 36}},
-    {6, "side_stone_highlights_1", "side_icon_magic",     {203, 0, 38, 36}, {204, 0, 33, 36}},
-    {8, "side_stone_highlights_2", "side_icon_clan",     {0,   0, 38, 36}, {4,   0, 33, 36}},
-    {9, "side_stone_highlights_4", "side_icon_friends",  {38,  0, 33, 36}, {38,  0, 33, 36}},
+    {-1, "side_stone_highlights_1", "side_icon_magic",    {203, 0, 38, 36}, {204, 0, 33, 36}},
+    {7, "side_stone_highlights_2", "side_icon_clan",     {0,   0, 38, 36}, {4,   0, 33, 36}},
+    {8, "side_stone_highlights_4", "side_icon_friends",  {38,  0, 33, 36}, {38,  0, 33, 36}},
     {-1, "side_stone_highlights_4", "side_icon_grouping", {71,  0, 33, 36}, {71,  0, 33, 36}},
     {-1, "side_stone_highlights_4", "side_icon_logout",   {104, 0, 33, 36}, {104, 0, 33, 36}},
-    {7, "side_stone_highlights_4", "side_icon_options",   {137, 0, 33, 36}, {137, 0, 33, 36}},
+    {6, "side_stone_highlights_4", "side_icon_options",   {137, 0, 33, 36}, {137, 0, 33, 36}},
     {-1, "side_stone_highlights_4", "side_icon_emotes",   {170, 0, 33, 36}, {170, 0, 33, 36}},
     {-1, "side_stone_highlights_3", "side_icon_music",    {203, 0, 38, 36}, {204, 0, 33, 36}},
 };
@@ -2085,85 +2085,6 @@ static const char *const g_ui_asset_names[] = {
     "skill_icon_21",
     "skill_icon_22",
     "skill_icon_23",
-    "standard_spell_on_0",
-    "standard_spell_on_1",
-    "standard_spell_on_2",
-    "standard_spell_on_3",
-    "standard_spell_on_4",
-    "standard_spell_on_5",
-    "standard_spell_on_6",
-    "standard_spell_on_7",
-    "standard_spell_on_8",
-    "standard_spell_on_9",
-    "standard_spell_on_10",
-    "standard_spell_on_11",
-    "standard_spell_on_12",
-    "standard_spell_on_13",
-    "standard_spell_on_14",
-    "standard_spell_on_15",
-    "standard_spell_on_16",
-    "standard_spell_on_17",
-    "standard_spell_on_18",
-    "standard_spell_on_19",
-    "standard_spell_on_20",
-    "standard_spell_on_21",
-    "standard_spell_on_22",
-    "standard_spell_on_23",
-    "standard_spell_on_24",
-    "standard_spell_on_25",
-    "standard_spell_on_26",
-    "standard_spell_on_27",
-    "standard_spell_on_28",
-    "standard_spell_on_29",
-    "standard_spell_on_30",
-    "standard_spell_on_31",
-    "standard_spell_on_32",
-    "standard_spell_on_33",
-    "standard_spell_on_34",
-    "standard_spell_on_35",
-    "standard_spell_on_36",
-    "standard_spell_on_37",
-    "standard_spell_on_38",
-    "standard_spell_on_39",
-    "standard_spell_on_40",
-    "standard_spell_on_41",
-    "standard_spell_on_42",
-    "standard_spell_on_43",
-    "standard_spell_on_44",
-    "standard_spell_on_45",
-    "standard_spell_on_46",
-    "standard_spell_on_47",
-    "standard_spell_on_48",
-    "standard_spell_on_49",
-    "standard_spell_on_50",
-    "standard_spell_on_51",
-    "standard_spell_on_52",
-    "standard_spell_on_53",
-    "standard_spell_on_54",
-    "standard_spell_on_55",
-    "standard_spell_on_56",
-    "standard_spell_on_57",
-    "standard_spell_on_58",
-    "standard_spell_on_60",
-    "standard_spell_on_61",
-    "standard_spell_on_62",
-    "standard_spell_on_63",
-    "standard_spell_on_64",
-    "standard_spell_on_65",
-    "standard_spell_on_66",
-    "standard_spell_on_67",
-    "standard_spell_on_68",
-    "standard_spell_on_69",
-    "standard_spell_on_70",
-    "standard_spell_on_71",
-    "standard_spell_on_72",
-    "standard_spell_on_73",
-    "standard_spell_on_74",
-    "standard_spell_on_75",
-    "standard_spell_on_76",
-    "standard_spell_on_77",
-    "standard_spell_on_78",
-    "standard_spell_on_79",
 };
 
 #define RUNEC_UI_ASSET_COUNT \
@@ -2767,7 +2688,6 @@ typedef enum RuneCUiTab {
     RUNEC_UI_TAB_INVENTORY,
     RUNEC_UI_TAB_EQUIPMENT,
     RUNEC_UI_TAB_PRAYER,
-    RUNEC_UI_TAB_SPELLBOOK,
     RUNEC_UI_TAB_SETTINGS,
     RUNEC_UI_TAB_CLAN_CHAT,
     RUNEC_UI_TAB_FRIENDS,
@@ -2781,7 +2701,6 @@ typedef enum RuneCUiIntentKind {
     RUNEC_UI_INTENT_EQUIPMENT_SLOT,
     RUNEC_UI_INTENT_PRAYER_SLOT,
     RUNEC_UI_INTENT_QUICK_PRAYER_TOGGLE,
-    RUNEC_UI_INTENT_AUTOCAST_SPELL,
     RUNEC_UI_INTENT_SKILL_SLOT,
     RUNEC_UI_INTENT_MINIMAP_CLICK,
     RUNEC_UI_INTENT_RUN_TOGGLE,
@@ -2792,12 +2711,7 @@ typedef enum RuneCUiIntentKind {
     RUNEC_UI_INTENT_WORLD_ACTION,
     RUNEC_UI_INTENT_INVENTORY_ACTION,
     RUNEC_UI_INTENT_EQUIPMENT_ACTION,
-    RUNEC_UI_INTENT_INVENTORY_DRAG,
-    RUNEC_UI_INTENT_SELECTED_ITEM,
-    RUNEC_UI_INTENT_SELECTED_SPELL,
-    RUNEC_UI_INTENT_SELECTED_ITEM_ON_ITEM,
-    RUNEC_UI_INTENT_SELECTED_SPELL_ON_ITEM,
-    RUNEC_UI_INTENT_SELECTED_TARGET_CANCEL
+    RUNEC_UI_INTENT_INVENTORY_DRAG
 } RuneCUiIntentKind;
 
 typedef struct RuneCUiIntent {
@@ -2846,23 +2760,8 @@ typedef enum RuneCUiContextSourceKind {
     RUNEC_UI_CONTEXT_INVENTORY,
     RUNEC_UI_CONTEXT_EQUIPMENT,
     RUNEC_UI_CONTEXT_PRAYER,
-    RUNEC_UI_CONTEXT_SPELL,
     RUNEC_UI_CONTEXT_WORLD
 } RuneCUiContextSourceKind;
-
-typedef enum RuneCUiSelectedTargetKind {
-    RUNEC_UI_SELECTED_NONE = 0,
-    RUNEC_UI_SELECTED_ITEM,
-    RUNEC_UI_SELECTED_SPELL
-} RuneCUiSelectedTargetKind;
-
-typedef struct RuneCUiSelectedTarget {
-    RuneCUiSelectedTargetKind kind;
-    int source_slot;
-    uint32_t source_item_id;
-    char label[48];
-    char verb[24];
-} RuneCUiSelectedTarget;
 
 typedef struct RuneCUiDragState {
     int active;
@@ -2907,7 +2806,6 @@ typedef struct RuneCUiState {
     int context_source_slot;
     uint32_t context_source_item_id;
 
-    RuneCUiSelectedTarget selected_target;
     RuneCUiDragState drag;
 
     RuneCUiMinimapDot minimap_dots[RUNEC_UI_MINIMAP_DOTS];
@@ -2925,13 +2823,6 @@ typedef struct RuneCUiState {
 #define OSRS_GREEN  ((Color){0, 255, 0, 255})
 #define OSRS_RED    ((Color){255, 40, 25, 255})
 #define OSRS_TAB_PRESS_SECONDS 0.12f
-#define RUNEC_UI_SPELL_COUNT 80
-#define RUNEC_UI_SPELL_COLS 8
-#define RUNEC_UI_SPELL_X0 4
-#define RUNEC_UI_SPELL_Y0 6
-#define RUNEC_UI_SPELL_STEP_X 23
-#define RUNEC_UI_SPELL_STEP_Y 24
-#define RUNEC_UI_SPELL_ICON_SIZE 22
 
 typedef struct RuneCUiLayout {
     Rectangle chat;
@@ -2949,104 +2840,6 @@ typedef struct RuneCUiLayout {
     Rectangle side_content;
     Rectangle tab[RUNEC_UI_TAB_COUNT];
 } RuneCUiLayout;
-
-typedef struct RuneCUiSpellSlotRef {
-    const char *name;
-    int standard_icon_frame;
-} RuneCUiSpellSlotRef;
-
-static const RuneCUiSpellSlotRef g_standard_spell_slots[RUNEC_UI_SPELL_COUNT] = {
-    {"Lumbridge Home Teleport", 70},
-    {"Wind Strike", 0},
-    {"Confuse", 50},
-    {"Crossbow Bolt Enchantments", 65},
-    {"Water Strike", 1},
-    {"Lvl-1 Enchant", 33},
-    {"Earth Strike", 2},
-    {"Weaken", 51},
-    {"Fire Strike", 3},
-    {"Bones to Bananas", 45},
-    {"Wind Bolt", 4},
-    {"Curse", 52},
-    {"Bind", 56},
-    {"Low Level Alchemy", 48},
-    {"Water Bolt", 5},
-    {"Varrock Teleport", 20},
-    {"Lvl-2 Enchant", 34},
-    {"Earth Bolt", 6},
-    {"Lumbridge Teleport", 21},
-    {"Telekinetic Grab", 46},
-    {"Fire Bolt", 7},
-    {"Falador Teleport", 22},
-    {"Crumble Undead", 47},
-    {"Teleport to House", 23},
-    {"Wind Blast", 8},
-    {"Superheat Item", 68},
-    {"Camelot Teleport", 24},
-    {"Water Blast", 9},
-    {"Lvl-3 Enchant", 35},
-    {"Iban Blast", 40},
-    {"Snare", 57},
-    {"Magic Dart", 66},
-    {"Ardougne Teleport", 25},
-    {"Earth Blast", 10},
-    {"High Level Alchemy", 49},
-    {"Charge Water Orb", 61},
-    {"Lvl-4 Enchant", 36},
-    {"Watchtower Teleport", 26},
-    {"Fire Blast", 11},
-    {"Charge Earth Orb", 62},
-    {"Bones to Peaches", 69},
-    {"Saradomin Strike", 43},
-    {"Claws of Guthix", 42},
-    {"Flames of Zamorak", 41},
-    {"Trollheim Teleport", 27},
-    {"Wind Wave", 12},
-    {"Charge Fire Orb", 63},
-    {"Water Wave", 13},
-    {"Teleport to Ape Atoll", 28},
-    {"Earth Wave", 14},
-    {"Lvl-5 Enchant", 37},
-    {"Kourend Castle Teleport", 29},
-    {"Charge Air Orb", 64},
-    {"Vulnerability", 53},
-    {"Lvl-6 Enchant", 38},
-    {"Teleport to Target", 67},
-    {"Enfeeble", 54},
-    {"Teleother Lumbridge", 30},
-    {"Fire Wave", 15},
-    {"Entangle", 58},
-    {"Stun", 55},
-    {"Charge", 44},
-    {"Wind Surge", 16},
-    {"Teleother Falador", 31},
-    {"Water Surge", 17},
-    {"Tele Block", 60},
-    {"Lvl-7 Enchant", 39},
-    {"Earth Surge", 18},
-    {"Teleother Camelot", 32},
-    {"Fire Surge", 19},
-    {"Civitas illa Fortis Teleport", 72},
-    {"Jewellery Enchantments", 71},
-    {"Monster Inspect", 73},
-    {"Summon Boat", 75},
-    {"Teleport to Boat", 74},
-    {"Alchemic Divergence", 77},
-    {"Alchemic Convergence", 78},
-    {"Minigame Teleport", 76},
-    {"League Home Teleport", 79},
-    {NULL, -1},
-};
-
-static const char *spell_name(int slot) {
-    if (slot >= 0
-            && slot < (int)(sizeof(g_standard_spell_slots)
-                            / sizeof(g_standard_spell_slots[0]))
-            && g_standard_spell_slots[slot].name) {
-        return g_standard_spell_slots[slot].name;
-    }
-    return TextFormat("Spell %d", slot + 1);
-}
 
 static const Rectangle g_equipment_offsets[FC_EQUIPMENT_SLOTS] = {
     {77, 4, 36, 36},
@@ -3214,7 +3007,6 @@ const char *runec_ui_tab_name(RuneCUiTab tab) {
     case RUNEC_UI_TAB_INVENTORY: return "Inventory";
     case RUNEC_UI_TAB_EQUIPMENT: return "Equipment";
     case RUNEC_UI_TAB_PRAYER: return "Prayer";
-    case RUNEC_UI_TAB_SPELLBOOK: return "Spellbook";
     case RUNEC_UI_TAB_SETTINGS: return "Settings";
     case RUNEC_UI_TAB_CLAN_CHAT: return "Clan Chat";
     case RUNEC_UI_TAB_FRIENDS: return "Friends";
@@ -3324,13 +3116,6 @@ void runec_ui_close_context(RuneCUiState *ui) {
     ui->context_source_item_id = 0;
 }
 
-void runec_ui_clear_selected_target(RuneCUiState *ui) {
-    if (!ui)
-        return;
-    memset(&ui->selected_target, 0, sizeof(ui->selected_target));
-    ui->selected_target.source_slot = -1;
-}
-
 void runec_ui_open_world_context(RuneCUiState *ui, Vector2 pos, int npc_type, int can_walk) {
     FcNpcMenuInfo npc = fc_menu_npc_info(npc_type);
     const char *actions[4];
@@ -3343,7 +3128,6 @@ void runec_ui_open_world_context(RuneCUiState *ui, Vector2 pos, int npc_type, in
     ui->context_combat_level = npc.level;
     ui->context_source_kind = RUNEC_UI_CONTEXT_WORLD;
     ui->context_target_color = OSRS_YELLOW;
-    runec_ui_clear_selected_target(ui);
 }
 
 /* Menu for one of the viewer's prayer buttons; picking the verb reports
@@ -3384,34 +3168,10 @@ static FcMenuLayout context_layout(const RuneCUiState *ui) {
         GetScreenWidth(), GetScreenHeight(), (int)ceilf(width), ui->context_action_count);
 }
 
-static void set_selected_item_target(RuneCUiState *ui, int slot) {
-    if (!ui || slot < 0 || slot >= FC_INVENTORY_SLOTS
-            || !ui->inventory[slot].enabled)
-        return;
-    ui->selected_target.kind = RUNEC_UI_SELECTED_ITEM;
-    ui->selected_target.source_slot = slot;
-    ui->selected_target.source_item_id = ui->inventory[slot].item_id;
-    copy_text(ui->selected_target.label, sizeof(ui->selected_target.label),
-              ui->inventory[slot].label);
-    copy_text(ui->selected_target.verb, sizeof(ui->selected_target.verb), "Use");
-}
-
-static void set_selected_spell_target(RuneCUiState *ui, int slot,
-                                      const char *name) {
-    if (!ui || slot < 0)
-        return;
-    ui->selected_target.kind = RUNEC_UI_SELECTED_SPELL;
-    ui->selected_target.source_slot = slot;
-    ui->selected_target.source_item_id = 0;
-    copy_text(ui->selected_target.label, sizeof(ui->selected_target.label), name);
-    copy_text(ui->selected_target.verb, sizeof(ui->selected_target.verb), "Cast");
-}
-
 void runec_ui_init(RuneCUiState *ui) {
     memset(ui, 0, sizeof(*ui));
     ui->active_tab = RUNEC_UI_TAB_SKILLS;
     ui->context_source_slot = -1;
-    ui->selected_target.source_slot = -1;
     ui->drag.source_slot = -1;
     const char *start_tab = getenv("RUNEC_UI_START_TAB");
     if (start_tab && start_tab[0]) {
@@ -3500,28 +3260,13 @@ static int handle_context_click(RuneCUiState *ui, Vector2 mouse) {
             if (ui->context_source_kind == RUNEC_UI_CONTEXT_WORLD) {
                 set_intent(ui, RUNEC_UI_INTENT_WORLD_ACTION, i, 0, mouse);
             } else if (ui->context_source_kind == RUNEC_UI_CONTEXT_INVENTORY) {
-                if (strcmp(action, "Use") == 0) {
-                    set_selected_item_target(ui, slot);
-                    set_intent(ui, RUNEC_UI_INTENT_SELECTED_ITEM, slot,
-                               (int)ui->context_source_item_id, mouse);
-                } else {
-                    set_intent(ui, RUNEC_UI_INTENT_INVENTORY_ACTION, slot, i, mouse);
-                }
+                set_intent(ui, RUNEC_UI_INTENT_INVENTORY_ACTION, slot, i, mouse);
             } else if (ui->context_source_kind == RUNEC_UI_CONTEXT_EQUIPMENT) {
                 set_intent(ui, RUNEC_UI_INTENT_EQUIPMENT_ACTION, slot, i, mouse);
             } else if (ui->context_source_kind == RUNEC_UI_CONTEXT_PRAYER) {
                 /* Prayer menus offer Activate or Deactivate, then Cancel. */
                 set_intent(ui, RUNEC_UI_INTENT_PRAYER_SLOT, slot,
                            strcmp(action, "Deactivate") == 0 ? -1 : 1, mouse);
-                copy_text(ui->last_intent.text, sizeof(ui->last_intent.text),
-                          ui->context_title);
-            } else if (ui->context_source_kind == RUNEC_UI_CONTEXT_SPELL
-                    && strcmp(action, "Cast") == 0) {
-                set_selected_spell_target(ui, slot, ui->context_title);
-                set_intent(ui, RUNEC_UI_INTENT_SELECTED_SPELL, slot, 0, mouse);
-            } else if (ui->context_source_kind == RUNEC_UI_CONTEXT_SPELL
-                    && strcmp(action, "Autocast") == 0) {
-                set_intent(ui, RUNEC_UI_INTENT_AUTOCAST_SPELL, slot, 0, mouse);
                 copy_text(ui->last_intent.text, sizeof(ui->last_intent.text),
                           ui->context_title);
             } else {
@@ -3558,13 +3303,6 @@ static const RuneCUiGrid g_inventory_grid = {
     {RUNEC_OSRS_INVENTORY_SLOT_X, RUNEC_OSRS_INVENTORY_SLOT_Y,
      RUNEC_OSRS_INVENTORY_SLOT_W, RUNEC_OSRS_INVENTORY_SLOT_H},
     RUNEC_OSRS_INVENTORY_SLOT_STEP_X, RUNEC_OSRS_INVENTORY_SLOT_STEP_Y,
-};
-
-static const RuneCUiGrid g_spellbook_grid = {
-    RUNEC_UI_SPELL_COUNT, RUNEC_UI_SPELL_COLS,
-    {RUNEC_UI_SPELL_X0, RUNEC_UI_SPELL_Y0,
-     RUNEC_UI_SPELL_ICON_SIZE, RUNEC_UI_SPELL_ICON_SIZE},
-    RUNEC_UI_SPELL_STEP_X, RUNEC_UI_SPELL_STEP_Y,
 };
 
 static Rectangle grid_cell_rect(const RuneCUiLayout *layout,
@@ -3652,15 +3390,6 @@ static void update_tab_press_timers(RuneCUiState *ui, float dt) {
         if (ui->tab_press_timer[i] < 0.0f)
             ui->tab_press_timer[i] = 0.0f;
     }
-}
-
-static int handle_selected_target_cancel(RuneCUiState *ui) {
-    if (ui->selected_target.kind == RUNEC_UI_SELECTED_NONE ||
-        !IsKeyPressed(KEY_ESCAPE))
-        return 0;
-    runec_ui_clear_selected_target(ui);
-    ui->last_intent.kind = RUNEC_UI_INTENT_SELECTED_TARGET_CANCEL;
-    return 1;
 }
 
 static int handle_drag_release(RuneCUiState *ui,
@@ -3784,19 +3513,6 @@ static int handle_inventory_click(RuneCUiState *ui,
     int slot = grid_index_at(layout, &g_inventory_grid, mouse);
     if (slot < 0)
         return 0;
-    if (ui->selected_target.kind == RUNEC_UI_SELECTED_ITEM ||
-        ui->selected_target.kind == RUNEC_UI_SELECTED_SPELL) {
-        set_intent(ui, ui->selected_target.kind == RUNEC_UI_SELECTED_ITEM
-                           ? RUNEC_UI_INTENT_SELECTED_ITEM_ON_ITEM
-                           : RUNEC_UI_INTENT_SELECTED_SPELL_ON_ITEM,
-                   ui->selected_target.source_slot, slot, mouse);
-        snprintf(ui->last_intent.text, sizeof(ui->last_intent.text),
-                 "%s -> %s", ui->selected_target.label,
-                 ui->inventory[slot].enabled
-                    ? ui->inventory[slot].label : "slot");
-        runec_ui_clear_selected_target(ui);
-        return 1;
-    }
     ui->drag.active = 1;
     ui->drag.source_kind = RUNEC_UI_CONTEXT_INVENTORY;
     ui->drag.source_slot = slot;
@@ -3814,19 +3530,6 @@ static int handle_equipment_click(RuneCUiState *ui,
     ui->drag.source_kind = RUNEC_UI_CONTEXT_EQUIPMENT;
     ui->drag.source_slot = slot;
     ui->drag.start = mouse;
-    return 1;
-}
-
-static int handle_spellbook_click(RuneCUiState *ui,
-                                  const RuneCUiLayout *layout,
-                                  Vector2 mouse) {
-    int slot = grid_index_at(layout, &g_spellbook_grid, mouse);
-    if (slot < 0)
-        return 0;
-    set_selected_spell_target(ui, slot, spell_name(slot));
-    set_intent(ui, RUNEC_UI_INTENT_SELECTED_SPELL, slot, 0, mouse);
-    copy_text(ui->last_intent.text, sizeof(ui->last_intent.text),
-              spell_name(slot));
     return 1;
 }
 
@@ -3854,8 +3557,6 @@ static int handle_active_tab_click(RuneCUiState *ui,
         return handle_inventory_click(ui, layout, mouse);
     case RUNEC_UI_TAB_EQUIPMENT:
         return handle_equipment_click(ui, layout, mouse);
-    case RUNEC_UI_TAB_SPELLBOOK:
-        return handle_spellbook_click(ui, layout, mouse);
     case RUNEC_UI_TAB_SKILLS:
         return handle_skills_click(ui, layout, mouse);
     default:
@@ -3881,7 +3582,6 @@ static int handle_context_menu_open(RuneCUiState *ui,
     if (!IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) ||
         !mouse_over_ui(layout, mouse))
         return 0;
-    runec_ui_clear_selected_target(ui);
 
     if (ui->active_tab == RUNEC_UI_TAB_COMBAT) {
         const RuneCUiCombatStyleOption *style =
@@ -3937,15 +3637,6 @@ static int handle_context_menu_open(RuneCUiState *ui,
             return 1;
         }
     }
-    if (ui->active_tab == RUNEC_UI_TAB_SPELLBOOK) {
-        int slot = grid_index_at(layout, &g_spellbook_grid, mouse);
-        if (slot >= 0) {
-            static const char *actions[] = {"Cast", "Autocast", "Examine"};
-            set_context(ui, mouse, spell_name(slot), actions, 3);
-            set_context_source(ui, RUNEC_UI_CONTEXT_SPELL, slot, 0);
-            return 1;
-        }
-    }
 
     static const char *actions[] = {"Cancel"};
     set_context(ui, mouse, "RuneC", actions, 1);
@@ -3971,8 +3662,7 @@ int runec_ui_handle_input(RuneCUiState *ui, int screen_w, int screen_h) {
         return 1;
     }
 
-    if (handle_selected_target_cancel(ui) ||
-        handle_drag_release(ui, &layout, mouse) ||
+    if (handle_drag_release(ui, &layout, mouse) ||
         handle_primary_click(ui, &layout, mouse) ||
         handle_context_menu_open(ui, &layout, mouse))
         return 1;
@@ -4300,20 +3990,6 @@ static void draw_equipment(const RuneCUiState *ui, const RuneCUiLayout *layout) 
     }
 }
 
-static void draw_spellbook(const RuneCUiState *ui, const RuneCUiLayout *layout) {
-    for (int i = 0; i < RUNEC_UI_SPELL_COUNT; i++) {
-        Rectangle r = grid_cell_rect(layout, &g_spellbook_grid, i);
-        if (!g_standard_spell_slots[i].name)
-            continue;
-        DrawRectangleRec(r, (Color){12, 12, 28, 105});
-        char name[32];
-        snprintf(name, sizeof(name), "standard_spell_on_%d",
-                 g_standard_spell_slots[i].standard_icon_frame);
-        draw_asset_centered(ui, name, r, RUNEC_UI_SPELL_ICON_SIZE,
-                            RUNEC_UI_SPELL_ICON_SIZE, WHITE);
-    }
-}
-
 static void draw_skills(const RuneCUiState *ui, const RuneCUiLayout *layout) {
     int count = (int)(sizeof(RUNEC_OSRS_SKILLS) / sizeof(RUNEC_OSRS_SKILLS[0]));
     for (int i = 0; i < count; i++) {
@@ -4444,9 +4120,6 @@ static void draw_side(RuneCUiState *ui, const RuneCUiLayout *layout) {
     case RUNEC_UI_TAB_PRAYER:
         /* The viewer draws its protection-prayer tab over the content. */
         break;
-    case RUNEC_UI_TAB_SPELLBOOK:
-        draw_spellbook(ui, layout);
-        break;
     case RUNEC_UI_TAB_SKILLS:
         draw_skills(ui, layout);
         break;
@@ -4509,7 +4182,8 @@ void runec_ui_draw_context(const RuneCUiState *ui) {
     EndScissorMode();
 }
 
-static void draw_selected_target(const RuneCUiState *ui) {
+/* The inventory item being dragged, under the cursor. */
+static void draw_dragged_item(const RuneCUiState *ui) {
     if (ui->drag.active && ui->drag.source_kind == RUNEC_UI_CONTEXT_INVENTORY
             && ui->drag.source_slot >= 0
             && ui->drag.source_slot < FC_INVENTORY_SLOTS
@@ -4521,19 +4195,6 @@ static void draw_selected_target(const RuneCUiState *ui) {
         DrawRectangleRec(r, (Color){0, 0, 0, 80});
         draw_inventory_item(ui, &ui->inventory[ui->drag.source_slot], r);
     }
-    if (ui->selected_target.kind == RUNEC_UI_SELECTED_NONE)
-        return;
-    Vector2 mouse = GetMousePosition();
-    char text[96];
-    snprintf(text, sizeof(text), "%s %s ->", ui->selected_target.verb,
-             ui->selected_target.label);
-    Font font = runec_ui_font_for_size(&ui->assets, 12.0f);
-    int width = (int)ceilf(MeasureTextEx(
-        font, text, 12.0f, 0.0f).x) + 10;
-    Rectangle box = {mouse.x + 12, mouse.y + 12, (float)width, 20};
-    DrawRectangleRec(box, (Color){28, 23, 17, 230});
-    DrawRectangleLinesEx(box, 1, (Color){170, 137, 72, 255});
-    draw_text_shadow(ui, text, box.x + 5, box.y + 4, 11, OSRS_YELLOW);
 }
 
 void runec_ui_draw(RuneCUiState *ui, int screen_w, int screen_h) {
@@ -4543,7 +4204,7 @@ void runec_ui_draw(RuneCUiState *ui, int screen_w, int screen_h) {
     draw_chat_panel_chrome(ui, &layout);
     draw_minimap(ui, &layout);
     draw_side(ui, &layout);
-    draw_selected_target(ui);
+    draw_dragged_item(ui);
 }
 
 Rectangle runec_ui_chat_panel_rect(int screen_w, int screen_h) {
@@ -7561,14 +7222,14 @@ static void handle_runec_ui_intent(ViewerState* v) {
             use_inventory_slot(v, intent->primary);
             break;
         case RUNEC_UI_INTENT_INVENTORY_ACTION:
+            /* The menu offers the slot's left-click verb, then Examine. */
             if (strcmp(intent->text, "Examine") == 0) {
                 snprintf(v->item_message, sizeof(v->item_message), "%s",
                          v->ui.inventory[intent->primary].label);
                 v->item_message_seconds = 4.0f;
-            }
-            if (strcmp(intent->text, "Wear") == 0 || strcmp(intent->text, "Wield") == 0 ||
-                strcmp(intent->text, "Eat") == 0 || strcmp(intent->text, "Drink") == 0)
+            } else {
                 use_inventory_slot(v, intent->primary);
+            }
             break;
         case RUNEC_UI_INTENT_EQUIPMENT_ACTION:
             if (strcmp(intent->text, "Examine") == 0) {
