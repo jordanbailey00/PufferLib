@@ -390,8 +390,10 @@ def test_config_contains_only_supported_native_settings():
     config.read(REPO_ROOT / "config" / "fight_caves.ini")
     assert set(config.sections()) == {"base", "env", "vec", "train", "policy", "sweep"}
     binding = (ENV_ROOT / "binding.c").read_text()
+    core = (ENV_ROOT / "core.h").read_text()
     env_keys = set(re.findall(r'kwargs,\s*"([^"]+)"', binding))
-    assert set(config["env"]) <= env_keys
+    reward_keys = set(re.findall(r'\{"(\w+)",\s*offsetof\(FcRewardParams,', core))
+    assert set(config["env"]) <= env_keys | reward_keys
     for section in config.sections():
         if section == "env":
             continue

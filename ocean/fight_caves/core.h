@@ -4598,45 +4598,104 @@ int fc_prayer_potion_restore(int prayer_level) {
 /* Reward */
 #include <string.h>
 
+/* Every FcRewardParams field: its [env] key in config/fight_caves.ini, whether
+ * it is an int, and its default. The adapter and the viewer read the keys. */
+typedef struct {
+    const char* key;
+    size_t offset;          /* offsetof(FcRewardParams, field) */
+    int is_int;
+    float default_value;
+} FcRewardSetting;
+
+static const FcRewardSetting FC_REWARD_SETTINGS[] = {
+    {"w_damage_dealt",
+     offsetof(FcRewardParams, w_damage_dealt), 0, 0.0f},
+    {"w_progress",
+     offsetof(FcRewardParams, w_progress), 0, 0.001f},
+    {"negative_progress_multiplier",
+     offsetof(FcRewardParams, negative_progress_multiplier), 0, 1.0f},
+    {"w_damage_taken",
+     offsetof(FcRewardParams, w_damage_taken), 0, -0.25f},
+    {"w_npc_kill",
+     offsetof(FcRewardParams, w_npc_kill), 0, 0.0f},
+    {"w_wave_clear",
+     offsetof(FcRewardParams, w_wave_clear), 0, 0.0f},
+    {"w_jad_kill",
+     offsetof(FcRewardParams, w_jad_kill), 0, 0.0f},
+    {"w_cave_complete",
+     offsetof(FcRewardParams, w_cave_complete), 0, 1.0f},
+    {"w_player_death",
+     offsetof(FcRewardParams, w_player_death), 0, -1.0f},
+    {"scale_player_death_with_progress",
+     offsetof(FcRewardParams, scale_player_death_with_progress), 1, 0},
+    {"player_death_min_scale",
+     offsetof(FcRewardParams, player_death_min_scale), 0, 0.1f},
+    {"w_correct_jad_prayer",
+     offsetof(FcRewardParams, w_correct_jad_prayer), 0, 0.0f},
+    {"w_correct_danger_prayer",
+     offsetof(FcRewardParams, w_correct_danger_prayer), 0, 0.005f},
+    {"w_prayer_lost",
+     offsetof(FcRewardParams, w_prayer_lost), 0, -0.02f},
+    {"w_invalid_action",
+     offsetof(FcRewardParams, w_invalid_action), 0, -0.1f},
+    {"w_tick_penalty",
+     offsetof(FcRewardParams, w_tick_penalty), 0, -0.0001f},
+
+    {"shape_unnecessary_prayer_penalty",
+     offsetof(FcRewardParams, shape_unnecessary_prayer_penalty), 0, 0.0f},
+    {"shape_wave_stall_base_penalty",
+     offsetof(FcRewardParams, shape_wave_stall_base_penalty), 0, 0.0f},
+    {"shape_wave_stall_cap",
+     offsetof(FcRewardParams, shape_wave_stall_cap), 0, 0.0f},
+    {"shape_jad_heal_penalty",
+     offsetof(FcRewardParams, shape_jad_heal_penalty), 0, 0.0f},
+    {"shape_npc_heal_penalty",
+     offsetof(FcRewardParams, shape_npc_heal_penalty), 0, 0.0f},
+    {"shape_no_progress_penalty_1",
+     offsetof(FcRewardParams, shape_no_progress_penalty_1), 0, -0.001f},
+    {"shape_no_progress_penalty_2",
+     offsetof(FcRewardParams, shape_no_progress_penalty_2), 0, -0.005f},
+    {"shape_no_progress_penalty_3",
+     offsetof(FcRewardParams, shape_no_progress_penalty_3), 0, -0.02f},
+    {"shape_no_attack_base_penalty",
+     offsetof(FcRewardParams, shape_no_attack_base_penalty), 0, -0.005f},
+    {"shape_no_attack_wave_scale",
+     offsetof(FcRewardParams, shape_no_attack_wave_scale), 0, 0.05f},
+
+    {"shape_wave_stall_start",
+     offsetof(FcRewardParams, shape_wave_stall_start), 1, 0},
+    {"shape_wave_stall_ramp_interval",
+     offsetof(FcRewardParams, shape_wave_stall_ramp_interval), 1, 0},
+    {"shape_no_progress_start_1",
+     offsetof(FcRewardParams, shape_no_progress_start_1), 1, 800},
+    {"shape_no_progress_start_2",
+     offsetof(FcRewardParams, shape_no_progress_start_2), 1, 1600},
+    {"shape_no_progress_start_3",
+     offsetof(FcRewardParams, shape_no_progress_start_3), 1, 2400},
+    {"shape_no_attack_start",
+     offsetof(FcRewardParams, shape_no_attack_start), 1, 50},
+};
+#define FC_REWARD_SETTING_COUNT \
+    ((int)(sizeof(FC_REWARD_SETTINGS) / sizeof(FC_REWARD_SETTINGS[0])))
+_Static_assert(sizeof(FC_REWARD_SETTINGS) / sizeof(FC_REWARD_SETTINGS[0]) ==
+               sizeof(FcRewardParams) / sizeof(float),
+               "FC_REWARD_SETTINGS needs one row per FcRewardParams field");
+
+/* Store a value in the setting's field: ints truncate, floats round to float. */
+static void fc_reward_setting_store(FcRewardParams* params,
+                                    const FcRewardSetting* setting,
+                                    double value) {
+    char* field = (char*)params + setting->offset;
+    if (setting->is_int) *(int*)field = (int)value;
+    else *(float*)field = (float)value;
+}
+
 FcRewardParams fc_reward_default_params(void) {
     FcRewardParams params;
     memset(&params, 0, sizeof(params));
-
-    params.w_damage_dealt = 0.0f;
-    params.w_progress = 0.001f;
-    params.negative_progress_multiplier = 1.0f;
-    params.w_damage_taken = -0.25f;
-    params.w_npc_kill = 0.0f;
-    params.w_wave_clear = 0.0f;
-    params.w_jad_kill = 0.0f;
-    params.w_cave_complete = 1.0f;
-    params.w_player_death = -1.0f;
-    params.scale_player_death_with_progress = 0;
-    params.player_death_min_scale = 0.1f;
-    params.w_correct_jad_prayer = 0.0f;
-    params.w_correct_danger_prayer = 0.005f;
-    params.w_prayer_lost = -0.02f;
-    params.w_invalid_action = -0.1f;
-    params.w_tick_penalty = -0.0001f;
-
-    params.shape_unnecessary_prayer_penalty = 0.0f;
-    params.shape_wave_stall_base_penalty = 0.0f;
-    params.shape_wave_stall_cap = 0.0f;
-    params.shape_jad_heal_penalty = 0.0f;
-    params.shape_npc_heal_penalty = 0.0f;
-    params.shape_no_progress_penalty_1 = -0.001f;
-    params.shape_no_progress_penalty_2 = -0.005f;
-    params.shape_no_progress_penalty_3 = -0.02f;
-    params.shape_no_attack_base_penalty = -0.005f;
-    params.shape_no_attack_wave_scale = 0.05f;
-
-    params.shape_wave_stall_start = 0;
-    params.shape_wave_stall_ramp_interval = 0;
-    params.shape_no_progress_start_1 = 800;
-    params.shape_no_progress_start_2 = 1600;
-    params.shape_no_progress_start_3 = 2400;
-    params.shape_no_attack_start = 50;
-
+    for (int i = 0; i < FC_REWARD_SETTING_COUNT; i++)
+        fc_reward_setting_store(&params, &FC_REWARD_SETTINGS[i],
+                                FC_REWARD_SETTINGS[i].default_value);
     return params;
 }
 

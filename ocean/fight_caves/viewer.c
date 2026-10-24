@@ -36,7 +36,6 @@
 #include "core.h"
 #undef FC_CORE_IMPLEMENTATION
 
-#include <ctype.h>
 #include <errno.h>
 #include <float.h>
 #include <math.h>
@@ -8195,64 +8194,6 @@ static int float_near(float a, float b) {
     return fabsf(a - b) < 0.0001f;
 }
 
-static char* trim_ascii(char* s) {
-    while (*s && isspace((unsigned char)*s)) s++;
-    if (*s == '\0') return s;
-
-    char* end = s + strlen(s) - 1;
-    while (end >= s && isspace((unsigned char)*end)) {
-        *end = '\0';
-        end--;
-    }
-    return s;
-}
-
-static void reward_params_apply_key(FcRewardParams* params,
-                                    const char* key,
-                                    const char* value) {
-    if (strcmp(key, "w_damage_dealt") == 0) params->w_damage_dealt = strtof(value, NULL);
-    else if (strcmp(key, "w_progress") == 0) params->w_progress = strtof(value, NULL);
-    else if (strcmp(key, "negative_progress_multiplier") == 0) params->negative_progress_multiplier = strtof(value, NULL);
-    else if (strcmp(key, "w_damage_taken") == 0) params->w_damage_taken = strtof(value, NULL);
-    else if (strcmp(key, "w_npc_kill") == 0) params->w_npc_kill = strtof(value, NULL);
-    else if (strcmp(key, "w_wave_clear") == 0) params->w_wave_clear = strtof(value, NULL);
-    else if (strcmp(key, "w_jad_kill") == 0) params->w_jad_kill = strtof(value, NULL);
-    else if (strcmp(key, "w_cave_complete") == 0) params->w_cave_complete = strtof(value, NULL);
-    else if (strcmp(key, "w_player_death") == 0) params->w_player_death = strtof(value, NULL);
-    else if (strcmp(key, "scale_player_death_with_progress") == 0) params->scale_player_death_with_progress = (int)strtol(value, NULL, 10);
-    else if (strcmp(key, "player_death_min_scale") == 0) params->player_death_min_scale = strtof(value, NULL);
-    else if (strcmp(key, "w_correct_jad_prayer") == 0) params->w_correct_jad_prayer = strtof(value, NULL);
-    else if (strcmp(key, "w_correct_danger_prayer") == 0) params->w_correct_danger_prayer = strtof(value, NULL);
-    else if (strcmp(key, "w_prayer_lost") == 0) params->w_prayer_lost = strtof(value, NULL);
-    else if (strcmp(key, "w_invalid_action") == 0) params->w_invalid_action = strtof(value, NULL);
-    else if (strcmp(key, "w_tick_penalty") == 0) params->w_tick_penalty = strtof(value, NULL);
-    else if (strcmp(key, "shape_unnecessary_prayer_penalty") == 0) params->shape_unnecessary_prayer_penalty = strtof(value, NULL);
-    else if (strcmp(key, "shape_wave_stall_base_penalty") == 0) params->shape_wave_stall_base_penalty = strtof(value, NULL);
-    else if (strcmp(key, "shape_wave_stall_cap") == 0) params->shape_wave_stall_cap = strtof(value, NULL);
-    else if (strcmp(key, "shape_wave_stall_start") == 0) params->shape_wave_stall_start = (int)strtol(value, NULL, 10);
-    else if (strcmp(key, "shape_wave_stall_ramp_interval") == 0) params->shape_wave_stall_ramp_interval = (int)strtol(value, NULL, 10);
-    else if (strcmp(key, "shape_jad_heal_penalty") == 0) params->shape_jad_heal_penalty = strtof(value, NULL);
-    else if (strcmp(key, "shape_npc_heal_penalty") == 0) params->shape_npc_heal_penalty = strtof(value, NULL);
-    else if (strcmp(key, "shape_no_progress_penalty_1") == 0) params->shape_no_progress_penalty_1 = strtof(value, NULL);
-    else if (strcmp(key, "shape_no_progress_penalty_2") == 0) params->shape_no_progress_penalty_2 = strtof(value, NULL);
-    else if (strcmp(key, "shape_no_progress_penalty_3") == 0) params->shape_no_progress_penalty_3 = strtof(value, NULL);
-    else if (strcmp(key, "shape_no_attack_base_penalty") == 0) params->shape_no_attack_base_penalty = strtof(value, NULL);
-    else if (strcmp(key, "shape_no_attack_wave_scale") == 0) params->shape_no_attack_wave_scale = strtof(value, NULL);
-    else if (strcmp(key, "shape_no_progress_start_1") == 0) params->shape_no_progress_start_1 = (int)strtol(value, NULL, 10);
-    else if (strcmp(key, "shape_no_progress_start_2") == 0) params->shape_no_progress_start_2 = (int)strtol(value, NULL, 10);
-    else if (strcmp(key, "shape_no_progress_start_3") == 0) params->shape_no_progress_start_3 = (int)strtol(value, NULL, 10);
-    else if (strcmp(key, "shape_no_attack_start") == 0) params->shape_no_attack_start = (int)strtol(value, NULL, 10);
-}
-
-static void initial_supplies_apply_key(ViewerState* v,
-                                       const char* key,
-                                       const char* value) {
-    if (strcmp(key, "initial_sharks") == 0)
-        v->initial_sharks = (int)strtol(value, NULL, 10);
-    else if (strcmp(key, "initial_prayer_doses") == 0)
-        v->initial_prayer_doses = (int)strtol(value, NULL, 10);
-}
-
 static void apply_initial_supplies(ViewerState* v) {
     if (v->initial_sharks < 0) v->initial_sharks = 0;
     if (v->initial_sharks > FC_MAX_SHARKS) v->initial_sharks = FC_MAX_SHARKS;
@@ -8262,60 +8203,21 @@ static void apply_initial_supplies(ViewerState* v) {
     fc_set_initial_supplies(&v->state, v->initial_sharks, v->initial_prayer_doses);
 }
 
+/* Manual play reads the [env] section of config/fight_caves.ini the way
+ * puf_init does, or keeps the defaults when there is no config file. */
 static void load_reward_params(ViewerState* v) {
-    v->reward_params = fc_reward_default_params();
-    v->initial_sharks = 0;
-    v->initial_prayer_doses = 0;
-    v->reward_config_loaded = 0;
-    snprintf(v->reward_config_path, sizeof(v->reward_config_path), "%s", "defaults");
-
-    {
-        char config_path[FC_ASSET_PATH_MAX];
-        FILE* f;
-        if (!fc_repo_resolve_path("config/fight_caves.ini",
-                                  config_path, sizeof(config_path))) {
-            return;
-        }
-        f = fopen(config_path, "r");
-        if (!f) return;
-
-        char line[512];
-        int in_env = 0;
-        while (fgets(line, sizeof(line), f)) {
-            char* comment = strchr(line, '#');
-            if (comment) *comment = '\0';
-
-            char* text = trim_ascii(line);
-            if (*text == '\0') continue;
-
-            if (*text == '[') {
-                char* close = strchr(text, ']');
-                if (!close) continue;
-                *close = '\0';
-                in_env = (strcmp(text + 1, "env") == 0);
-                continue;
-            }
-
-            if (!in_env) continue;
-
-            char* eq = strchr(text, '=');
-            if (!eq) continue;
-            *eq = '\0';
-
-            char* key = trim_ascii(text);
-            char* value = trim_ascii(eq + 1);
-            if (*key == '\0' || *value == '\0') continue;
-
-            reward_params_apply_key(&v->reward_params, key, value);
-            initial_supplies_apply_key(v, key, value);
-        }
-
-        fclose(f);
-        v->reward_config_loaded = 1;
-        strncpy(v->reward_config_path, config_path, sizeof(v->reward_config_path) - 1);
-        v->reward_config_path[sizeof(v->reward_config_path) - 1] = '\0';
-        return;
-    }
+    char config_path[FC_ASSET_PATH_MAX];
+    int found = fc_repo_resolve_path("config/fight_caves.ini",
+                                     config_path, sizeof(config_path));
+    Ini ini = {0};
+    if (found) puf_ini_load_file(&ini, config_path);
+    /* A config without an [env] section also keeps the defaults. */
+    fc_apply_env_config(puf_ini_section(&ini, "env", 1), &v->reward_params,
+                        &v->initial_sharks, &v->initial_prayer_doses);
+    puf_ini_free(&ini);
+    v->reward_config_loaded = found;
+    snprintf(v->reward_config_path, sizeof(v->reward_config_path), "%s",
+             found ? config_path : "defaults");
 }
 
 static void reset_reward_tracking(ViewerState* v) {

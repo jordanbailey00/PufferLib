@@ -8,6 +8,24 @@
 #define FC_CORE_IMPLEMENTATION
 #include "fight_caves.h"
 #undef FC_CORE_IMPLEMENTATION
+
+/* The [env] settings puf_init and the viewer's manual play share: every
+ * FC_REWARD_SETTINGS key (a missing key keeps its default) and the starting
+ * supplies. */
+static void fc_apply_env_config(Dict* kwargs, FcRewardParams* reward,
+                                int* initial_sharks, int* initial_prayer_doses) {
+    *reward = fc_reward_default_params();
+    for (int i = 0; i < FC_REWARD_SETTING_COUNT; i++) {
+        DictItem* item = dict_find(kwargs, FC_REWARD_SETTINGS[i].key);
+        if (item != NULL)
+            fc_reward_setting_store(reward, &FC_REWARD_SETTINGS[i], item->value);
+    }
+    DictItem* item = dict_find(kwargs, "initial_sharks");
+    *initial_sharks = item ? (int)item->value : 0;
+    item = dict_find(kwargs, "initial_prayer_doses");
+    *initial_prayer_doses = item ? (int)item->value : 0;
+}
+
 #define FC_VIEWER_EMBEDDED
 #include "viewer.c"
 #undef FC_VIEWER_EMBEDDED
@@ -250,97 +268,14 @@ const char* fc_training_contract_json(void) {
 }
 
 
-static void fc_override_float_config(
-        Dict* kwargs, const char* key, float* value) {
-    DictItem* item = dict_find(kwargs, key);
-    if (item != NULL) *value = (float)item->value;
-}
-
-static void fc_override_int_config(Dict* kwargs, const char* key, int* value) {
-    DictItem* item = dict_find(kwargs, key);
-    if (item != NULL) *value = (int)item->value;
-}
-
 void puf_init(Env* env, Dict* kwargs) {
     env->num_agents = 1;  /* Fight Caves is single-agent */
-    env->reward_params = fc_reward_default_params();
-
-    /* Reward shaping weights (from config/fight_caves.ini [env] section) */
-    fc_override_float_config(
-        kwargs, "w_damage_dealt", &env->reward_params.w_damage_dealt);
-    fc_override_float_config(
-        kwargs, "w_progress", &env->reward_params.w_progress);
-    fc_override_float_config(kwargs, "negative_progress_multiplier",
-        &env->reward_params.negative_progress_multiplier);
-    fc_override_float_config(
-        kwargs, "w_damage_taken", &env->reward_params.w_damage_taken);
-    fc_override_float_config(
-        kwargs, "w_npc_kill", &env->reward_params.w_npc_kill);
-    fc_override_float_config(
-        kwargs, "w_wave_clear", &env->reward_params.w_wave_clear);
-    fc_override_float_config(
-        kwargs, "w_jad_kill", &env->reward_params.w_jad_kill);
-    fc_override_float_config(
-        kwargs, "w_cave_complete", &env->reward_params.w_cave_complete);
-    fc_override_float_config(
-        kwargs, "w_player_death", &env->reward_params.w_player_death);
-    fc_override_int_config(kwargs, "scale_player_death_with_progress",
-        &env->reward_params.scale_player_death_with_progress);
-    fc_override_float_config(kwargs, "player_death_min_scale",
-        &env->reward_params.player_death_min_scale);
-    fc_override_float_config(kwargs, "w_correct_jad_prayer",
-        &env->reward_params.w_correct_jad_prayer);
-    fc_override_float_config(kwargs, "w_correct_danger_prayer",
-        &env->reward_params.w_correct_danger_prayer);
-    fc_override_float_config(
-        kwargs, "w_prayer_lost", &env->reward_params.w_prayer_lost);
-    fc_override_float_config(
-        kwargs, "w_invalid_action", &env->reward_params.w_invalid_action);
-    fc_override_float_config(
-        kwargs, "w_tick_penalty", &env->reward_params.w_tick_penalty);
-
-    /* Configurable shaping terms */
-    fc_override_float_config(kwargs, "shape_unnecessary_prayer_penalty",
-        &env->reward_params.shape_unnecessary_prayer_penalty);
-    fc_override_float_config(kwargs, "shape_wave_stall_base_penalty",
-        &env->reward_params.shape_wave_stall_base_penalty);
-    fc_override_float_config(kwargs, "shape_wave_stall_cap",
-        &env->reward_params.shape_wave_stall_cap);
-    fc_override_float_config(kwargs, "shape_jad_heal_penalty",
-        &env->reward_params.shape_jad_heal_penalty);
-    fc_override_float_config(kwargs, "shape_npc_heal_penalty",
-        &env->reward_params.shape_npc_heal_penalty);
-    fc_override_float_config(kwargs, "shape_no_progress_penalty_1",
-        &env->reward_params.shape_no_progress_penalty_1);
-    fc_override_float_config(kwargs, "shape_no_progress_penalty_2",
-        &env->reward_params.shape_no_progress_penalty_2);
-    fc_override_float_config(kwargs, "shape_no_progress_penalty_3",
-        &env->reward_params.shape_no_progress_penalty_3);
-    fc_override_float_config(kwargs, "shape_no_attack_base_penalty",
-        &env->reward_params.shape_no_attack_base_penalty);
-    fc_override_float_config(kwargs, "shape_no_attack_wave_scale",
-        &env->reward_params.shape_no_attack_wave_scale);
-    fc_override_int_config(kwargs, "shape_wave_stall_start",
-        &env->reward_params.shape_wave_stall_start);
-    fc_override_int_config(kwargs, "shape_wave_stall_ramp_interval",
-        &env->reward_params.shape_wave_stall_ramp_interval);
-    fc_override_int_config(kwargs, "shape_no_progress_start_1",
-        &env->reward_params.shape_no_progress_start_1);
-    fc_override_int_config(kwargs, "shape_no_progress_start_2",
-        &env->reward_params.shape_no_progress_start_2);
-    fc_override_int_config(kwargs, "shape_no_progress_start_3",
-        &env->reward_params.shape_no_progress_start_3);
-    fc_override_int_config(kwargs, "shape_no_attack_start",
-        &env->reward_params.shape_no_attack_start);
-
-    DictItem* item = dict_find(kwargs, "initial_sharks");
-    env->initial_sharks = item ? (int)item->value : 0;
-    item = dict_find(kwargs, "initial_prayer_doses");
-    env->initial_prayer_doses = item ? (int)item->value : 0;
+    fc_apply_env_config(kwargs, &env->reward_params, &env->initial_sharks,
+                        &env->initial_prayer_doses);
 
     /* Obs ablation flags (default 0 — i.e. no ablation, full obs).
      * See fc_apply_obs_ablation in core.h for what each zeroes. */
-    item = dict_find(kwargs, "obs_ablate_npc_distance");
+    DictItem* item = dict_find(kwargs, "obs_ablate_npc_distance");
     env->obs_ablate_npc_distance = item ? (int)item->value : 0;
     item = dict_find(kwargs, "obs_ablate_incoming_aggregates");
     env->obs_ablate_incoming_aggregates = item ? (int)item->value : 0;
