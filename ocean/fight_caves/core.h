@@ -495,7 +495,7 @@ typedef struct {
     int jad_healers_spawned;  /* 1 until Jad has been healed back to full HP */
     int jad_healer_spawn_generations; /* successful healer generations spawned this wave */
 
-    /* Per-tick aggregated event flags (for reward features) */
+    /* Per-tick aggregated event flags (for rewards and observations) */
     int damage_dealt_this_tick;
     int hits_landed_this_tick;   /* count of player pending-hits that dealt damage this tick */
     int damage_taken_this_tick;
@@ -560,35 +560,23 @@ typedef struct {
 #endif
 
 /*
- * Observation, action, reward, and mask contracts.
+ * Observation, action and mask contracts.
  *
  * SINGLE SOURCE OF TRUTH for all buffer layouts. Python reads the compiled
  * values from the --contract JSON (fc_training_contract_json) instead of
  * redefining them.
  *
  * All observations are float32, normalized to [0,1]. All actions are int32 per
- * head. The canonical core buffer contains policy observations followed by raw
- * reward features. The Puffer adapter exposes its own checkpoint-compatible
- * model input, documented below; reward features are not model inputs.
+ * head.
  */
 
 /*
- * Observation layout. The optional complete core buffer is split into three
- * contiguous regions:
- *
- *   [0 .. FC_POLICY_OBS_SIZE-1]                          policy observations
- *   [FC_POLICY_OBS_SIZE .. FC_POLICY_OBS_SIZE+FC_REWARD_FEATURES-1]  reward features
- *   [FC_TOTAL_OBS .. FC_TOTAL_OBS+FC_ACTION_MASK_SIZE-1] action mask
- *
- * Core callers may use policy observations plus raw reward features
- * (FC_TOTAL_OBS), then append the seven-head core mask for a 475-float
- * diagnostic buffer (FC_OBS_SIZE).
- *
- * Puffer does not receive that diagnostic layout. Its model input is 320
- * floats: FC_POLICY_OBS_SIZE (286) followed by FC_PUFFER_MASK_SIZE (34) mask
- * bits for the no-supplies policy heads. Those same 34 bits are also supplied
- * through PufferLib's native action-mask channel. The 20 reward features and
- * the masks for core-only action heads are not exposed to the model.
+ * Observation layout. fc_write_obs writes the FC_POLICY_OBS_SIZE (286) policy
+ * observations. Puffer's model input is 320 floats: those observations
+ * followed by FC_PUFFER_MASK_SIZE (34) mask bits for the no-supplies policy
+ * heads. Those same 34 bits are also supplied through PufferLib's native
+ * action-mask channel; the masks for core-only action heads are not exposed
+ * to the model.
  */
 
 /* --- Player features (23 floats) --- */
@@ -700,38 +688,6 @@ typedef struct {
 
 /* --- Policy observation total --- */
 #define FC_POLICY_OBS_SIZE      (FC_OBS_PLAYER_SIZE + FC_OBS_NPC_TOTAL + FC_OBS_META_SIZE)  /* 286 */
-
-/* --- Reward features (20 floats) --- */
-/*
- * fc_write_obs packs these after the policy observations in the same buffer.
- * fc_reward_compute_breakdown weights them into the scalar reward; the policy
- * never sees them.
- */
-#define FC_REWARD_START         FC_POLICY_OBS_SIZE  /* 286 */
-#define FC_RWD_DAMAGE_DEALT     0   /* NPC HP reduced this tick (normalized) */
-#define FC_RWD_DAMAGE_TAKEN     1   /* player HP reduced this tick */
-#define FC_RWD_NPC_KILL         2   /* rewardable deaths; excludes respawned Jad healers */
-#define FC_RWD_WAVE_CLEAR       3   /* all wave NPCs dead */
-#define FC_RWD_JAD_DAMAGE       4   /* Jad HP reduced this tick */
-#define FC_RWD_JAD_KILL         5   /* Jad defeated */
-#define FC_RWD_PLAYER_DEATH     6   /* player HP <= 0 */
-#define FC_RWD_CAVE_COMPLETE    7   /* all 63 waves cleared */
-#define FC_RWD_FOOD_USED        8   /* shark consumed this tick */
-#define FC_RWD_PRAYER_POT_USED  9   /* potion consumed this tick */
-#define FC_RWD_CORRECT_JAD_PRAY 10  /* Jad-specific correct-block diagnostic */
-#define FC_RWD_WRONG_JAD_PRAY   11  /* Jad-specific wrong-block diagnostic */
-#define FC_RWD_INVALID_ACTION   12  /* rejected/masked action attempted */
-#define FC_RWD_MOVEMENT         13  /* walk/run action executed */
-#define FC_RWD_IDLE             14  /* wait/idle action */
-#define FC_RWD_TICK_PENALTY     15  /* fires every tick (time discount) */
-#define FC_RWD_CORRECT_DANGER_PRAY 16  /* prayer matched any resolved NPC style, including Jad */
-#define FC_RWD_WRONG_DANGER_PRAY   17  /* prayer missed resolved non-Jad NPC style */
-#define FC_RWD_ATTACK_ATTEMPT   18  /* valid attack cycle launched this tick */
-#define FC_RWD_PRAYER_LOST      19  /* prayer points lost this tick */
-#define FC_REWARD_FEATURES      20
-
-/* --- Total observation (policy obs + reward features) --- */
-#define FC_TOTAL_OBS            (FC_POLICY_OBS_SIZE + FC_REWARD_FEATURES)  /* 306 */
 
 /*
  * Action space: 7 canonical core heads, shared by headless training, policy
@@ -848,7 +804,7 @@ static const int FC_PUFFER_ACTION_DIMS[FC_PUFFER_NUM_ATNS] = FC_PUFFER_ACT_SIZES
 
 /*
  * Action mask. Per-tick binary mask: 1.0 = valid, 0.0 = invalid.
- * One float per action value per head. Appended after FC_TOTAL_OBS in the buffer.
+ * One float per action value per head.
  *
  * Layout: [MOVE(17)] [ATTACK(9)] [PRAYER(8)] [EAT(3)] [DRINK(2)] [TARGET_X(65)] [TARGET_Y(65)]
  */
@@ -862,18 +818,6 @@ static const int FC_PUFFER_ACTION_DIMS[FC_PUFFER_NUM_ATNS] = FC_PUFFER_ACT_SIZES
 #define FC_MASK_DRINK_START      (FC_MASK_EAT_START + FC_EAT_DIM)              /* 37 */
 #define FC_MASK_TARGET_X_START   (FC_MASK_DRINK_START + FC_DRINK_DIM)           /* 39 */
 #define FC_MASK_TARGET_Y_START   (FC_MASK_TARGET_X_START + FC_MOVE_TARGET_X_DIM) /* 104 */
-
-/*
- * Optional complete core diagnostic buffer. Total floats:
- *   FC_POLICY_OBS_SIZE (286) + FC_REWARD_FEATURES (20) + FC_ACTION_MASK_SIZE (169) = 475
- *
- * The PufferLib adapter does not allocate or expose this layout. It allocates
- * FC_PUFFER_OBS_SIZE (320), copies the no-supplies mask into the model input at
- * FC_POLICY_OBS_SIZE, and publishes the same flags through the native mask
- * pointer. Reward computation reads authoritative state through
- * fc_reward_compute_breakdown.
- */
-#define FC_OBS_SIZE             (FC_TOTAL_OBS + FC_ACTION_MASK_SIZE)  /* 475 */
 
 
 /* Npc */
@@ -968,8 +912,6 @@ typedef struct {
 
 
 typedef struct {
-    float raw[FC_REWARD_FEATURES];
-
     float progress;
     float damage_taken;
     float cave_complete;
@@ -1010,8 +952,8 @@ FcRewardParams fc_reward_default_params(void);
  * Must be called once before the first reset. */
 void fc_init(FcState* state);
 
-/* Write the observation buffer (policy obs + reward features).
- * out must have room for FC_TOTAL_OBS floats.
+/* Write the policy observation.
+ * out must have room for FC_POLICY_OBS_SIZE floats.
  * Values are normalized to [0,1]. */
 void fc_write_obs(const FcState* state, float* out);
 
@@ -1104,7 +1046,6 @@ static int fc_spawn_find_available_footprint(const FcState* state,
                                              int size, int max_radius,
                                              int* out_x, int* out_y);
 static int fc_spawn_npc_first_free(FcState* state, int npc_type, int x, int y);
-static void fc_write_reward_features(const FcState* state, float* out);
 static void fc_wave_spawn(FcState* state, int wave_num);
 static void fc_tick(FcState* state, const int actions[FC_NUM_ACTION_HEADS]);
 static void fc_spawn_position(int spawn_dir, int* x, int* y);
@@ -3220,7 +3161,6 @@ static FcRewardBreakdown fc_reward_compute_breakdown(
     const FcPlayer* p = &state->player;
 
     memset(&out, 0, sizeof(out));
-    fc_write_reward_features(state, out.raw);
 
     {
         float work_remaining = fc_reward_required_work_remaining(state);
@@ -3265,14 +3205,22 @@ static FcRewardBreakdown fc_reward_compute_breakdown(
         }
     }
 
-    out.damage_taken = out.raw[FC_RWD_DAMAGE_TAKEN] * params->w_damage_taken;
-    out.cave_complete = out.raw[FC_RWD_CAVE_COMPLETE] * params->w_cave_complete;
-    out.player_death = out.raw[FC_RWD_PLAYER_DEATH] * params->w_player_death;
-    out.prayer_lost = out.raw[FC_RWD_PRAYER_LOST] * params->w_prayer_lost;
-    out.invalid_action = out.raw[FC_RWD_INVALID_ACTION] * params->w_invalid_action;
-    out.tick_penalty = out.raw[FC_RWD_TICK_PENALTY] * params->w_tick_penalty;
+    float damage_taken = (p->max_hp > 0)
+        ? (float)state->damage_taken_this_tick / (float)p->max_hp : 0.0f;
+    out.damage_taken = damage_taken * params->w_damage_taken;
+    /* Flags enter as (float)flag * weight: an unset flag gives a zero with
+     * the weight's sign. */
+    out.cave_complete = (float)(state->terminal == TERMINAL_CAVE_COMPLETE) *
+                        params->w_cave_complete;
+    out.player_death = (float)(state->terminal == TERMINAL_PLAYER_DEATH) *
+                       params->w_player_death;
+    out.prayer_lost = ((float)state->prayer_lost_this_tick / 10.0f) *
+                      params->w_prayer_lost;
+    out.invalid_action = (float)state->invalid_action_this_tick *
+                         params->w_invalid_action;
+    out.tick_penalty = params->w_tick_penalty;
 
-    if (out.raw[FC_RWD_ATTACK_ATTEMPT] > 0.0f) {
+    if (state->attack_attempt_this_tick > 0) {
         runtime->ticks_since_attack = 0;
     } else if (state->npcs_remaining > 0 && p->attack_timer <= 0) {
         runtime->ticks_since_attack++;
@@ -3835,7 +3783,7 @@ static int rewardable_npc_kills_this_tick(const FcState* state) {
 }
 
 void fc_write_obs(const FcState* state, float* out) {
-    memset(out, 0, sizeof(float) * FC_TOTAL_OBS);
+    memset(out, 0, sizeof(float) * FC_POLICY_OBS_SIZE);
 
     const FcPlayer* p = &state->player;
     float prayer_deadline_urgency[3] = {0.0f, 0.0f, 0.0f};
@@ -3969,37 +3917,6 @@ void fc_write_obs(const FcState* state, float* out) {
         : 0.0f;
     meta[FC_OBS_META_REWARDABLE_NPC_KILL] =
         rewardable_npc_kills_this_tick(state) > 0 ? 1.0f : 0.0f;
-
-    /* Reward features (at offset FC_REWARD_START) — written by fc_write_reward_features */
-    fc_write_reward_features(state, out + FC_REWARD_START);
-}
-
-/* Raw reward features for the current tick (FC_REWARD_FEATURES floats);
- * fc_reward_compute_breakdown applies the weights. */
-static void fc_write_reward_features(const FcState* state, float* out) {
-    memset(out, 0, sizeof(float) * FC_REWARD_FEATURES);
-
-    out[FC_RWD_DAMAGE_DEALT]     = (float)state->damage_dealt_this_tick / 1000.0f;
-    out[FC_RWD_DAMAGE_TAKEN]     = (state->player.max_hp > 0) ?
-                                   (float)state->damage_taken_this_tick / (float)state->player.max_hp : 0.0f;
-    out[FC_RWD_NPC_KILL]         = (float)rewardable_npc_kills_this_tick(state);
-    out[FC_RWD_WAVE_CLEAR]       = (float)state->wave_just_cleared;
-    out[FC_RWD_JAD_DAMAGE]       = (float)state->jad_damage_this_tick / 1000.0f;
-    out[FC_RWD_JAD_KILL]         = (float)state->jad_killed;
-    out[FC_RWD_PLAYER_DEATH]     = (state->terminal == TERMINAL_PLAYER_DEATH) ? 1.0f : 0.0f;
-    out[FC_RWD_CAVE_COMPLETE]    = (state->terminal == TERMINAL_CAVE_COMPLETE) ? 1.0f : 0.0f;
-    out[FC_RWD_FOOD_USED]        = (float)state->food_used_this_tick;
-    out[FC_RWD_PRAYER_POT_USED]  = (float)state->prayer_potion_used_this_tick;
-    out[FC_RWD_CORRECT_JAD_PRAY] = (float)state->correct_jad_prayer;
-    out[FC_RWD_WRONG_JAD_PRAY]   = (float)state->wrong_jad_prayer;
-    out[FC_RWD_INVALID_ACTION]   = (float)state->invalid_action_this_tick;
-    out[FC_RWD_MOVEMENT]         = (float)state->movement_this_tick;
-    out[FC_RWD_IDLE]             = (float)state->idle_this_tick;
-    out[FC_RWD_TICK_PENALTY]     = 1.0f;  /* always fires */
-    out[FC_RWD_CORRECT_DANGER_PRAY] = (float)state->correct_danger_prayer;
-    out[FC_RWD_WRONG_DANGER_PRAY]   = (float)state->wrong_danger_prayer;
-    out[FC_RWD_ATTACK_ATTEMPT]      = (float)state->attack_attempt_this_tick;
-    out[FC_RWD_PRAYER_LOST]         = (float)state->prayer_lost_this_tick / 10.0f;
 }
 
 void fc_write_mask(const FcState* state, float* out) {

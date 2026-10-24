@@ -67,11 +67,11 @@ static void wave_rotation_test(void) {
 }
 
 static void check_observation(const FcState* state) {
-    float obs[FC_TOTAL_OBS];
+    float obs[FC_POLICY_OBS_SIZE];
     float mask[FC_ACTION_MASK_SIZE];
     fc_write_obs(state, obs);
     fc_write_mask(state, mask);
-    for (int i = 0; i < FC_TOTAL_OBS; i++) {
+    for (int i = 0; i < FC_POLICY_OBS_SIZE; i++) {
         if (!isfinite(obs[i])) fail("observation contains a non-finite value");
     }
     for (int i = 0; i < FC_ACTION_MASK_SIZE; i++) {
@@ -742,7 +742,7 @@ static void test_free(FightCaves* env) {
 }
 
 static void check_obs(FightCaves* env) {
-    float obs[FC_OBS_SIZE], mask[FC_ACTION_MASK_SIZE];
+    float obs[FC_POLICY_OBS_SIZE], mask[FC_ACTION_MASK_SIZE];
     fc_write_obs(&env->state, obs);
     fc_write_mask(&env->state, mask);
     Agent* a = &env->agents[0];

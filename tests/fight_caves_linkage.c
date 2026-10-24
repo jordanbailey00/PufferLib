@@ -99,7 +99,7 @@ int main(void) {
             puf_step(env);
             assert(env->viewer == NULL); /* No graphics initialization in training. */
             assert(isfinite(rewards[i]));
-            float expected[FC_OBS_SIZE], mask[FC_ACTION_MASK_SIZE];
+            float expected[FC_POLICY_OBS_SIZE], mask[FC_ACTION_MASK_SIZE];
             fc_write_obs(&env->state, expected);
             fc_write_mask(&env->state, mask);
             assert(memcmp(obs[i], expected, FC_POLICY_OBS_SIZE * sizeof(float)) == 0);

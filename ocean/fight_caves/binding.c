@@ -63,7 +63,7 @@ static void fc_puffer_write_obs(FightCaves* env) {
 }
 
 /* ======================================================================== */
-/* Reward computation from reward features                                   */
+/* Reward computation                                                        */
 /* ======================================================================== */
 
 static float fc_puffer_compute_reward(FightCaves* env) {
@@ -205,10 +205,8 @@ const char* fc_training_contract_json(void) {
             "\"puffer_obs_size\":%d,"
             "\"puffer_action_dims\":[%d,%d,%d],"
             "\"puffer_mask_size\":%d,"
-            "\"core_obs_size\":%d,"
             "\"core_action_dims\":[%d,%d,%d,%d,%d,%d,%d],"
             "\"core_action_mask\":%d,"
-            "\"reward_feature_count\":%d,"
             "\"observation_version\":\"%s\","
             "\"action_version\":\"%s\","
             "\"reward_version\":\"%s\","
@@ -223,7 +221,6 @@ const char* fc_training_contract_json(void) {
             FC_PUFFER_ACTION_DIMS[1],
             FC_PUFFER_ACTION_DIMS[2],
             FC_PUFFER_MASK_SIZE,
-            FC_OBS_SIZE,
             FC_ACTION_DIMS[0],
             FC_ACTION_DIMS[1],
             FC_ACTION_DIMS[2],
@@ -232,7 +229,6 @@ const char* fc_training_contract_json(void) {
             FC_ACTION_DIMS[5],
             FC_ACTION_DIMS[6],
             FC_ACTION_MASK_SIZE,
-            FC_REWARD_FEATURES,
             FC_OBSERVATION_VERSION,
             FC_ACTION_VERSION,
             FC_REWARD_VERSION,

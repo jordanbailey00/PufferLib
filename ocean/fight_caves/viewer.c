@@ -7417,7 +7417,7 @@ int dbg_draw_panel_tabs(const FcState* state,
 
     } else if (dbg_tab == 1) {
         /* Observation values */
-        float obs[FC_OBS_SIZE];
+        float obs[FC_POLICY_OBS_SIZE];
         fc_write_obs(state, obs);
         int mbase = FC_OBS_META_START;
 
