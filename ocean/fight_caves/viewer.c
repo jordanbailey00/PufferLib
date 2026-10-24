@@ -5077,62 +5077,11 @@ static AnimSequence *advance_track(AnimCache *cache, uint16_t desired,
     return sequence;
 }
 
-static float track_duration(const AnimSequence *sequence) {
-    if (!sequence || sequence->frame_count == 0) return 0.0f;
-    float duration = 0.0f;
-    for (int i = 0; i < sequence->frame_count; i++)
-        duration += anim_frame_duration(sequence, i);
-    return duration;
-}
-
-static void retarget_track(AnimCache *cache, uint16_t desired,
-                           AnimTrack *track) {
-    if (!cache || desired == 0 || track->sequence == 0 ||
-        track->sequence == desired) return;
-    AnimSequence *old_sequence = anim_get_sequence(cache, track->sequence);
-    AnimSequence *new_sequence = anim_get_sequence(cache, desired);
-    if (!old_sequence || old_sequence->frame_count == 0 ||
-        !new_sequence || new_sequence->frame_count == 0) return;
-    int old_frame = track->frame;
-    if (old_frame < 0 || old_frame >= old_sequence->frame_count) old_frame = 0;
-    float old_total = track_duration(old_sequence);
-    float new_total = track_duration(new_sequence);
-    if (old_total <= 0.0f || new_total <= 0.0f) return;
-    float old_elapsed = 0.0f;
-    for (int i = 0; i < old_frame; i++)
-        old_elapsed += anim_frame_duration(old_sequence, i);
-    float old_frame_duration = anim_frame_duration(old_sequence, old_frame);
-    float remaining = track->timer;
-    if (remaining < 0.0f) remaining = 0.0f;
-    if (remaining > old_frame_duration) remaining = old_frame_duration;
-    old_elapsed += old_frame_duration - remaining;
-    float target = fmodf(old_elapsed, old_total) / old_total * new_total;
-    float elapsed = 0.0f;
-    int new_frame = 0;
-    for (; new_frame < new_sequence->frame_count - 1; new_frame++) {
-        float duration = anim_frame_duration(new_sequence, new_frame);
-        if (target < elapsed + duration) break;
-        elapsed += duration;
-    }
-    track->sequence = desired;
-    track->frame = new_frame;
-    track->timer = elapsed + anim_frame_duration(new_sequence, new_frame) - target;
-    if (track->timer < 0.001f) track->timer = 0.001f;
-}
-
-static int movement_sequence(const FcPlayerVisualProfile *profile,
-                             uint16_t sequence) {
-    return profile && sequence != 0 &&
-        (sequence == profile->walk_anim ||
-         sequence == profile->walk_back_anim ||
-         sequence == profile->walk_left_anim ||
-         sequence == profile->walk_right_anim ||
-         sequence == profile->run_anim);
-}
-
 static float sequence_duration(const AnimSequence *sequence) {
     if (!sequence || sequence->frame_count == 0) return 0.45f;
-    float total = track_duration(sequence);
+    float total = 0.0f;
+    for (int i = 0; i < sequence->frame_count; i++)
+        total += anim_frame_duration(sequence, i);
     return total < 0.35f ? 0.35f : total;
 }
 
@@ -5443,11 +5392,6 @@ void fc_actor_animation_update_models(FcActorAnimation *animation,
         FcVisualPose pose = fc_visual_scene_player_pose(&animation->scene);
         uint16_t pose_sequence = player_pose_sequence(profile, pose.locomotion);
         uint16_t action_sequence = player_action_sequence(animation, state);
-        if (pose_sequence != animation->player_pose.sequence &&
-            movement_sequence(profile, animation->player_pose.sequence) &&
-            movement_sequence(profile, pose_sequence)) {
-            retarget_track(cache, pose_sequence, &animation->player_pose);
-        }
         AnimSequence *pose_track = advance_track(cache, pose_sequence,
             &animation->player_pose, anim_dt, 0);
         AnimSequence *action_track = NULL;
