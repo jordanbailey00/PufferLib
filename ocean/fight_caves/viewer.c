@@ -932,6 +932,14 @@ AnimFrameBase* anim_get_framebase(AnimCache* cache, uint16_t base_id) {
     return NULL;
 }
 
+/* Seconds a sequence frame is shown: delays count 20 ms client cycles, and no
+ * frame lasts less than one 60 Hz viewer frame. */
+static float anim_frame_duration(const AnimSequence* sequence, int frame) {
+    if (!sequence || frame < 0 || frame >= sequence->frame_count) return 0.016f;
+    float duration = (float)sequence->frames[frame].delay * 0.02f;
+    return duration < 0.016f ? 0.016f : duration;
+}
+
 /* ======================================================================== */
 /* per-model animation state                                                  */
 /* ======================================================================== */
@@ -987,142 +995,8 @@ void anim_model_state_free(AnimModelState* state) {
 /* transform application (mirrors OSRS Model.transform)                       */
 /* ======================================================================== */
 
-void anim_apply_frame(
-    AnimModelState* state,
-    const int16_t* base_verts_src,
-    const AnimFrameData* frame,
-    const AnimFrameBase* fb
-) {
-    /* reset to base pose */
-    memcpy(state->verts, base_verts_src, state->vert_count * 3 * sizeof(int16_t));
-
-    /* pivot point for rotate/scale */
-    int pivot_x = 0, pivot_y = 0, pivot_z = 0;
-
-    for (int t = 0; t < frame->transform_count; t++) {
-        uint8_t slot_idx = frame->transforms[t].slot_index;
-        if (slot_idx >= fb->slot_count) continue;
-
-        int type = fb->types[slot_idx];
-        int dx = frame->transforms[t].dx;
-        int dy = frame->transforms[t].dy;
-        int dz = frame->transforms[t].dz;
-
-        uint8_t map_len = fb->map_lengths[slot_idx];
-        const uint8_t* labels = fb->frame_maps[slot_idx];
-
-        if (type == 0) {
-            /* origin: compute centroid of referenced vertex groups */
-            int count = 0;
-            int sum_x = 0, sum_y = 0, sum_z = 0;
-            for (int m = 0; m < map_len; m++) {
-                uint8_t label = labels[m];
-                /* label is uint8_t, always < 256 = ANIM_MAX_LABELS */
-                for (int vi = 0; vi < state->group_counts[label]; vi++) {
-                    int v = state->groups[label][vi];
-                    sum_x += state->verts[v * 3];
-                    sum_y += state->verts[v * 3 + 1];
-                    sum_z += state->verts[v * 3 + 2];
-                    count++;
-                }
-            }
-            if (count > 0) {
-                pivot_x = sum_x / count + dx;
-                pivot_y = sum_y / count + dy;
-                pivot_z = sum_z / count + dz;
-            } else {
-                pivot_x = dx;
-                pivot_y = dy;
-                pivot_z = dz;
-            }
-        } else if (type == 1) {
-            /* translate: add dx/dy/dz to all vertices in referenced groups */
-            for (int m = 0; m < map_len; m++) {
-                uint8_t label = labels[m];
-                /* label is uint8_t, always < 256 = ANIM_MAX_LABELS */
-                for (int vi = 0; vi < state->group_counts[label]; vi++) {
-                    int v = state->groups[label][vi];
-                    state->verts[v * 3]     += (int16_t)dx;
-                    state->verts[v * 3 + 1] += (int16_t)dy;
-                    state->verts[v * 3 + 2] += (int16_t)dz;
-                }
-            }
-        } else if (type == 2) {
-            /* rotate: euler Z-X-Y around pivot.
-             * raw value * 8 → index into 2048-entry sine table.
-             * rotation order: Z first, then X, then Y. */
-            int ax = (dx & 0xFF) * 8;
-            int ay = (dy & 0xFF) * 8;
-            int az = (dz & 0xFF) * 8;
-
-            int sin_x = anim_sine[ax & 2047];
-            int cos_x = anim_cosine[ax & 2047];
-            int sin_y = anim_sine[ay & 2047];
-            int cos_y = anim_cosine[ay & 2047];
-            int sin_z = anim_sine[az & 2047];
-            int cos_z = anim_cosine[az & 2047];
-
-            for (int m = 0; m < map_len; m++) {
-                uint8_t label = labels[m];
-                /* label is uint8_t, always < 256 = ANIM_MAX_LABELS */
-                for (int vi = 0; vi < state->group_counts[label]; vi++) {
-                    int v = state->groups[label][vi];
-                    int vx = state->verts[v * 3]     - pivot_x;
-                    int vy = state->verts[v * 3 + 1] - pivot_y;
-                    int vz = state->verts[v * 3 + 2] - pivot_z;
-
-                    /* Z rotation */
-                    int rx = (vx * cos_z + vy * sin_z) >> 16;
-                    int ry = (vy * cos_z - vx * sin_z) >> 16;
-                    vx = rx; vy = ry;
-
-                    /* X rotation */
-                    ry = (vy * cos_x - vz * sin_x) >> 16;
-                    int rz = (vy * sin_x + vz * cos_x) >> 16;
-                    vy = ry; vz = rz;
-
-                    /* Y rotation */
-                    rx = (vz * sin_y + vx * cos_y) >> 16;
-                    rz = (vz * cos_y - vx * sin_y) >> 16;
-                    vx = rx; vz = rz;
-
-                    state->verts[v * 3]     = (int16_t)(vx + pivot_x);
-                    state->verts[v * 3 + 1] = (int16_t)(vy + pivot_y);
-                    state->verts[v * 3 + 2] = (int16_t)(vz + pivot_z);
-                }
-            }
-        } else if (type == 3) {
-            /* scale: relative to pivot, 128 = 1.0x identity */
-            for (int m = 0; m < map_len; m++) {
-                uint8_t label = labels[m];
-                /* label is uint8_t, always < 256 = ANIM_MAX_LABELS */
-                for (int vi = 0; vi < state->group_counts[label]; vi++) {
-                    int v = state->groups[label][vi];
-                    int vx = state->verts[v * 3]     - pivot_x;
-                    int vy = state->verts[v * 3 + 1] - pivot_y;
-                    int vz = state->verts[v * 3 + 2] - pivot_z;
-
-                    vx = (vx * dx) / 128;
-                    vy = (vy * dy) / 128;
-                    vz = (vz * dz) / 128;
-
-                    state->verts[v * 3]     = (int16_t)(vx + pivot_x);
-                    state->verts[v * 3 + 1] = (int16_t)(vy + pivot_y);
-                    state->verts[v * 3 + 2] = (int16_t)(vz + pivot_z);
-                }
-            }
-        }
-        /* type 5 (alpha) skipped — we don't use face transparency in the viewer */
-    }
-}
-
-/* ======================================================================== */
-/* two-track interleaved animation (matches OSRS Model.applyAnimationFrames)  */
-/* ======================================================================== */
-
 /**
- * Apply a single transform slot to the vertex state (extracted from anim_apply_frame
- * to allow per-slot interleave filtering).
+ * Apply one transform slot to the vertex state.
  *
  * pivot_x/y/z are read/written through pointers — they persist across slots
  * within a pass, exactly like the reference's transformTempX/Y/Z.
@@ -1206,6 +1080,43 @@ static void anim_apply_single_transform(
     }
 }
 
+/* One pass over a frame's transforms in file order, starting from a zero
+ * pivot. With an ownership mask (1 = slot owned by the secondary track), only
+ * the slots whose owner matches `secondary` are applied; type-0 (pivot)
+ * transforms always run. */
+static void anim_apply_pass(AnimModelState* state, const AnimFrameData* frame,
+                            const AnimFrameBase* fb,
+                            const uint8_t* secondary_slot, int secondary) {
+    int pivot_x = 0, pivot_y = 0, pivot_z = 0;
+    for (int t = 0; t < frame->transform_count; t++) {
+        const AnimTransform* transform = &frame->transforms[t];
+        uint8_t slot = transform->slot_index;
+        if (slot >= fb->slot_count) continue;
+        int type = fb->types[slot];
+        if (secondary_slot && secondary_slot[slot] != secondary && type != 0)
+            continue;
+        anim_apply_single_transform(state, type, fb->frame_maps[slot],
+                                    fb->map_lengths[slot], transform->dx,
+                                    transform->dy, transform->dz,
+                                    &pivot_x, &pivot_y, &pivot_z);
+    }
+}
+
+void anim_apply_frame(
+    AnimModelState* state,
+    const int16_t* base_verts_src,
+    const AnimFrameData* frame,
+    const AnimFrameBase* fb
+) {
+    /* reset to base pose */
+    memcpy(state->verts, base_verts_src, state->vert_count * 3 * sizeof(int16_t));
+    anim_apply_pass(state, frame, fb, NULL, 0);
+}
+
+/* ======================================================================== */
+/* two-track interleaved animation (matches OSRS Model.applyAnimationFrames)  */
+/* ======================================================================== */
+
 /**
  * Apply two animation frames with body-part interleaving.
  *
@@ -1240,51 +1151,10 @@ static void anim_apply_frame_interleaved(
         secondary_slot[interleave_order[i]] = 1;
     }
 
-    /* pass 1: primary frame — apply transforms for slots NOT in interleave_order.
-     * type-0 (pivot) always executes regardless of ownership.
-     * matches reference: if (k1 != i1 || class18.types[k1] == 0) */
-    int pivot_x = 0, pivot_y = 0, pivot_z = 0;
-    for (int t = 0; t < primary_frame->transform_count; t++) {
-        uint8_t slot_idx = primary_frame->transforms[t].slot_index;
-        if (slot_idx >= primary_fb->slot_count) continue;
-
-        int type = primary_fb->types[slot_idx];
-        int in_interleave = secondary_slot[slot_idx];
-
-        if (!in_interleave || type == 0) {
-            anim_apply_single_transform(
-                state, type,
-                primary_fb->frame_maps[slot_idx],
-                primary_fb->map_lengths[slot_idx],
-                primary_frame->transforms[t].dx,
-                primary_frame->transforms[t].dy,
-                primary_frame->transforms[t].dz,
-                &pivot_x, &pivot_y, &pivot_z);
-        }
-    }
-
-    /* pass 2: secondary frame — apply transforms for slots IN interleave_order.
-     * type-0 (pivot) always executes.
-     * matches reference: if (i2 == i1 || class18.types[i2] == 0) */
-    pivot_x = 0; pivot_y = 0; pivot_z = 0;
-    for (int t = 0; t < secondary_frame->transform_count; t++) {
-        uint8_t slot_idx = secondary_frame->transforms[t].slot_index;
-        if (slot_idx >= secondary_fb->slot_count) continue;
-
-        int type = secondary_fb->types[slot_idx];
-        int in_interleave = secondary_slot[slot_idx];
-
-        if (in_interleave || type == 0) {
-            anim_apply_single_transform(
-                state, type,
-                secondary_fb->frame_maps[slot_idx],
-                secondary_fb->map_lengths[slot_idx],
-                secondary_frame->transforms[t].dx,
-                secondary_frame->transforms[t].dy,
-                secondary_frame->transforms[t].dz,
-                &pivot_x, &pivot_y, &pivot_z);
-        }
-    }
+    /* pass 1, primary frame: reference if (k1 != i1 || class18.types[k1] == 0) */
+    anim_apply_pass(state, primary_frame, primary_fb, secondary_slot, 0);
+    /* pass 2, secondary frame: reference if (i2 == i1 || class18.types[i2] == 0) */
+    anim_apply_pass(state, secondary_frame, secondary_fb, secondary_slot, 1);
 }
 
 /* Apply the current pose/action pair to one model state. The action owns the
@@ -1763,21 +1633,17 @@ void fc_model_animation_update(ModelEntry *entry,
         *current_sequence = (uint16_t)animation_id;
         *frame_index = (int)phase_ticks % sequence->frame_count;
         if (*frame_index < 0) *frame_index = 0;
-        *frame_timer = (float)sequence->frames[*frame_index].delay * 0.02f;
-        if (*frame_timer < 0.016f) *frame_timer = 0.016f;
+        *frame_timer = anim_frame_duration(sequence, *frame_index);
     }
     if (*current_sequence != (uint16_t)animation_id) {
         *current_sequence = (uint16_t)animation_id;
         *frame_index = 0;
-        *frame_timer = (float)sequence->frames[0].delay * 0.02f;
-        if (*frame_timer < 0.016f) *frame_timer = 0.016f;
+        *frame_timer = anim_frame_duration(sequence, 0);
     }
     *frame_timer -= dt;
     while (*frame_timer <= 0.0f) {
         *frame_index = (*frame_index + 1) % sequence->frame_count;
-        float delay = (float)sequence->frames[*frame_index].delay * 0.02f;
-        if (delay < 0.016f) delay = 0.016f;
-        *frame_timer += delay;
+        *frame_timer += anim_frame_duration(sequence, *frame_index);
     }
     AnimFrameData *frame = &sequence->frames[*frame_index].frame;
     AnimFrameBase *framebase = anim_get_framebase(cache, frame->framebase_id);
@@ -6262,8 +6128,7 @@ static AnimSequence *advance_track(AnimCache *cache, uint16_t desired,
     if (*current != desired) {
         *current = desired;
         *frame = 0;
-        *timer = (float)sequence->frames[0].delay * 0.02f;
-        if (*timer < 0.016f) *timer = 0.016f;
+        *timer = anim_frame_duration(sequence, 0);
     }
     if (*frame < 0 || *frame >= sequence->frame_count) *frame = 0;
     *timer -= dt;
@@ -6277,25 +6142,17 @@ static AnimSequence *advance_track(AnimCache *cache, uint16_t desired,
                 *frame = 0;
             }
         }
-        float delay = (float)sequence->frames[*frame].delay * 0.02f;
-        if (delay < 0.016f) delay = 0.016f;
-        *timer += delay;
+        *timer += anim_frame_duration(sequence, *frame);
     }
     if (play_once && *timer <= 0.0f) *timer = 0.016f;
     return sequence;
-}
-
-static float frame_duration(const AnimSequence *sequence, int frame) {
-    if (!sequence || frame < 0 || frame >= sequence->frame_count) return 0.016f;
-    float duration = (float)sequence->frames[frame].delay * 0.02f;
-    return duration < 0.016f ? 0.016f : duration;
 }
 
 static float track_duration(const AnimSequence *sequence) {
     if (!sequence || sequence->frame_count == 0) return 0.0f;
     float duration = 0.0f;
     for (int i = 0; i < sequence->frame_count; i++)
-        duration += frame_duration(sequence, i);
+        duration += anim_frame_duration(sequence, i);
     return duration;
 }
 
@@ -6314,8 +6171,8 @@ static void retarget_track(AnimCache *cache, uint16_t desired,
     if (old_total <= 0.0f || new_total <= 0.0f) return;
     float old_elapsed = 0.0f;
     for (int i = 0; i < old_frame; i++)
-        old_elapsed += frame_duration(old_sequence, i);
-    float old_frame_duration = frame_duration(old_sequence, old_frame);
+        old_elapsed += anim_frame_duration(old_sequence, i);
+    float old_frame_duration = anim_frame_duration(old_sequence, old_frame);
     float remaining = *timer;
     if (remaining < 0.0f) remaining = 0.0f;
     if (remaining > old_frame_duration) remaining = old_frame_duration;
@@ -6324,13 +6181,13 @@ static void retarget_track(AnimCache *cache, uint16_t desired,
     float elapsed = 0.0f;
     int new_frame = 0;
     for (; new_frame < new_sequence->frame_count - 1; new_frame++) {
-        float duration = frame_duration(new_sequence, new_frame);
+        float duration = anim_frame_duration(new_sequence, new_frame);
         if (target < elapsed + duration) break;
         elapsed += duration;
     }
     *current = desired;
     *frame = new_frame;
-    *timer = elapsed + frame_duration(new_sequence, new_frame) - target;
+    *timer = elapsed + anim_frame_duration(new_sequence, new_frame) - target;
     if (*timer < 0.001f) *timer = 0.001f;
 }
 
