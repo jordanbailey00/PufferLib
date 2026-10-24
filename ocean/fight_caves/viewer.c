@@ -739,6 +739,14 @@ typedef struct {
     int *group_counts;
 } AnimModelState;
 
+/* One sequence being played: its id, the frame shown and the seconds left on
+ * that frame. A zeroed track plays nothing. */
+typedef struct {
+    uint16_t sequence;
+    int frame;
+    float timer;
+} AnimTrack;
+
 #define ANIM_MAGIC 0x414E494D  /* legacy bytes "MINA" when read little-endian */
 #define ANIM2_MAGIC 0x324D4E41 /* bytes "ANM2" when read little-endian */
 #define ANIM2_MIN_VERSION 2
@@ -1612,40 +1620,58 @@ void fc_model_animation_upload(ModelEntry *entry, AnimModelState *state) {
                      entry->face_count * 9 * sizeof(float), 0);
 }
 
+/* Advances a track playing `sequence` by dt seconds. Switching sequences
+ * restarts at frame 0. Past the last frame a looping track steps back by the
+ * sequence's frame step (to frame 0 without one); a play-once track holds its
+ * last frame. */
+static void anim_track_step(AnimTrack *track, const AnimSequence *sequence,
+                            float dt, int play_once) {
+    if (track->sequence != sequence->seq_id) {
+        track->sequence = sequence->seq_id;
+        track->frame = 0;
+        track->timer = anim_frame_duration(sequence, 0);
+    }
+    track->timer -= dt;
+    while (track->timer <= 0.0f &&
+           (!play_once || track->frame < sequence->frame_count - 1)) {
+        track->frame++;
+        if (track->frame >= sequence->frame_count) {
+            if (sequence->frame_step > 0 &&
+                sequence->frame_step <= sequence->frame_count) {
+                track->frame -= sequence->frame_step;
+            } else {
+                track->frame = 0;
+            }
+        }
+        track->timer += anim_frame_duration(sequence, track->frame);
+    }
+    if (play_once && track->timer <= 0.0f) track->timer = 0.016f;
+}
+
+/* Plays animation_id on a model of its own (spot animations, animated
+ * objects). A new pose state starts phase_ticks frames into the loop. */
 void fc_model_animation_update(ModelEntry *entry,
                                AnimCache *cache,
                                AnimModelState **state,
-                               uint16_t *current_sequence,
-                               int *frame_index,
-                               float *frame_timer,
+                               AnimTrack *track,
                                int animation_id,
                                float dt,
                                float phase_ticks) {
     if (!entry || !cache || animation_id < 0 ||
-        !entry->vertex_skins || !state || !current_sequence ||
-        !frame_index || !frame_timer) return;
+        !entry->vertex_skins || !state || !track) return;
     AnimSequence *sequence = anim_get_sequence(cache, (uint16_t)animation_id);
     if (!sequence || sequence->frame_count == 0) return;
     if (!*state || (*state)->vert_count != entry->base_vert_count) {
         if (*state) anim_model_state_free(*state);
         *state = anim_model_state_create(entry->vertex_skins,
                                          entry->base_vert_count);
-        *current_sequence = (uint16_t)animation_id;
-        *frame_index = (int)phase_ticks % sequence->frame_count;
-        if (*frame_index < 0) *frame_index = 0;
-        *frame_timer = anim_frame_duration(sequence, *frame_index);
+        track->sequence = (uint16_t)animation_id;
+        track->frame = (int)phase_ticks % sequence->frame_count;
+        if (track->frame < 0) track->frame = 0;
+        track->timer = anim_frame_duration(sequence, track->frame);
     }
-    if (*current_sequence != (uint16_t)animation_id) {
-        *current_sequence = (uint16_t)animation_id;
-        *frame_index = 0;
-        *frame_timer = anim_frame_duration(sequence, 0);
-    }
-    *frame_timer -= dt;
-    while (*frame_timer <= 0.0f) {
-        *frame_index = (*frame_index + 1) % sequence->frame_count;
-        *frame_timer += anim_frame_duration(sequence, *frame_index);
-    }
-    AnimFrameData *frame = &sequence->frames[*frame_index].frame;
+    anim_track_step(track, sequence, dt, 0);
+    AnimFrameData *frame = &sequence->frames[track->frame].frame;
     AnimFrameBase *framebase = anim_get_framebase(cache, frame->framebase_id);
     if (framebase) {
         anim_apply_frame(*state, entry->base_verts, frame, framebase);
@@ -4961,6 +4987,19 @@ void fc_visual_scene_deactivate_npc(FcVisualScene* scene, int slot) {
     scene->npcs[slot].target_slot = -1;
 }
 
+static void pop_path_front(FcVisualActor* actor) {
+    if (!actor || actor->path_count <= 0) return;
+    actor->path_count--;
+    if (actor->path_count > 0) {
+        memmove(actor->path_x, actor->path_x + 1,
+                actor->path_count * sizeof(actor->path_x[0]));
+        memmove(actor->path_y, actor->path_y + 1,
+                actor->path_count * sizeof(actor->path_y[0]));
+        memmove(actor->path_running, actor->path_running + 1,
+                actor->path_count * sizeof(actor->path_running[0]));
+    }
+}
+
 void fc_visual_actor_enqueue_tile(FcVisualActor* actor, int tile_x, int tile_y,
                                   int running) {
     if (!actor || !actor->active) return;
@@ -4975,17 +5014,9 @@ void fc_visual_actor_enqueue_tile(FcVisualActor* actor, int tile_x, int tile_y,
         }
     }
 
-    if (actor->path_count >= FC_VISUAL_ACTIVE_PATH_MAX) {
-        /* Native actor queues store ten entries but keep at most nine active
-         * route points. A new server step drops the oldest visual waypoint. */
-        memmove(actor->path_x, actor->path_x + 1,
-                (FC_VISUAL_ACTIVE_PATH_MAX - 1) * sizeof(actor->path_x[0]));
-        memmove(actor->path_y, actor->path_y + 1,
-                (FC_VISUAL_ACTIVE_PATH_MAX - 1) * sizeof(actor->path_y[0]));
-        memmove(actor->path_running, actor->path_running + 1,
-                (FC_VISUAL_ACTIVE_PATH_MAX - 1) * sizeof(actor->path_running[0]));
-        actor->path_count = FC_VISUAL_ACTIVE_PATH_MAX - 1;
-    }
+    /* Native actor queues store ten entries but keep at most nine active
+     * route points. A new server step drops the oldest visual waypoint. */
+    if (actor->path_count >= FC_VISUAL_ACTIVE_PATH_MAX) pop_path_front(actor);
 
     int next = actor->path_count++;
     actor->path_x[next] = tile_x;
@@ -5045,19 +5076,6 @@ static const FcVisualActor* target_actor(const FcVisualScene* scene,
         scene->npcs[actor->target_slot].active)
         return &scene->npcs[actor->target_slot];
     return NULL;
-}
-
-static void pop_path_front(FcVisualActor* actor) {
-    if (!actor || actor->path_count <= 0) return;
-    actor->path_count--;
-    if (actor->path_count > 0) {
-        memmove(actor->path_x, actor->path_x + 1,
-                actor->path_count * sizeof(actor->path_x[0]));
-        memmove(actor->path_y, actor->path_y + 1,
-                actor->path_count * sizeof(actor->path_y[0]));
-        memmove(actor->path_running, actor->path_running + 1,
-                actor->path_count * sizeof(actor->path_running[0]));
-    }
 }
 
 static void move_toward(float* value, float destination, float speed) {
@@ -5187,9 +5205,7 @@ FcVisualPose fc_visual_actor_pose(const FcVisualScene* scene,
                                   const FcVisualActor* actor) {
     FcVisualPose pose = {0};
     if (!scene || !actor || !actor->active) return pose;
-    float alpha = scene->render_alpha;
-    if (alpha < 0.0f) alpha = 0.0f;
-    if (alpha > 1.0f) alpha = 1.0f;
+    float alpha = scene->render_alpha; /* 0..1 by construction */
     float local_x = actor->previous_local_x +
                     (actor->local_x - actor->previous_local_x) * alpha;
     float local_y = actor->previous_local_y +
@@ -5238,36 +5254,32 @@ typedef struct {
     float projectile_step_multiplier;
 } FcPlayerVisualProfile;
 
+/* One NPC slot: its posed vertices, the pose (idle/walk) and action
+ * (attack/death) tracks, what its last attack started, and its server tile
+ * at the start of the current tick. */
+typedef struct {
+    AnimModelState *state;
+    AnimTrack pose;
+    AnimTrack action;
+    int attack_style;
+    float attack_timer;
+    float prayer_indicator_timer;
+    int prayer_lock_tick;
+    int previous_x;
+    int previous_y;
+    int previous_active;
+} FcNpcAnimation;
+
 typedef struct {
     FcVisualScene scene;
     AnimModelState *player_state;
-    uint16_t player_sequence;
-    int player_frame;
-    float player_timer;
-    uint16_t player_pose_sequence;
-    int player_pose_frame;
-    float player_pose_timer;
-    uint16_t player_action_sequence;
-    int player_action_frame;
-    float player_action_timer;
+    AnimTrack player_pose;
+    AnimTrack player_action;
     uint16_t player_lock_sequence;
     float player_lock_timer;
     int player_attack_target;
     float prayer_flick_timer;
-    AnimModelState *npc_states[FC_MAX_NPCS];
-    uint16_t npc_sequences[FC_MAX_NPCS];
-    int npc_frames[FC_MAX_NPCS];
-    float npc_timers[FC_MAX_NPCS];
-    uint16_t npc_action_sequences[FC_MAX_NPCS];
-    int npc_action_frames[FC_MAX_NPCS];
-    float npc_action_timers[FC_MAX_NPCS];
-    int npc_attack_styles[FC_MAX_NPCS];
-    float npc_attack_timers[FC_MAX_NPCS];
-    float npc_prayer_indicator_timers[FC_MAX_NPCS];
-    int npc_prayer_lock_ticks[FC_MAX_NPCS];
-    int previous_npc_x[FC_MAX_NPCS];
-    int previous_npc_y[FC_MAX_NPCS];
-    int previous_npc_active[FC_MAX_NPCS];
+    FcNpcAnimation npcs[FC_MAX_NPCS];
 } FcActorAnimation;
 
 #define POLICY_REPLAY_BASE_TPS (5.0f / 3.0f)
@@ -5367,18 +5379,30 @@ static const FcPlayerVisualProfile PLAYER_VISUALS[FC_NUM_LOADOUTS] = {
     },
 };
 
-static const uint16_t NPC_ANIM_IDLE[] = {
-    0, 2618, 2624, 2624, 2631, 2636, 2642, 2650, 2636
+typedef struct {
+    uint16_t idle;
+    uint16_t walk;
+    uint16_t attack;
+    uint16_t death;
+} FcNpcAnims;
+
+static const FcNpcAnims NPC_ANIMS[NPC_TYPE_COUNT] = {
+    [NPC_TZ_KIH] = {2618, 2619, 2621, 2620},
+    [NPC_TZ_KEK] = {2624, 2623, 2625, 2627},
+    [NPC_TZ_KEK_SM] = {2624, 2623, 2625, 2627},
+    [NPC_TOK_XIL] = {2631, 2632, 2628, 2630},
+    [NPC_YT_MEJKOT] = {2636, 2634, 2637, 2638},
+    [NPC_KET_ZEK] = {2642, 2643, 2644, 2646},
+    [NPC_TZTOK_JAD] = {2650, 2651, 2655, 2654},
+    [NPC_YT_HURKOT] = {2636, 2634, 2637, 2638},
 };
-static const uint16_t NPC_ANIM_WALK[] = {
-    0, 2619, 2623, 2623, 2632, 2634, 2643, 2651, 2634
-};
-static const uint16_t NPC_ANIM_ATTACK[] = {
-    0, 2621, 2625, 2625, 2628, 2637, 2644, 2655, 2637
-};
-static const uint16_t NPC_ANIM_DEATH[] = {
-    0, 2620, 2627, 2627, 2630, 2638, 2646, 2654, 2638
-};
+
+/* The sequences of an NPC type; NPC_NONE (and any unknown type) has none. */
+static const FcNpcAnims *npc_anims(int npc_type) {
+    if (npc_type <= NPC_NONE || npc_type >= NPC_TYPE_COUNT)
+        npc_type = NPC_NONE;
+    return &NPC_ANIMS[npc_type];
+}
 
 const FcPlayerVisualProfile *fc_player_visual_profile(int active_loadout) {
     static const FcPlayerVisualProfile unarmed = {
@@ -5411,35 +5435,17 @@ void fc_actor_animation_upload_npc(FcActorAnimation *animation,
                                    int npc_slot,
                                    ModelEntry *entry) {
     if (!animation || npc_slot < 0 || npc_slot >= FC_MAX_NPCS) return;
-    fc_model_animation_upload(entry, animation->npc_states[npc_slot]);
+    fc_model_animation_upload(entry, animation->npcs[npc_slot].state);
 }
 
+/* Plays `desired` on an actor track. Returns its sequence, or NULL when there
+ * is nothing to play. */
 static AnimSequence *advance_track(AnimCache *cache, uint16_t desired,
-                                   uint16_t *current, int *frame,
-                                   float *timer, float dt, int play_once) {
-    if (!cache || desired == 0 || !current || !frame || !timer) return NULL;
+                                   AnimTrack *track, float dt, int play_once) {
+    if (!cache || desired == 0) return NULL;
     AnimSequence *sequence = anim_get_sequence(cache, desired);
     if (!sequence || sequence->frame_count == 0) return NULL;
-    if (*current != desired) {
-        *current = desired;
-        *frame = 0;
-        *timer = anim_frame_duration(sequence, 0);
-    }
-    if (*frame < 0 || *frame >= sequence->frame_count) *frame = 0;
-    *timer -= dt;
-    while (*timer <= 0.0f && (!play_once || *frame < sequence->frame_count - 1)) {
-        (*frame)++;
-        if (*frame >= sequence->frame_count) {
-            if (sequence->frame_step > 0 &&
-                sequence->frame_step <= sequence->frame_count) {
-                *frame -= sequence->frame_step;
-            } else {
-                *frame = 0;
-            }
-        }
-        *timer += anim_frame_duration(sequence, *frame);
-    }
-    if (play_once && *timer <= 0.0f) *timer = 0.016f;
+    anim_track_step(track, sequence, dt, play_once);
     return sequence;
 }
 
@@ -5452,14 +5458,14 @@ static float track_duration(const AnimSequence *sequence) {
 }
 
 static void retarget_track(AnimCache *cache, uint16_t desired,
-                           uint16_t *current, int *frame, float *timer) {
-    if (!cache || desired == 0 || !current || !frame || !timer ||
-        *current == 0 || *current == desired) return;
-    AnimSequence *old_sequence = anim_get_sequence(cache, *current);
+                           AnimTrack *track) {
+    if (!cache || desired == 0 || track->sequence == 0 ||
+        track->sequence == desired) return;
+    AnimSequence *old_sequence = anim_get_sequence(cache, track->sequence);
     AnimSequence *new_sequence = anim_get_sequence(cache, desired);
     if (!old_sequence || old_sequence->frame_count == 0 ||
         !new_sequence || new_sequence->frame_count == 0) return;
-    int old_frame = *frame;
+    int old_frame = track->frame;
     if (old_frame < 0 || old_frame >= old_sequence->frame_count) old_frame = 0;
     float old_total = track_duration(old_sequence);
     float new_total = track_duration(new_sequence);
@@ -5468,7 +5474,7 @@ static void retarget_track(AnimCache *cache, uint16_t desired,
     for (int i = 0; i < old_frame; i++)
         old_elapsed += anim_frame_duration(old_sequence, i);
     float old_frame_duration = anim_frame_duration(old_sequence, old_frame);
-    float remaining = *timer;
+    float remaining = track->timer;
     if (remaining < 0.0f) remaining = 0.0f;
     if (remaining > old_frame_duration) remaining = old_frame_duration;
     old_elapsed += old_frame_duration - remaining;
@@ -5480,10 +5486,10 @@ static void retarget_track(AnimCache *cache, uint16_t desired,
         if (target < elapsed + duration) break;
         elapsed += duration;
     }
-    *current = desired;
-    *frame = new_frame;
-    *timer = elapsed + anim_frame_duration(new_sequence, new_frame) - target;
-    if (*timer < 0.001f) *timer = 0.001f;
+    track->sequence = desired;
+    track->frame = new_frame;
+    track->timer = elapsed + anim_frame_duration(new_sequence, new_frame) - target;
+    if (track->timer < 0.001f) track->timer = 0.001f;
 }
 
 static int movement_sequence(const FcPlayerVisualProfile *profile,
@@ -5508,7 +5514,20 @@ static uint16_t npc_attack_sequence(int npc_type, int attack_style) {
         if (attack_style == ATTACK_RANGED) return JAD_ANIM_RANGED;
         if (attack_style == ATTACK_MELEE) return JAD_ANIM_MELEE;
     }
-    return npc_type > 0 && npc_type < 9 ? NPC_ANIM_ATTACK[npc_type] : 0;
+    return npc_anims(npc_type)->attack;
+}
+
+/* Counts a running timer down by dt, stopping at zero. Returns 1 on the call
+ * that runs it out. */
+static int tick_down(float *timer, float dt) {
+    if (*timer > 0.0f) {
+        *timer -= dt;
+        if (*timer <= 0.0f) {
+            *timer = 0.0f;
+            return 1;
+        }
+    }
+    return 0;
 }
 
 float fc_actor_animation_scaled_dt(float tps, float dt) {
@@ -5540,6 +5559,21 @@ static uint16_t player_action_sequence(const FcActorAnimation *animation,
     return player_lock_active(animation) ? animation->player_lock_sequence : 0;
 }
 
+/* The death or attack sequence an NPC plays over its pose, or 0. A death
+ * waits while a projectile still carries damage to the NPC. */
+static uint16_t npc_action_sequence(const FcActorAnimation *animation,
+                                    const FcState *state, int slot,
+                                    const unsigned char deferred_deaths[FC_MAX_NPCS]) {
+    const FcNpc *npc = &state->npcs[slot];
+    const FcNpcAnimation *anim = &animation->npcs[slot];
+    if ((npc->is_dead || npc->died_this_tick) &&
+        (!deferred_deaths || !deferred_deaths[slot]))
+        return npc_anims(npc->npc_type)->death;
+    if (anim->attack_timer > 0.0f)
+        return npc_attack_sequence(npc->npc_type, anim->attack_style);
+    return 0;
+}
+
 static int sequence_blocks_movement(AnimCache *cache, uint16_t sequence_id) {
     if (!cache || sequence_id == 0) return 0;
     AnimSequence *sequence = anim_get_sequence(cache, sequence_id);
@@ -5547,28 +5581,15 @@ static int sequence_blocks_movement(AnimCache *cache, uint16_t sequence_id) {
 }
 
 static void recreate_player_state(FcActorAnimation *animation,
-                                  ModelEntry *entry,
-                                  int active_loadout) {
+                                  ModelEntry *entry) {
     if (!animation || !entry || !entry->vertex_skins) return;
     if (animation->player_state &&
         animation->player_state->vert_count == entry->base_vert_count) return;
     if (animation->player_state) anim_model_state_free(animation->player_state);
     animation->player_state = anim_model_state_create(entry->vertex_skins,
                                                        entry->base_vert_count);
-    const FcPlayerVisualProfile *profile = fc_player_visual_profile(active_loadout);
-    animation->player_sequence = profile->idle_anim;
-    animation->player_frame = 0;
-    animation->player_timer = 0.0f;
     fprintf(stderr, "Player animation state created (%d base verts, model %u)\n",
             entry->base_vert_count, entry->model_id);
-}
-
-void fc_actor_animation_init(FcActorAnimation *animation) {
-    if (!animation) return;
-    memset(animation, 0, sizeof(*animation));
-    animation->player_attack_target = -1;
-    for (int i = 0; i < FC_MAX_NPCS; i++)
-        animation->npc_prayer_lock_ticks[i] = -1;
 }
 
 void fc_actor_animation_reset(FcActorAnimation *animation,
@@ -5582,42 +5603,27 @@ void fc_actor_animation_reset(FcActorAnimation *animation,
                                  state->player.facing_angle);
     const FcPlayerVisualProfile *profile = fc_player_visual_profile(
         fc_player_equipment_visual_profile(&state->player));
-    animation->player_pose_sequence = profile->idle_anim;
-    animation->player_pose_frame = 0;
-    animation->player_pose_timer = 0.0f;
-    animation->player_action_sequence = 0;
-    animation->player_action_frame = 0;
-    animation->player_action_timer = 0.0f;
+    animation->player_pose = (AnimTrack){profile->idle_anim, 0, 0.0f};
+    animation->player_action = (AnimTrack){0};
     animation->player_lock_sequence = 0;
     animation->player_lock_timer = 0.0f;
     animation->player_attack_target = -1;
     animation->prayer_flick_timer = 0.0f;
     recreate_player_state(animation,
-        fc_actor_player_model_entry(player_models, active_loadout),
-        active_loadout);
+        fc_actor_player_model_entry(player_models, active_loadout));
     for (int i = 0; i < FC_MAX_NPCS; i++) {
         const FcNpc *npc = &state->npcs[i];
-        animation->previous_npc_x[i] = npc->x;
-        animation->previous_npc_y[i] = npc->y;
-        animation->previous_npc_active[i] = npc->active;
+        FcNpcAnimation *anim = &animation->npcs[i];
         if (npc->active || npc->died_this_tick) {
             fc_visual_scene_reset_npc(&animation->scene, i, npc->x, npc->y,
                                       npc->size, 0.0f);
         }
-        if (animation->npc_states[i]) {
-            anim_model_state_free(animation->npc_states[i]);
-            animation->npc_states[i] = NULL;
-        }
-        animation->npc_sequences[i] = 0;
-        animation->npc_frames[i] = 0;
-        animation->npc_timers[i] = 0.0f;
-        animation->npc_action_sequences[i] = 0;
-        animation->npc_action_frames[i] = 0;
-        animation->npc_action_timers[i] = 0.0f;
-        animation->npc_attack_styles[i] = ATTACK_NONE;
-        animation->npc_attack_timers[i] = 0.0f;
-        animation->npc_prayer_indicator_timers[i] = 0.0f;
-        animation->npc_prayer_lock_ticks[i] = -1;
+        if (anim->state) anim_model_state_free(anim->state);
+        memset(anim, 0, sizeof(*anim));
+        anim->prayer_lock_tick = -1;
+        anim->previous_x = npc->x;
+        anim->previous_y = npc->y;
+        anim->previous_active = npc->active;
     }
 }
 
@@ -5625,8 +5631,8 @@ void fc_actor_animation_shutdown(FcActorAnimation *animation) {
     if (!animation) return;
     if (animation->player_state) anim_model_state_free(animation->player_state);
     for (int i = 0; i < FC_MAX_NPCS; i++) {
-        if (animation->npc_states[i])
-            anim_model_state_free(animation->npc_states[i]);
+        if (animation->npcs[i].state)
+            anim_model_state_free(animation->npcs[i].state);
     }
     memset(animation, 0, sizeof(*animation));
 }
@@ -5635,9 +5641,9 @@ void fc_actor_animation_capture_tick_start(FcActorAnimation *animation,
                                            const FcState *state) {
     if (!animation || !state) return;
     for (int i = 0; i < FC_MAX_NPCS; i++) {
-        animation->previous_npc_x[i] = state->npcs[i].x;
-        animation->previous_npc_y[i] = state->npcs[i].y;
-        animation->previous_npc_active[i] = state->npcs[i].active;
+        animation->npcs[i].previous_x = state->npcs[i].x;
+        animation->npcs[i].previous_y = state->npcs[i].y;
+        animation->npcs[i].previous_active = state->npcs[i].active;
     }
 }
 
@@ -5666,14 +5672,14 @@ void fc_actor_animation_ingest_tick(FcActorAnimation *animation,
     }
     for (int i = 0; i < FC_MAX_NPCS; i++) {
         const FcNpc *npc = &state->npcs[i];
+        const FcNpcAnimation *anim = &animation->npcs[i];
         FcVisualActor *visual = &animation->scene.npcs[i];
-        if (npc->active && !animation->previous_npc_active[i]) {
+        if (npc->active && !anim->previous_active) {
             fc_visual_scene_reset_npc(&animation->scene, i, npc->x, npc->y,
                                       npc->size, 0.0f);
         } else if ((npc->active || npc->died_this_tick) && visual->active) {
             fc_visual_actor_enqueue_transition(visual,
-                animation->previous_npc_x[i], animation->previous_npc_y[i],
-                npc->x, npc->y, 0);
+                anim->previous_x, anim->previous_y, npc->x, npc->y, 0);
         } else if (!npc->active && !npc->died_this_tick) {
             fc_visual_scene_deactivate_npc(&animation->scene, i);
         }
@@ -5696,9 +5702,7 @@ void fc_actor_animation_ingest_events(FcActorAnimation *animation,
             tps, sequence_duration(sequence));
         animation->player_attack_target =
             events->player_attack_target_npc_slot;
-        animation->player_action_sequence = 0;
-        animation->player_action_frame = 0;
-        animation->player_action_timer = 0.0f;
+        animation->player_action = (AnimTrack){0};
     }
     if (events->prayer_flick_performed) {
         animation->prayer_flick_timer =
@@ -5709,10 +5713,11 @@ void fc_actor_animation_ingest_events(FcActorAnimation *animation,
         int slot = attack->npc_slot;
         if (slot < 0 || slot >= FC_MAX_NPCS ||
             attack->attack_style == ATTACK_NONE) continue;
-        animation->npc_attack_styles[slot] = attack->attack_style;
-        animation->npc_attack_timers[slot] = 1.15f;
-        animation->npc_prayer_indicator_timers[slot] = 0.30f;
-        animation->npc_prayer_lock_ticks[slot] = attack->prayer_lock_tick;
+        FcNpcAnimation *anim = &animation->npcs[slot];
+        anim->attack_style = attack->attack_style;
+        anim->attack_timer = 1.15f;
+        anim->prayer_indicator_timer = 0.30f;
+        anim->prayer_lock_tick = attack->prayer_lock_tick;
     }
 }
 
@@ -5759,47 +5764,26 @@ void fc_actor_animation_update_scene(FcActorAnimation *animation,
         sequence_blocks_movement(cache,
             player_action_sequence(animation, state)));
     for (int i = 0; i < FC_MAX_NPCS; i++) {
-        uint16_t action = 0;
-        if ((state->npcs[i].is_dead || state->npcs[i].died_this_tick) &&
-            (!deferred_deaths || !deferred_deaths[i])) {
-            int type = state->npcs[i].npc_type;
-            if (type > 0 && type < 9) action = NPC_ANIM_DEATH[type];
-        } else if (animation->npc_attack_timers[i] > 0.0f) {
-            action = npc_attack_sequence(state->npcs[i].npc_type,
-                                          animation->npc_attack_styles[i]);
-        }
         fc_visual_actor_set_movement_blocked(&animation->scene.npcs[i],
-                                             sequence_blocks_movement(cache, action));
+            sequence_blocks_movement(cache,
+                npc_action_sequence(animation, state, i, deferred_deaths)));
     }
     float visual_dt = fc_actor_animation_scaled_dt(tps, dt);
     if (advance_scene) fc_visual_scene_update(&animation->scene, visual_dt);
-    if (animation->player_lock_timer > 0.0f) {
-        animation->player_lock_timer -= dt;
-        if (animation->player_lock_timer <= 0.0f) {
-            animation->player_lock_timer = 0.0f;
-            animation->player_lock_sequence = 0;
-            animation->player_attack_target = -1;
-            animation->player_action_sequence = 0;
-            animation->player_action_frame = 0;
-            animation->player_action_timer = 0.0f;
-        }
+    if (tick_down(&animation->player_lock_timer, dt)) {
+        animation->player_lock_sequence = 0;
+        animation->player_attack_target = -1;
+        animation->player_action = (AnimTrack){0};
     }
-    if (animation->prayer_flick_timer > 0.0f) {
-        animation->prayer_flick_timer -= dt;
-        if (animation->prayer_flick_timer < 0.0f)
-            animation->prayer_flick_timer = 0.0f;
-    }
+    tick_down(&animation->prayer_flick_timer, dt);
     for (int i = 0; i < FC_MAX_NPCS; i++) {
-        if (animation->npc_prayer_lock_ticks[i] >= 0 &&
-            state->tick >= animation->npc_prayer_lock_ticks[i]) {
-            animation->npc_prayer_indicator_timers[i] = 0.0f;
-            animation->npc_prayer_lock_ticks[i] = -1;
+        FcNpcAnimation *anim = &animation->npcs[i];
+        if (anim->prayer_lock_tick >= 0 &&
+            state->tick >= anim->prayer_lock_tick) {
+            anim->prayer_indicator_timer = 0.0f;
+            anim->prayer_lock_tick = -1;
         }
-        if (animation->npc_prayer_indicator_timers[i] > 0.0f) {
-            animation->npc_prayer_indicator_timers[i] -= dt;
-            if (animation->npc_prayer_indicator_timers[i] < 0.0f)
-                animation->npc_prayer_indicator_timers[i] = 0.0f;
-        }
+        tick_down(&anim->prayer_indicator_timer, dt);
     }
 }
 
@@ -5829,116 +5813,77 @@ void fc_actor_animation_update_models(FcActorAnimation *animation,
     float anim_dt = fc_actor_animation_scaled_dt(tps, dt);
     ModelEntry *player_entry =
         fc_actor_player_model_entry(player_models, active_loadout);
-    int visual_profile = fc_player_equipment_visual_profile(&state->player);
-    recreate_player_state(animation, player_entry, visual_profile);
+    recreate_player_state(animation, player_entry);
     if (animation->player_state && player_entry) {
-        const FcPlayerVisualProfile *profile =
-            fc_player_visual_profile(visual_profile);
+        const FcPlayerVisualProfile *profile = fc_player_visual_profile(
+            fc_player_equipment_visual_profile(&state->player));
         FcVisualPose pose = fc_visual_scene_player_pose(&animation->scene);
         uint16_t pose_sequence = player_pose_sequence(profile, pose.locomotion);
         uint16_t action_sequence = player_action_sequence(animation, state);
-        if (pose_sequence != animation->player_pose_sequence &&
-            movement_sequence(profile, animation->player_pose_sequence) &&
+        if (pose_sequence != animation->player_pose.sequence &&
+            movement_sequence(profile, animation->player_pose.sequence) &&
             movement_sequence(profile, pose_sequence)) {
-            retarget_track(cache, pose_sequence,
-                &animation->player_pose_sequence,
-                &animation->player_pose_frame,
-                &animation->player_pose_timer);
+            retarget_track(cache, pose_sequence, &animation->player_pose);
         }
         AnimSequence *pose_track = advance_track(cache, pose_sequence,
-            &animation->player_pose_sequence, &animation->player_pose_frame,
-            &animation->player_pose_timer, anim_dt, 0);
+            &animation->player_pose, anim_dt, 0);
         AnimSequence *action_track = NULL;
         if (action_sequence != 0) {
             action_track = advance_track(cache, action_sequence,
-                &animation->player_action_sequence,
-                &animation->player_action_frame,
-                &animation->player_action_timer, anim_dt,
+                &animation->player_action, anim_dt,
                 player_lock_active(animation));
         } else {
-            animation->player_action_sequence = 0;
-            animation->player_action_frame = 0;
-            animation->player_action_timer = 0.0f;
+            animation->player_action = (AnimTrack){0};
         }
-        animation->player_sequence = action_track ? action_sequence : pose_sequence;
-        animation->player_frame = action_track
-            ? animation->player_action_frame : animation->player_pose_frame;
         if (anim_mix_pose_action(cache, animation->player_state,
                 player_entry->base_verts, pose_track,
-                animation->player_pose_frame, action_track,
-                animation->player_action_frame)) {
+                animation->player_pose.frame, action_track,
+                animation->player_action.frame)) {
             fc_model_animation_upload(player_entry, animation->player_state);
         }
     }
     if (!npc_models) return;
     for (int i = 0; i < FC_MAX_NPCS; i++) {
         const FcNpc *npc = &state->npcs[i];
+        FcNpcAnimation *anim = &animation->npcs[i];
         if (!npc->active && !npc->died_this_tick) {
-            if (animation->npc_states[i]) {
-                anim_model_state_free(animation->npc_states[i]);
-                animation->npc_states[i] = NULL;
+            if (anim->state) {
+                anim_model_state_free(anim->state);
+                anim->state = NULL;
             }
-            animation->npc_attack_styles[i] = ATTACK_NONE;
-            animation->npc_attack_timers[i] = 0.0f;
-            animation->npc_prayer_indicator_timers[i] = 0.0f;
-            animation->npc_prayer_lock_ticks[i] = -1;
+            anim->attack_style = ATTACK_NONE;
+            anim->attack_timer = 0.0f;
+            anim->prayer_indicator_timer = 0.0f;
+            anim->prayer_lock_tick = -1;
             continue;
         }
         ModelEntry *entry = npc_model_find(npc_models, npc->npc_type);
         if (!entry || !entry->vertex_skins) continue;
-        if (!animation->npc_states[i] ||
-            animation->npc_states[i]->vert_count != entry->base_vert_count) {
-            if (animation->npc_states[i])
-                anim_model_state_free(animation->npc_states[i]);
-            animation->npc_states[i] = anim_model_state_create(
-                entry->vertex_skins, entry->base_vert_count);
-            animation->npc_sequences[i] =
-                npc->npc_type > 0 && npc->npc_type < 9
-                    ? NPC_ANIM_IDLE[npc->npc_type] : 0;
-            animation->npc_frames[i] = 0;
-            animation->npc_timers[i] = 0.0f;
-            animation->npc_action_sequences[i] = 0;
-            animation->npc_action_frames[i] = 0;
-            animation->npc_action_timers[i] = 0.0f;
+        const FcNpcAnims *anims = npc_anims(npc->npc_type);
+        if (!anim->state || anim->state->vert_count != entry->base_vert_count) {
+            if (anim->state) anim_model_state_free(anim->state);
+            anim->state = anim_model_state_create(entry->vertex_skins,
+                                                  entry->base_vert_count);
+            anim->pose = (AnimTrack){anims->idle, 0, 0.0f};
+            anim->action = (AnimTrack){0};
         }
-        uint16_t pose_sequence = npc->npc_type > 0 && npc->npc_type < 9
-            ? NPC_ANIM_IDLE[npc->npc_type] : 0;
-        if (animation->scene.npcs[i].moving &&
-            npc->npc_type > 0 && npc->npc_type < 9)
-            pose_sequence = NPC_ANIM_WALK[npc->npc_type];
-        uint16_t action_sequence = 0;
-        if ((npc->is_dead || npc->died_this_tick) &&
-            (!deferred_deaths || !deferred_deaths[i])) {
-            if (npc->npc_type > 0 && npc->npc_type < 9)
-                action_sequence = NPC_ANIM_DEATH[npc->npc_type];
-        } else if (animation->npc_attack_timers[i] > 0.0f) {
-            action_sequence = npc_attack_sequence(
-                npc->npc_type, animation->npc_attack_styles[i]);
-        }
+        uint16_t pose_sequence = animation->scene.npcs[i].moving
+            ? anims->walk : anims->idle;
+        uint16_t action_sequence =
+            npc_action_sequence(animation, state, i, deferred_deaths);
         AnimSequence *pose_track = advance_track(cache, pose_sequence,
-            &animation->npc_sequences[i], &animation->npc_frames[i],
-            &animation->npc_timers[i], anim_dt, 0);
+            &anim->pose, anim_dt, 0);
         AnimSequence *action_track = NULL;
         if (action_sequence != 0) {
             action_track = advance_track(cache, action_sequence,
-                &animation->npc_action_sequences[i],
-                &animation->npc_action_frames[i],
-                &animation->npc_action_timers[i], anim_dt, 1);
+                &anim->action, anim_dt, 1);
         } else {
-            animation->npc_action_sequences[i] = 0;
-            animation->npc_action_frames[i] = 0;
-            animation->npc_action_timers[i] = 0.0f;
+            anim->action = (AnimTrack){0};
         }
-        anim_mix_pose_action(cache, animation->npc_states[i],
-            entry->base_verts, pose_track, animation->npc_frames[i],
-            action_track, animation->npc_action_frames[i]);
-        if (animation->npc_attack_timers[i] > 0.0f) {
-            animation->npc_attack_timers[i] -= anim_dt;
-            if (animation->npc_attack_timers[i] <= 0.0f) {
-                animation->npc_attack_timers[i] = 0.0f;
-                animation->npc_attack_styles[i] = ATTACK_NONE;
-            }
-        }
+        anim_mix_pose_action(cache, anim->state, entry->base_verts,
+            pose_track, anim->pose.frame, action_track, anim->action.frame);
+        if (tick_down(&anim->attack_timer, anim_dt))
+            anim->attack_style = ATTACK_NONE;
     }
 }
 
@@ -5953,15 +5898,15 @@ int fc_actor_animation_prayer_window_active(const FcActorAnimation *animation,
                                             int npc_slot,
                                             int current_tick) {
     if (!animation || npc_slot < 0 || npc_slot >= FC_MAX_NPCS) return 0;
-    return animation->npc_prayer_indicator_timers[npc_slot] > 0.0f ||
-        (animation->npc_prayer_lock_ticks[npc_slot] >= 0 &&
-         current_tick < animation->npc_prayer_lock_ticks[npc_slot]);
+    const FcNpcAnimation *anim = &animation->npcs[npc_slot];
+    return anim->prayer_indicator_timer > 0.0f ||
+        (anim->prayer_lock_tick >= 0 && current_tick < anim->prayer_lock_tick);
 }
 
 int fc_actor_animation_previous_npc_active(const FcActorAnimation *animation,
                                            int npc_slot) {
     return animation && npc_slot >= 0 && npc_slot < FC_MAX_NPCS
-        ? animation->previous_npc_active[npc_slot] : 0;
+        ? animation->npcs[npc_slot].previous_active : 0;
 }
 
 /* Projectile Visual */
@@ -6330,9 +6275,7 @@ typedef struct {
     float projectile_angle;
     float projectile_progress;
     AnimModelState *anim_state;
-    uint16_t anim_sequence;
-    int anim_frame;
-    float anim_timer;
+    AnimTrack anim;
 } VisualProjectile;
 
 typedef struct {
@@ -6353,9 +6296,7 @@ typedef struct {
     FcVisualTargetKind face_kind;
     int face_slot;
     AnimModelState *anim_state;
-    uint16_t anim_sequence;
-    int anim_frame;
-    float anim_timer;
+    AnimTrack anim;
 } VisualEffect;
 
 /* Actor overhead sprites: hitsplats and the 30-pixel health bar. */
@@ -7172,8 +7113,7 @@ void fc_combat_presentation_draw_world(
             if (spot) angle += (float)spot->rotation;
             if (spot && spot->animation_id >= 0) {
                 fc_model_animation_update(entry, context->anim_cache,
-                    &projectile->anim_state, &projectile->anim_sequence,
-                    &projectile->anim_frame, &projectile->anim_timer,
+                    &projectile->anim_state, &projectile->anim,
                     spot->animation_id, animation_dt, 0.0f);
             }
             Quaternion yaw = QuaternionFromAxisAngle(
@@ -7233,8 +7173,7 @@ void fc_combat_presentation_draw_world(
                 ? (float)spot->resize_z / 128.0f : 1.0f;
             if (spot && spot->animation_id >= 0) {
                 fc_model_animation_update(entry, context->anim_cache,
-                    &effect->anim_state, &effect->anim_sequence,
-                    &effect->anim_frame, &effect->anim_timer,
+                    &effect->anim_state, &effect->anim,
                     spot->animation_id, animation_dt, 0.0f);
             }
             rlDisableBackfaceCulling();
@@ -8101,9 +8040,7 @@ int dbg_draw_panel_tabs(const FcState* state,
 #define FC_REWARD_CONFIG_PATH_MAX 256
 typedef struct {
     AnimModelState* anim_state;
-    uint16_t anim_seq;
-    int anim_frame;
-    float anim_timer;
+    AnimTrack anim;
 } ObjectAnimRuntime;
 
 /* NPC colors by type */
@@ -8964,7 +8901,7 @@ static int find_clicked_npc_idx(ViewerState* v) {
                                                  entity->npc_type);
         float depth = -1;
         if (model) {
-            const AnimModelState *animation = v->actor_animation.npc_states[slot];
+            const AnimModelState *animation = v->actor_animation.npcs[slot].state;
             depth = models_pick_depth(model, animation ? animation->verts : NULL,
                 position, pose.yaw_degrees, v->camera, mouse, GetScreenWidth(), GetScreenHeight());
         } else {
@@ -9280,8 +9217,7 @@ static void draw_animated_objects(ViewerState* v) {
         if (row->animation_id >= 0 && v->anim_cache) {
             ObjectAnimRuntime* rt = &v->object_anim_runtimes[i];
             fc_model_animation_update(entry, v->anim_cache, &rt->anim_state,
-                                      &rt->anim_seq, &rt->anim_frame,
-                                      &rt->anim_timer, row->animation_id, dt,
+                                      &rt->anim, row->animation_id, dt,
                                       row->phase_ticks);
         }
 
@@ -9426,7 +9362,7 @@ static void draw_scene(ViewerState* v) {
                 Vector3 pos = {ex, gy, ey};
                 float face_angle = pose.face_angle;
                 if (e->npc_slot >= 0 && e->npc_slot < FC_MAX_NPCS &&
-                    v->actor_animation.npc_states[e->npc_slot]) {
+                    v->actor_animation.npcs[e->npc_slot].state) {
                     /* Same-type NPCs share an asset mesh. Upload this actor's
                      * transformed vertices immediately before its draw call. */
                     fc_actor_animation_upload_npc(
@@ -10120,7 +10056,6 @@ static ViewerState* fc_viewer_create(int replay) {
         return NULL;
     }
     fc_init(&v->state);
-    fc_actor_animation_init(&v->actor_animation);
     runec_ui_init(&v->ui);
     if (!fc_osrs_text_init()) {
         fprintf(stderr,

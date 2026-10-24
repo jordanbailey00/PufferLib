@@ -747,11 +747,8 @@ static int equipment_appearance_test(void) {
         for (int f = 0; f < entry->face_count * 3; f++)
             if (entry->face_indices[f] >= entry->base_vert_count) return 1;
         AnimModelState *pose = NULL;
-        uint16_t sequence = 0;
-        int frame = 0;
-        float timer = 0;
-        fc_model_animation_update(entry, cache, &pose, &sequence, &frame,
-                                   &timer, 808, 0, 0);
+        AnimTrack track = {0};
+        fc_model_animation_update(entry, cache, &pose, &track, 808, 0, 0);
         Camera3D camera = {.position={0, 1.6f, -7}, .target={0, 1.0f, 0},
                            .up={0, 1, 0}, .fovy=4.4f, .projection=CAMERA_ORTHOGRAPHIC};
         BeginScissorMode((variant % 4) * 300, (variant / 4) * 320, 300, 320);
