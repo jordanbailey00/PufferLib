@@ -7964,37 +7964,44 @@ static void sync_fc_ui_status(ViewerState* v) {
     v->ui.skill_total = total;
 }
 
+/* Where the minimap centres the player: the drawn position, or the tile
+ * centre before the actor scene has placed the player. */
+static Vector2 minimap_player_position(const ViewerState* v) {
+    const FcPlayer* p = &v->state.player;
+    if (!v->actor_animation.scene.player.active)
+        return (Vector2){(float)p->x + 0.5f, (float)p->y + 0.5f};
+    FcVisualPose pose = fc_visual_scene_player_pose(&v->actor_animation.scene);
+    return (Vector2){pose.x, pose.y};
+}
+
+/* Only drawing reads the minimap, so each frame renders it once, just
+ * before the interface is drawn. */
 static void sync_fc_ui_minimap(ViewerState* v) {
-    if (!v) return;
     FcPlayer* p = &v->state.player;
-    FcVisualPose player_pose =
-        fc_visual_scene_player_pose(&v->actor_animation.scene);
-    float player_x = v->actor_animation.scene.player.active
-        ? player_pose.x : (float)p->x + 0.5f;
-    float player_y = v->actor_animation.scene.player.active
-        ? player_pose.y : (float)p->y + 0.5f;
+    Vector2 player = minimap_player_position(v);
     Color pixels[FC_MINIMAP_DISPLAY_SIZE * FC_MINIMAP_DISPLAY_SIZE];
-    fc_minimap_render(&v->minimap_scene, player_x, player_y, v->cam_yaw,
+    fc_minimap_render(&v->minimap_scene, player.x, player.y, v->cam_yaw,
                       pixels);
     UpdateTexture(v->ui.minimap_texture, pixels);
     v->ui.minimap_rotation = v->cam_yaw;
 
     v->ui.minimap_dot_count = 0;
     runec_ui_add_minimap_dot(&v->ui, 0.0f, 0.0f, RUNEC_UI_MINIMAP_DOT_PLAYER);
+    /* The destination flag: the clicked tile, else the end of the route. */
+    int has_destination = 0, tx = 0, ty = 0;
     if (v->click_feedback.destination_active) {
-        int tx = v->click_feedback.destination_x;
-        int ty = v->click_feedback.destination_y;
-        Vector2 offset = fc_minimap_rotate_offset(
-            (float)tx + 0.5f - player_x,
-            (float)ty + 0.5f - player_y, v->cam_yaw);
-        runec_ui_add_minimap_dot(&v->ui, offset.x, offset.y,
-                                 RUNEC_UI_MINIMAP_DOT_DESTINATION);
+        has_destination = 1;
+        tx = v->click_feedback.destination_x;
+        ty = v->click_feedback.destination_y;
     } else if (p->route_idx < p->route_len && p->route_len > 0) {
-        int tx = p->route_x[p->route_len - 1];
-        int ty = p->route_y[p->route_len - 1];
+        has_destination = 1;
+        tx = p->route_x[p->route_len - 1];
+        ty = p->route_y[p->route_len - 1];
+    }
+    if (has_destination) {
         Vector2 offset = fc_minimap_rotate_offset(
-            (float)tx + 0.5f - player_x,
-            (float)ty + 0.5f - player_y, v->cam_yaw);
+            (float)tx + 0.5f - player.x,
+            (float)ty + 0.5f - player.y, v->cam_yaw);
         runec_ui_add_minimap_dot(&v->ui, offset.x, offset.y,
                                  RUNEC_UI_MINIMAP_DOT_DESTINATION);
     }
@@ -8008,7 +8015,7 @@ static void sync_fc_ui_minimap(ViewerState* v) {
         float npc_y = v->actor_animation.scene.npcs[i].active
             ? npc_pose.y : (float)n->y + (float)n->size * 0.5f;
         Vector2 offset = fc_minimap_rotate_offset(
-            npc_x - player_x, npc_y - player_y, v->cam_yaw);
+            npc_x - player.x, npc_y - player.y, v->cam_yaw);
         runec_ui_add_minimap_dot(&v->ui, offset.x, offset.y,
                                  RUNEC_UI_MINIMAP_DOT_NPC);
     }
@@ -8017,7 +8024,6 @@ static void sync_fc_ui_minimap(ViewerState* v) {
 static void sync_fc_ui(ViewerState* v) {
     sync_fc_ui_items(v);
     sync_fc_ui_status(v);
-    sync_fc_ui_minimap(v);
 }
 
 static void queue_player_tile_request(ViewerState* v, int tx, int ty,
@@ -8142,18 +8148,13 @@ static void handle_runec_ui_intent(ViewerState* v) {
             }
             break;
         case RUNEC_UI_INTENT_MINIMAP_CLICK: {
-            FcVisualPose player_pose =
-                fc_visual_scene_player_pose(&v->actor_animation.scene);
-            float player_x = v->actor_animation.scene.player.active
-                ? player_pose.x : (float)p->x + 0.5f;
-            float player_y = v->actor_animation.scene.player.active
-                ? player_pose.y : (float)p->y + 0.5f;
+            Vector2 player = minimap_player_position(v);
             int tile_x = -1;
             int tile_y = -1;
             Vector2 mouse = GetMousePosition();
             if (fc_minimap_click_to_tile(
                     (float)intent->primary, (float)intent->secondary,
-                    player_x, player_y, v->cam_yaw, &tile_x, &tile_y)) {
+                    player.x, player.y, v->cam_yaw, &tile_x, &tile_y)) {
                 queue_player_tile_request(v, tile_x, tile_y,
                                           mouse.x, mouse.y);
             }
@@ -8208,10 +8209,11 @@ static void load_reward_params(ViewerState* v) {
              found ? config_path : "defaults");
 }
 
+/* Restart reward tracking from the current state. */
 static void reset_reward_tracking(ViewerState* v) {
-    fc_reward_runtime_reset(&v->reward_runtime);
     memset(&v->reward_breakdown, 0, sizeof(v->reward_breakdown));
     v->reward_breakdown_tick = -1;
+    fc_reward_runtime_begin_episode(&v->reward_runtime, &v->state);
 }
 
 static void update_reward_breakdown(ViewerState* v) {
@@ -8230,34 +8232,22 @@ static const char* MANUAL_TPS_LABELS[] = {
 };
 #define NUM_MANUAL_TPS_PRESETS ((int)(sizeof(MANUAL_TPS_PRESETS) / sizeof(MANUAL_TPS_PRESETS[0])))
 
-static float policy_replay_multiplier_to_tps(int multiplier) {
-    switch (multiplier) {
-        case 1: return (float)POLICY_REPLAY_BASE_TPS;
-        case 2: return (float)(POLICY_REPLAY_BASE_TPS * 2);
-        case 4: return (float)(POLICY_REPLAY_BASE_TPS * 4);
-        case 10: return (float)(POLICY_REPLAY_BASE_TPS * 10);
-        default: return (float)POLICY_REPLAY_BASE_TPS;
-    }
+/* Policy replay speeds as multiples of POLICY_REPLAY_BASE_TPS. Keys 1, 2, 4
+ * and 0 pick REPLAY_SPEEDS[0..3]; Up and Down step through them. */
+static const int REPLAY_SPEEDS[] = {1, 2, 4, 10};
+#define REPLAY_SPEED_COUNT ((int)(sizeof(REPLAY_SPEEDS) / sizeof(REPLAY_SPEEDS[0])))
+
+static float replay_speed_tps(int index) {
+    return (float)(POLICY_REPLAY_BASE_TPS * REPLAY_SPEEDS[index]);
 }
 
-static int policy_replay_tps_to_multiplier(float tps) {
-    if (float_near(tps, (float)POLICY_REPLAY_BASE_TPS)) return 1;
-    if (float_near(tps, (float)(POLICY_REPLAY_BASE_TPS * 2))) return 2;
-    if (float_near(tps, (float)(POLICY_REPLAY_BASE_TPS * 4))) return 4;
-    if (float_near(tps, (float)(POLICY_REPLAY_BASE_TPS * 10))) return 10;
+/* The REPLAY_SPEEDS index of the current tick rate; any other rate (a
+ * console preset) counts as 1x. */
+static int replay_speed_index(const ViewerState* v) {
+    for (int i = 0; i < REPLAY_SPEED_COUNT; i++) {
+        if (float_near(v->tps, replay_speed_tps(i))) return i;
+    }
     return 0;
-}
-
-static int policy_replay_normalize_multiplier(int multiplier) {
-    switch (multiplier) {
-        case 1:
-        case 2:
-        case 4:
-        case 10:
-            return multiplier;
-        default:
-            return 1;
-    }
 }
 
 static void set_viewer_tps(ViewerState* v, float tps) {
@@ -8268,42 +8258,13 @@ static void set_viewer_tps(ViewerState* v, float tps) {
         v->tick_acc = fmodf(v->tick_acc, 1.0f);
 }
 
-static void set_policy_replay_speed(ViewerState* v, int multiplier) {
-    int normalized = policy_replay_normalize_multiplier(multiplier);
-    set_viewer_tps(v, policy_replay_multiplier_to_tps(normalized));
+/* Switch to REPLAY_SPEEDS[index], clamped to the table. */
+static void set_policy_replay_speed(ViewerState* v, int index) {
+    if (index < 0) index = 0;
+    if (index > REPLAY_SPEED_COUNT - 1) index = REPLAY_SPEED_COUNT - 1;
+    set_viewer_tps(v, replay_speed_tps(index));
     fprintf(stderr, "[eval] Replay speed set to %dx (%.2f TPS)\n",
-            normalized, v->tps);
-}
-
-static void cycle_policy_replay_speed(ViewerState* v, int direction) {
-    static const int presets[] = {1, 2, 4, 10};
-    int current = policy_replay_tps_to_multiplier(v->tps);
-    int idx = 0;
-
-    for (int i = 0; i < 4; i++) {
-        if (presets[i] == current) {
-            idx = i;
-            break;
-        }
-    }
-
-    idx += direction;
-    if (idx < 0) idx = 0;
-    if (idx > 3) idx = 3;
-    set_policy_replay_speed(v, presets[idx]);
-}
-
-static void set_manual_speed(ViewerState* v, float tps) {
-    float best = MANUAL_TPS_PRESETS[0];
-    float best_diff = fabsf(tps - best);
-    for (int i = 1; i < NUM_MANUAL_TPS_PRESETS; i++) {
-        float diff = fabsf(tps - MANUAL_TPS_PRESETS[i]);
-        if (diff < best_diff) {
-            best = MANUAL_TPS_PRESETS[i];
-            best_diff = diff;
-        }
-    }
-    set_viewer_tps(v, best);
+            REPLAY_SPEEDS[index], v->tps);
 }
 
 static void toggle_debug_overlay(ViewerState* v) {
@@ -8364,45 +8325,57 @@ static void sync_player_appearance(ViewerState *v) {
     }
 }
 
-static void fc_viewer_reset_presentation(ViewerState* v) {
-    sync_player_appearance(v);
-    v->item_message_seconds = 0.0f;
+/* Rebuild what is drawn from the state: render entities and events, combat
+ * effects, actor animation, click feedback and the debug event log. */
+static void reset_scene_presentation(ViewerState* v) {
     fc_fill_render_entities(&v->state, v->entities, &v->entity_count);
     fc_fill_render_events(&v->state, &v->render_events);
-    memset(v->actions, 0, sizeof(v->actions));
     fc_combat_presentation_reset(v->combat_presentation);
     fc_actor_animation_reset(&v->actor_animation, &v->state,
                              v->appearance.model, v->active_loadout);
+    fc_click_feedback_reset(&v->click_feedback);
+    dbg_log_clear();
+}
+
+/* A new episode or replay state: also drops buffered input and messages. */
+static void fc_viewer_reset_presentation(ViewerState* v) {
+    sync_player_appearance(v);
+    v->item_message_seconds = 0.0f;
+    memset(v->actions, 0, sizeof(v->actions));
     v->pending_prayer = 0;
     v->pending_eat = 0;
     v->pending_drink = 0;
     v->pending_attack_npc = -1;
     v->pending_tile_x = -1;
     v->pending_tile_y = -1;
-    fc_click_feedback_reset(&v->click_feedback);
-    dbg_log_clear();
+    reset_scene_presentation(v);
+}
+
+/* Replace the NPCs with a fresh spawn of `wave`, restore HP and Prayer, and
+ * clear the terminal and Jad-healer flags (already clear after fc_reset). */
+static void restart_at_wave(FcState* state, int wave) {
+    for (int i = 0; i < FC_MAX_NPCS; i++) {
+        state->npcs[i].active = 0;
+        state->npcs[i].is_dead = 0;
+    }
+    state->npcs_remaining = 0;
+    state->current_wave = wave;
+    fc_wave_spawn(state, wave);
+    state->player.current_hp = state->player.max_hp;
+    state->player.current_prayer = state->player.max_prayer;
+    state->terminal = TERMINAL_NONE;
+    state->jad_healers_spawned = 0;
 }
 
 static void reset_ep(ViewerState* v) {
     runec_ui_close_context(&v->ui);
     v->scene_right_tracking = v->scene_right_dragged = 0;
     load_reward_params(v);
-    reset_reward_tracking(v);
     fc_reset(&v->state, (uint32_t)GetRandomValue(1, 999999));
-    /* Skip to start_wave if set */
-    if (v->start_wave > 1 && v->start_wave <= FC_NUM_WAVES) {
-        for (int i = 0; i < FC_MAX_NPCS; i++) {
-            v->state.npcs[i].active = 0;
-            v->state.npcs[i].is_dead = 0;
-        }
-        v->state.npcs_remaining = 0;
-        v->state.current_wave = v->start_wave;
-        fc_wave_spawn(&v->state, v->start_wave);
-        v->state.player.current_hp = v->state.player.max_hp;
-        v->state.player.current_prayer = v->state.player.max_prayer;
-    }
+    if (v->start_wave > 1 && v->start_wave <= FC_NUM_WAVES)
+        restart_at_wave(&v->state, v->start_wave);
     apply_initial_supplies(v);
-    fc_reward_runtime_begin_episode(&v->reward_runtime, &v->state);
+    reset_reward_tracking(v);
     fc_viewer_reset_presentation(v);
 }
 
@@ -8411,27 +8384,9 @@ static void viewer_jump_to_wave(ViewerState* v, int wave) {
     runec_ui_close_context(&v->ui);
     if (wave < 1) wave = 1;
     if (wave > FC_NUM_WAVES) wave = FC_NUM_WAVES;
-
-    for (int i = 0; i < FC_MAX_NPCS; i++) {
-        v->state.npcs[i].active = 0;
-        v->state.npcs[i].is_dead = 0;
-    }
-    v->state.npcs_remaining = 0;
-    v->state.current_wave = wave;
-    fc_wave_spawn(&v->state, wave);
-    v->state.player.current_hp = v->state.player.max_hp;
-    v->state.player.current_prayer = v->state.player.max_prayer;
-    v->state.terminal = TERMINAL_NONE;
-    v->state.jad_healers_spawned = 0;
+    restart_at_wave(&v->state, wave);
     reset_reward_tracking(v);
-    fc_reward_runtime_begin_episode(&v->reward_runtime, &v->state);
-    fc_fill_render_entities(&v->state, v->entities, &v->entity_count);
-    fc_fill_render_events(&v->state, &v->render_events);
-    fc_combat_presentation_reset(v->combat_presentation);
-    fc_actor_animation_reset(&v->actor_animation, &v->state,
-                             v->appearance.model, v->active_loadout);
-    fc_click_feedback_reset(&v->click_feedback);
-    dbg_log_clear();
+    reset_scene_presentation(v);
 }
 
 /* ======================================================================== */
@@ -8791,6 +8746,20 @@ static void draw_actor_footprint(ViewerState* v,
     DrawLine3D(southwest, northwest, outline);
 }
 
+/* What the combat presentation reads from the viewer, as of now. */
+static FcCombatPresentationContext combat_presentation_context(ViewerState* v) {
+    return (FcCombatPresentationContext){
+        .state = &v->state,
+        .events = &v->render_events,
+        .scene = &v->actor_animation.scene,
+        .terrain = v->terrain,
+        .anim_cache = v->anim_cache,
+        .player_profile = fc_player_visual_profile(
+            fc_player_equipment_visual_profile(&v->state.player)),
+        .tps = v->tps,
+    };
+}
+
 static void draw_scene(ViewerState* v) {
     if (v->camera_locked) {
         v->camera.target = camera_follow_target(v);
@@ -8871,15 +8840,7 @@ static void draw_scene(ViewerState* v) {
         rlEnableBackfaceCulling();
     }
 
-    FcCombatPresentationContext combat_context = {
-        .state = &v->state,
-        .events = &v->render_events,
-        .scene = &v->actor_animation.scene,
-        .terrain = v->terrain,
-        .anim_cache = v->anim_cache,
-        .player_profile = fc_player_visual_profile(fc_player_equipment_visual_profile(&v->state.player)),
-        .tps = v->tps,
-    };
+    FcCombatPresentationContext combat_context = combat_presentation_context(v);
     fc_combat_presentation_draw_world(v->combat_presentation,
                                       &combat_context, GetFrameTime());
     /* Debug overlays — 3D collision tiles (before EndMode3D) */
@@ -9055,17 +9016,39 @@ static void draw_runec_console_wave_grid(ViewerState* v, Rectangle body) {
     }
 }
 
+/* The NPC slots the console's target rows list: living NPCs in slot order. */
+static int console_target_slots(const FcState* state,
+                                int slots[RUNEC_CONSOLE_NPC_ROWS]) {
+    int count = 0;
+    for (int ni = 0; ni < FC_MAX_NPCS && count < RUNEC_CONSOLE_NPC_ROWS; ni++) {
+        const FcNpc* npc = &state->npcs[ni];
+        if (npc->active && !npc->is_dead) slots[count++] = ni;
+    }
+    return count;
+}
+
+/* Keep a diagnostics tab's scroll offset within its content; returns the
+ * largest offset. */
+static int clamp_console_scroll(ViewerState* v, int tab, int visible_height) {
+    int max_scroll = v->console_content_height[tab] - visible_height;
+    if (max_scroll < 0) max_scroll = 0;
+    if (v->console_scroll[tab] < 0) v->console_scroll[tab] = 0;
+    if (v->console_scroll[tab] > max_scroll) v->console_scroll[tab] = max_scroll;
+    return max_scroll;
+}
+
 static void draw_runec_console_controls(ViewerState* v, Rectangle body) {
     Vector2 mouse = GetMousePosition();
     int x = (int)body.x + 4;
     char text[128];
 
     fc_osrs_draw_text("NPC Targets", x, (int)body.y + 3, 9, COL_TEXT_YELLOW);
-    int shown = 0;
-    for (int ni = 0; ni < FC_MAX_NPCS && shown < RUNEC_CONSOLE_NPC_ROWS; ni++) {
+    int slots[RUNEC_CONSOLE_NPC_ROWS];
+    int shown = console_target_slots(&v->state, slots);
+    for (int i = 0; i < shown; i++) {
+        int ni = slots[i];
         FcNpc* npc = &v->state.npcs[ni];
-        if (!npc->active || npc->is_dead) continue;
-        Rectangle row = runec_console_target_row_rect(body, shown);
+        Rectangle row = runec_console_target_row_rect(body, i);
         int selected = ni == v->state.player.attack_target_idx;
         int hovered = CheckCollisionPointRec(mouse, row);
         if (selected || hovered) {
@@ -9092,7 +9075,6 @@ static void draw_runec_console_controls(ViewerState* v, Rectangle body) {
         snprintf(text, sizeof(text), "%d", npc->current_hp / 10);
         fc_osrs_draw_text(text, bar_x + bar_w + 4, (int)row.y + 2,
                  8, COL_TEXT_DIM);
-        shown++;
     }
     if (shown == 0)
         fc_osrs_draw_text("No NPCs alive", x + 2, (int)body.y + 20,
@@ -9138,12 +9120,7 @@ static void draw_runec_console_diagnostics(ViewerState* v, Rectangle body) {
     int available_height = (int)body.height - 6;
     int scroll = 0;
     if (debug_tab >= 0 && debug_tab < 4) {
-        int max_scroll = v->console_content_height[debug_tab] - available_height;
-        if (max_scroll < 0) max_scroll = 0;
-        if (v->console_scroll[debug_tab] < 0)
-            v->console_scroll[debug_tab] = 0;
-        if (v->console_scroll[debug_tab] > max_scroll)
-            v->console_scroll[debug_tab] = max_scroll;
+        clamp_console_scroll(v, debug_tab, available_height);
         scroll = v->console_scroll[debug_tab];
     }
 
@@ -9161,10 +9138,7 @@ static void draw_runec_console_diagnostics(ViewerState* v, Rectangle body) {
     if (debug_tab >= 0 && debug_tab < 4) {
         int height = end_y - content_y;
         v->console_content_height[debug_tab] = height > 0 ? height : 0;
-        int max_scroll = height - available_height;
-        if (max_scroll < 0) max_scroll = 0;
-        if (v->console_scroll[debug_tab] > max_scroll)
-            v->console_scroll[debug_tab] = max_scroll;
+        int max_scroll = clamp_console_scroll(v, debug_tab, available_height);
         if (max_scroll > 0) {
             int track_x = (int)(body.x + body.width) - 6;
             int track_y = (int)body.y + 3;
@@ -9274,22 +9248,19 @@ static int process_runec_console_input(ViewerState* v) {
             if (!CheckCollisionPointRec(
                     mouse, runec_console_tps_button_rect(body, i)))
                 continue;
-            set_manual_speed(v, MANUAL_TPS_PRESETS[i]);
+            set_viewer_tps(v, MANUAL_TPS_PRESETS[i]);
             return 1;
         }
 
-        int shown = 0;
-        for (int ni = 0; ni < FC_MAX_NPCS &&
-                 shown < RUNEC_CONSOLE_NPC_ROWS; ni++) {
-            FcNpc* npc = &v->state.npcs[ni];
-            if (!npc->active || npc->is_dead) continue;
+        int slots[RUNEC_CONSOLE_NPC_ROWS];
+        int shown = console_target_slots(&v->state, slots);
+        for (int i = 0; i < shown; i++) {
             if (CheckCollisionPointRec(
-                    mouse, runec_console_target_row_rect(body, shown))) {
-                queue_player_attack_request(v, ni, mouse.x, mouse.y);
-                fprintf(stderr, "CONSOLE CLICK -> ATTACK npc_idx=%d\n", ni);
+                    mouse, runec_console_target_row_rect(body, i))) {
+                queue_player_attack_request(v, slots[i], mouse.x, mouse.y);
+                fprintf(stderr, "CONSOLE CLICK -> ATTACK npc_idx=%d\n", slots[i]);
                 return 1;
             }
-            shown++;
         }
     }
 
@@ -9298,14 +9269,8 @@ static int process_runec_console_input(ViewerState* v) {
         float wheel = GetMouseWheelMove();
         if (wheel != 0.0f) {
             int index = v->console_tab - 1;
-            int max_scroll = v->console_content_height[index] -
-                             ((int)body.height - 6);
-            if (max_scroll < 0) max_scroll = 0;
             v->console_scroll[index] -= (int)wheel * 24;
-            if (v->console_scroll[index] < 0)
-                v->console_scroll[index] = 0;
-            if (v->console_scroll[index] > max_scroll)
-                v->console_scroll[index] = max_scroll;
+            clamp_console_scroll(v, index, (int)body.height - 6);
         }
     }
     return 1;
@@ -9719,15 +9684,7 @@ static void fc_viewer_ingest_tick(ViewerState* v) {
 
     fc_fill_render_entities(&v->state, v->entities, &v->entity_count);
 
-    FcCombatPresentationContext combat_context = {
-        .state = &v->state,
-        .events = &v->render_events,
-        .scene = &v->actor_animation.scene,
-        .terrain = v->terrain,
-        .anim_cache = v->anim_cache,
-        .player_profile = fc_player_visual_profile(fc_player_equipment_visual_profile(&v->state.player)),
-        .tps = v->tps,
-    };
+    FcCombatPresentationContext combat_context = combat_presentation_context(v);
     fc_combat_presentation_ingest_tick(v->combat_presentation,
                                         &combat_context);
 }
@@ -9747,13 +9704,15 @@ static int fc_viewer_frame(ViewerState* v) {
     if (IsKeyPressed(KEY_SPACE)) v->paused = !v->paused;
     if (IsKeyPressed(KEY_RIGHT)) v->step_once = 1;
     if (v->policy_replay) {
-        if (IsKeyPressed(KEY_ONE)) set_policy_replay_speed(v, 1);
-        if (IsKeyPressed(KEY_TWO)) set_policy_replay_speed(v, 2);
+        if (IsKeyPressed(KEY_ONE)) set_policy_replay_speed(v, 0);
+        if (IsKeyPressed(KEY_TWO)) set_policy_replay_speed(v, 1);
         if (!IsKeyDown(KEY_LEFT_SHIFT) && !IsKeyDown(KEY_RIGHT_SHIFT) &&
-            IsKeyPressed(KEY_FOUR)) set_policy_replay_speed(v, 4);
-        if (IsKeyPressed(KEY_ZERO)) set_policy_replay_speed(v, 10);
-        if (IsKeyPressed(KEY_UP)) cycle_policy_replay_speed(v, +1);
-        if (IsKeyPressed(KEY_DOWN)) cycle_policy_replay_speed(v, -1);
+            IsKeyPressed(KEY_FOUR)) set_policy_replay_speed(v, 2);
+        if (IsKeyPressed(KEY_ZERO)) set_policy_replay_speed(v, 3);
+        if (IsKeyPressed(KEY_UP))
+            set_policy_replay_speed(v, replay_speed_index(v) + 1);
+        if (IsKeyPressed(KEY_DOWN))
+            set_policy_replay_speed(v, replay_speed_index(v) - 1);
     }
     if (!v->policy_replay && IsKeyPressed(KEY_R)) reset_ep(v);
     if (IsKeyPressed(KEY_L)) {
@@ -9891,15 +9850,7 @@ static int fc_viewer_frame(ViewerState* v) {
     float frame_dt = GetFrameTime();
     sync_player_appearance(v);
     if (v->item_message_seconds > 0) v->item_message_seconds -= frame_dt;
-    FcCombatPresentationContext combat_context = {
-        .state = &v->state,
-        .events = &v->render_events,
-        .scene = &v->actor_animation.scene,
-        .terrain = v->terrain,
-        .anim_cache = v->anim_cache,
-        .player_profile = fc_player_visual_profile(fc_player_equipment_visual_profile(&v->state.player)),
-        .tps = v->tps,
-    };
+    FcCombatPresentationContext combat_context = combat_presentation_context(v);
     unsigned char deferred_deaths[FC_MAX_NPCS];
     fc_combat_presentation_deferred_deaths(
         v->combat_presentation, &v->state, deferred_deaths);
@@ -9924,6 +9875,7 @@ static int fc_viewer_frame(ViewerState* v) {
     ClearBackground(COL_BG);
     draw_scene(v);
     sync_fc_ui(v);
+    sync_fc_ui_minimap(v);
     runec_ui_draw(&v->ui, GetScreenWidth(), GetScreenHeight());
     draw_runec_side_overrides(v);
     draw_runec_console(v);
