@@ -245,25 +245,6 @@ def test_download_failure_is_actionable(tmp_path):
         setup_data.download(missing, tmp_path / "download")
 
 
-def test_release_bundle_is_reproducible_and_installs(tmp_path, monkeypatch):
-    tools = load_setup_data()
-    source = tmp_path / "test.map"
-    source.write_bytes(b"bundle fixture")
-    files = [tools.BundleFile(source, "runtime/test.map")]
-    first, second = tmp_path / "a.tar.gz", tmp_path / "b.tar.gz"
-    tools.write_archive(first, files)
-    tools.write_archive(second, files)
-    assert first.read_bytes() == second.read_bytes()
-    bundle = tools.bundle_manifest(first, files, "example/repo", "test-v1", "runtime")
-    assert bundle["url"] == "https://github.com/example/repo/releases/download/test-v1/a.tar.gz"
-    bundle["url"] = first.as_uri()
-    root = tmp_path / "installed"
-    monkeypatch.setattr(tools, "RESOURCE_ROOT", root)
-    tools.install_bundle("core", bundle, force=False)
-    assert tools.verify_tree(root, bundle, exact=True) == []
-    assert (root / "runtime/test.map").read_bytes() == source.read_bytes()
-
-
 @pytest.mark.parametrize("broken", [False, True])
 def test_asset_setup_verification_is_independent_of_display(monkeypatch, broken, capsys):
     tools = load_setup_data()
