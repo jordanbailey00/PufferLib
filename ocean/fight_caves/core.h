@@ -2973,7 +2973,7 @@ static int fc_prayer_potion_restore(int prayer_level) {
 /* Every FcRewardParams field: its [env] key in config/fight_caves.ini, whether
  * it is an int, and its default. The adapter and the viewer read the keys. The
  * defaults equal the shipped values, so running without the config (the
- * viewer's fallback, --benchmark) computes the training reward. */
+ * viewer's fallback) computes the training reward. */
 typedef struct {
     const char* key;
     size_t offset;          /* offsetof(FcRewardParams, field) */

@@ -7,7 +7,7 @@
 #include "binding.c"
 #define FC_CPU_TEST /* CPU inference helpers without the standalone main */
 #pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-function" /* replay/benchmark serve that main */
+#pragma GCC diagnostic ignored "-Wunused-function" /* replay serves that main */
 #include "fight_caves.c"
 #pragma GCC diagnostic pop
 #include <assert.h>

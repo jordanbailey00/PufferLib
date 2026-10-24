@@ -216,12 +216,6 @@ case is skipped by default; set `FC_TEST_RENDER=1` to require it. No GPU trainin
 runs in pytest. The stdlib acceptance runner below and pytest share the same
 C compilation recipe.
 
-Useful standalone diagnostics:
-
-```bash
-./fight_caves --benchmark
-```
-
 ### Disposable-checkout acceptance
 
 In a Linux/CUDA environment with graphics access, run explicitly:

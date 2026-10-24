@@ -2,14 +2,12 @@
  * fight_caves.c — Standalone Fight Caves manual play, CPU replay and inspection.
  *
  * Compiled with: ./build.sh fight_caves --cpu (add --debug for sanitizers).
- * --benchmark retains the optional random-action, headless smoke test.
  */
 
 #include "fight_caves.h"
 #include "puffercpu.c"  /* PufferLib's CPU inference only; not its generic viewer main. */
 #include <limits.h>
 #include <stdio.h>
-#include <time.h>
 
 /* H is 8-aligned so FP32 and BF16 native tensor layouts have the same padding.
  * Raw files carry no architecture/version metadata: this checks structure only. */
@@ -143,82 +141,13 @@ static int replay(int argc, char** argv, int check_only) {
     return 0;
 }
 
-static int benchmark(void) {
-    FightCaves env = {0};
-    env.num_agents = 1;
-    env.agents[0].observations = (float*)calloc(FC_PUFFER_OBS_SIZE, sizeof(float));
-    env.agents[0].actions = (float*)calloc(FC_PUFFER_NUM_ATNS, sizeof(float));
-    env.agents[0].rewards = (float*)calloc(1, sizeof(float));
-    env.agents[0].terminals = (float*)calloc(1, sizeof(float));
-
-    {
-        env.reward_params = fc_reward_default_params();
-        env.initial_sharks = 0;
-        env.initial_prayer_doses = 0;
-    }
-
-    fc_init(&env.state);
-
-    srand((unsigned)time(NULL));
-    int episodes = 100;
-    int total_ticks = 0;
-    float total_reward = 0;
-    int max_wave = 0;
-
-    printf("Running %d episodes with random actions...\n", episodes);
-    clock_t start = clock();
-
-    for (int ep = 0; ep < episodes; ep++) {
-        puf_reset(&env);
-        env.agents[0].terminals[0] = 0.0f;
-        int ep_ticks = 0;
-        while (!env.agents[0].terminals[0] && ep_ticks < 30000) {
-            if (env.state.current_wave > max_wave) {
-                max_wave = env.state.current_wave;
-            }
-            for (int h = 0; h < FC_PUFFER_NUM_ATNS; h++)
-                env.agents[0].actions[h] = (float)(rand() % 17);
-            env.agents[0].actions[0] = (rand() % 3 == 0) ? (float)(rand() % 17) : 0.0f;
-            env.agents[0].actions[1] = (rand() % 5 == 0) ? (float)(rand() % 9) : 0.0f;
-            env.agents[0].actions[2] = (rand() % 10 == 0)
-                ? (float)(rand() % FC_PRAYER_DIM) : 0.0f;
-            puf_step(&env);
-            total_reward += env.agents[0].rewards[0];
-            ep_ticks++;
-        }
-        total_ticks += ep_ticks;
-    }
-
-    clock_t end = clock();
-    double elapsed = (double)(end - start) / CLOCKS_PER_SEC;
-
-    printf("Results:\n");
-    printf("  Episodes:    %d\n", episodes);
-    printf("  Total ticks: %d\n", total_ticks);
-    printf("  SPS:         %.0f steps/sec\n", total_ticks / elapsed);
-    printf("  Avg reward:  %.2f\n", total_reward / episodes);
-    printf("  Max wave:    %d\n", max_wave);
-    printf("  Time:        %.2fs\n", elapsed);
-    printf("  Log: ep_len=%.1f wave=%.1f n=%.0f\n",
-           env.log.episode_length, env.log.wave_reached, env.log.n);
-
-    puf_close(&env);
-    free(env.agents[0].observations);
-    free(env.agents[0].actions);
-    free(env.agents[0].rewards);
-    free(env.agents[0].terminals);
-    return 0;
-}
-
 #ifndef FC_CPU_TEST
 int main(int argc, char** argv) {
     if (argc > 1 && (strcmp(argv[1], "eval") == 0 || strcmp(argv[1], "check") == 0))
         return replay(argc, argv, strcmp(argv[1], "check") == 0);
     if (argc == 2 && strcmp(argv[1], "--help") == 0)
-        printf("CPU tools: %s --benchmark | check CHECKPOINT.bin | "
+        printf("CPU tools: %s check CHECKPOINT.bin | "
                "eval CHECKPOINT.bin [--headless] [--section.key=value ...]\n", argv[0]);
-    if (argc == 2 && strcmp(argv[1], "--benchmark") == 0)
-        return benchmark();
     return fc_viewer_main(argc, argv);
 }
 #endif

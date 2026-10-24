@@ -218,15 +218,6 @@ class Acceptance:
         render_env = dict(self.env, FC_TEST_OUTPUT=str(self.output / "equipment-appearance.png"))
         self.run("render", suites["simulation"], "--render", env=render_env)
 
-        for name in ("collision", "movement", "los"):
-            asset = self.root / f"resources/fight_caves/runtime/fightcaves.{name}"
-            saved = self.output / asset.name
-            asset.rename(saved)
-            try:
-                self.run(f"missing-{name}", "./fight_caves", "--benchmark",
-                         expected=f"required Fight Caves arena asset 'fightcaves.{name}' is missing")
-            finally:
-                saved.rename(asset)
         asset = self.root / "resources/fight_caves/viewer/fightcaves.minimap.png"
         saved = self.output / asset.name
         asset.rename(saved)
@@ -263,6 +254,16 @@ class Acceptance:
         path = expected[-1]
         cpu = self.run("cpu-replay", "./fight_caves", "eval", path, "--headless", "--base.eval_episodes=2")
         require("CPU_EVAL env=fight_caves" in cpu and "games=2 " in cpu, "CPU replay did not complete two episodes")
+        for name in ("collision", "movement", "los"):
+            asset = self.root / f"resources/fight_caves/runtime/fightcaves.{name}"
+            saved = self.output / asset.name
+            asset.rename(saved)
+            try:
+                self.run(f"missing-{name}", "./fight_caves", "eval", path, "--headless",
+                         "--base.eval_episodes=1",
+                         expected=f"required Fight Caves arena asset 'fightcaves.{name}' is missing")
+            finally:
+                saved.rename(asset)
         native = ["./puffer", "eval", str(path), "--headless", "--base.eval_episodes=2", "--base.eval_agents=64"]
         for label, command in (
             ("gpu-replay", native),
