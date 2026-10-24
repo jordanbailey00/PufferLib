@@ -220,118 +220,56 @@ static int episode_analytics_test(void) {
 }
 
 static int loadout_totals(void) {
-    /* Pre-cleanup preset totals, independent of the item definitions. */
-    static const FcPlayer expected[FC_NUM_LOADOUTS] = {
-        { /* Preset 0 */
-            .ranged_attack_bonus = 153, .ranged_strength_bonus = 100, .defence_stab = 97,
-            .defence_slash = 84, .defence_crush = 110, .defence_magic = 91,
-            .defence_ranged = 90, .prayer_bonus = 0, .weapon_kind = 0,
-            .weapon_speed = 5, .weapon_range = 7, .weapon_uses_ammo = 1,
-            .crystal_piece_mask = 0, .ammo_count = 50000,
-        },
-        { /* Preset 1 */
-            .ranged_attack_bonus = 215, .ranged_strength_bonus = 99, .defence_stab = 116,
-            .defence_slash = 106, .defence_crush = 129, .defence_magic = 150,
-            .defence_ranged = 121, .prayer_bonus = 6, .weapon_kind = 1,
-            .weapon_speed = 5, .weapon_range = 10, .weapon_uses_ammo = 1,
-            .crystal_piece_mask = 0, .ammo_count = 50000,
-        },
-        { /* Preset 2 */
-            .ranged_attack_bonus = 166, .ranged_strength_bonus = 100, .defence_stab = 48,
-            .defence_slash = 49, .defence_crush = 62, .defence_magic = 42,
-            .defence_ranged = 46, .prayer_bonus = 8, .weapon_kind = 0,
-            .weapon_speed = 5, .weapon_range = 7, .weapon_uses_ammo = 1,
-            .crystal_piece_mask = 0, .ammo_count = 50000,
-        },
-        { /* Preset 3 */
-            .ranged_attack_bonus = 166, .ranged_strength_bonus = 100, .defence_stab = 48,
-            .defence_slash = 49, .defence_crush = 62, .defence_magic = 42,
-            .defence_ranged = 46, .prayer_bonus = 8, .weapon_kind = 0,
-            .weapon_speed = 5, .weapon_range = 7, .weapon_uses_ammo = 1,
-            .crystal_piece_mask = 0, .ammo_count = 50000,
-        },
-        { /* Preset 4 */
-            .ranged_attack_bonus = 141, .ranged_strength_bonus = 49, .defence_stab = 48,
-            .defence_slash = 49, .defence_crush = 62, .defence_magic = 42,
-            .defence_ranged = 46, .prayer_bonus = 3, .weapon_kind = 0,
-            .weapon_speed = 3, .weapon_range = 7, .weapon_uses_ammo = 1,
-            .crystal_piece_mask = 0, .ammo_count = 50000,
-        },
-        { /* Preset 5 */
-            .ranged_attack_bonus = 101, .ranged_strength_bonus = 42, .defence_stab = 45,
-            .defence_slash = 46, .defence_crush = 59, .defence_magic = 39,
-            .defence_ranged = 43, .prayer_bonus = 2, .weapon_kind = 0,
-            .weapon_speed = 2, .weapon_range = 5, .weapon_uses_ammo = 1,
-            .crystal_piece_mask = 0, .ammo_count = 50000,
-        },
-        { /* Preset 6 */
-            .ranged_attack_bonus = 220, .ranged_strength_bonus = 129, .defence_stab = 112,
-            .defence_slash = 100, .defence_crush = 123, .defence_magic = 139,
-            .defence_ranged = 117, .prayer_bonus = 11, .weapon_kind = 0,
-            .weapon_speed = 5, .weapon_range = 8, .weapon_uses_ammo = 1,
-            .crystal_piece_mask = 0, .ammo_count = 50000,
-        },
-        { /* Preset 7 */
-            .ranged_attack_bonus = 233, .ranged_strength_bonus = 113, .defence_stab = 102,
-            .defence_slash = 85, .defence_crush = 110, .defence_magic = 107,
-            .defence_ranged = 143, .prayer_bonus = 9, .weapon_kind = 2,
-            .weapon_speed = 4, .weapon_range = 10, .weapon_uses_ammo = 0,
-            .crystal_piece_mask = 7, .ammo_count = 0,
-        },
-        { /* Preset 8 */
-            .ranged_attack_bonus = 205, .ranged_strength_bonus = 97, .defence_stab = 116,
-            .defence_slash = 106, .defence_crush = 129, .defence_magic = 150,
-            .defence_ranged = 121, .prayer_bonus = 6, .weapon_kind = 1,
-            .weapon_speed = 5, .weapon_range = 10, .weapon_uses_ammo = 1,
-            .crystal_piece_mask = 0, .ammo_count = 50000,
-        },
+    /* Pre-cleanup totals of the loadout, independent of the item definitions. */
+    static const FcPlayer expected = {
+        .ranged_attack_bonus = 215, .ranged_strength_bonus = 99, .defence_stab = 116,
+        .defence_slash = 106, .defence_crush = 129, .defence_magic = 150,
+        .defence_ranged = 121, .prayer_bonus = 6, .weapon_kind = 1,
+        .weapon_speed = 5, .weapon_range = 10, .weapon_uses_ammo = 1,
+        .crystal_piece_mask = 0, .ammo_count = 50000,
     };
-    for (int i = 0; i < FC_NUM_LOADOUTS; i++) {
-        FcPlayer p = {0};
-        fc_items_init(&p, &FC_LOADOUTS[i]);
-        CHECK(p.ranged_attack_bonus == expected[i].ranged_attack_bonus);
-        CHECK(p.ranged_strength_bonus == expected[i].ranged_strength_bonus);
-        CHECK(p.defence_stab == expected[i].defence_stab);
-        CHECK(p.defence_slash == expected[i].defence_slash);
-        CHECK(p.defence_crush == expected[i].defence_crush);
-        CHECK(p.defence_magic == expected[i].defence_magic);
-        CHECK(p.defence_ranged == expected[i].defence_ranged);
-        CHECK(p.prayer_bonus == expected[i].prayer_bonus);
-        CHECK(p.weapon_kind == expected[i].weapon_kind);
-        CHECK(p.weapon_speed == expected[i].weapon_speed);
-        CHECK(p.weapon_range == expected[i].weapon_range);
-        CHECK(p.weapon_uses_ammo == expected[i].weapon_uses_ammo);
-        CHECK(p.crystal_piece_mask == expected[i].crystal_piece_mask);
-        CHECK(p.ammo_count == expected[i].ammo_count);
-    }
+    FcPlayer p = {0};
+    fc_items_init(&p, &FC_LOADOUT);
+    CHECK(p.ranged_attack_bonus == expected.ranged_attack_bonus);
+    CHECK(p.ranged_strength_bonus == expected.ranged_strength_bonus);
+    CHECK(p.defence_stab == expected.defence_stab);
+    CHECK(p.defence_slash == expected.defence_slash);
+    CHECK(p.defence_crush == expected.defence_crush);
+    CHECK(p.defence_magic == expected.defence_magic);
+    CHECK(p.defence_ranged == expected.defence_ranged);
+    CHECK(p.prayer_bonus == expected.prayer_bonus);
+    CHECK(p.weapon_kind == expected.weapon_kind);
+    CHECK(p.weapon_speed == expected.weapon_speed);
+    CHECK(p.weapon_range == expected.weapon_range);
+    CHECK(p.weapon_uses_ammo == expected.weapon_uses_ammo);
+    CHECK(p.crystal_piece_mask == expected.crystal_piece_mask);
+    CHECK(p.ammo_count == expected.ammo_count);
     return 0;
 }
 
 /* The loadout and NPC tables are compile-time constants, checked here rather
  * than on every fc_init. */
 static int constant_tables(void) {
-    for (int id = 0; id < FC_NUM_LOADOUTS; id++) {
-        const FcLoadout *loadout = &FC_LOADOUTS[id];
-        CHECK(loadout->max_hp > 0 && loadout->max_prayer > 0);
-        CHECK(loadout->attack_lvl >= 1 && loadout->strength_lvl >= 1 &&
-              loadout->defence_lvl >= 1 && loadout->ranged_lvl >= 1 &&
-              loadout->prayer_lvl >= 1 && loadout->magic_lvl >= 1);
-        CHECK(loadout->ammo >= 0 && loadout->equipment_count > 0 &&
-              loadout->equipment_count <= FC_LOADOUT_EQUIP_MAX);
-        int occupied[FC_EQUIPMENT_SLOTS] = {0};
-        for (int i = 0; i < loadout->equipment_count; i++) {
-            const FcItemDef *item = fc_item_definition(loadout->equipment[i]);
-            CHECK(item && item->slot >= 0 && item->slot < FC_EQUIPMENT_SLOTS);
-            CHECK(occupied[item->slot]++ == 0);
-        }
-        FcPlayer player = {0};
-        apply_loadout_combat_fields(&player, loadout);
-        for (int type = NPC_TZ_KIH; type < NPC_TYPE_COUNT; type++) {
-            FcNpc target = {.npc_type = type};
-            int attack_roll, max_hit;
-            fc_player_ranged_rolls(&player, &target, &attack_roll, &max_hit);
-            CHECK(max_hit > 0);
-        }
+    const FcLoadout *loadout = &FC_LOADOUT;
+    CHECK(loadout->max_hp > 0 && loadout->max_prayer > 0);
+    CHECK(loadout->attack_lvl >= 1 && loadout->strength_lvl >= 1 &&
+          loadout->defence_lvl >= 1 && loadout->ranged_lvl >= 1 &&
+          loadout->prayer_lvl >= 1 && loadout->magic_lvl >= 1);
+    CHECK(loadout->ammo >= 0 && loadout->equipment_count > 0 &&
+          loadout->equipment_count <= FC_LOADOUT_EQUIP_MAX);
+    int occupied[FC_EQUIPMENT_SLOTS] = {0};
+    for (int i = 0; i < loadout->equipment_count; i++) {
+        const FcItemDef *item = fc_item_definition(loadout->equipment[i]);
+        CHECK(item && item->slot >= 0 && item->slot < FC_EQUIPMENT_SLOTS);
+        CHECK(occupied[item->slot]++ == 0);
+    }
+    FcPlayer player = {0};
+    apply_loadout_combat_fields(&player, loadout);
+    for (int type = NPC_TZ_KIH; type < NPC_TYPE_COUNT; type++) {
+        FcNpc target = {.npc_type = type};
+        int attack_roll, max_hit;
+        fc_player_ranged_rolls(&player, &target, &attack_roll, &max_hit);
+        CHECK(max_hit > 0);
     }
     /* NPC reach and attack rules assume a melee-style NPC has a melee hit. */
     for (int type = NPC_TZ_KIH; type < NPC_TYPE_COUNT; type++) {
@@ -391,28 +329,8 @@ static int transactions(void) {
     return 0;
 }
 
-static int two_handed_and_stacks(void) {
+static int ammo_stacks(void) {
     FcState s;
-    reset(&s, 0);
-    /* Full inventory: a one-for-one shield swap may use the source slot for
-     * the two-handed bow when the old shield slot is empty. */
-    s.player.inventory[8] = (FcItemStack){12610, 1, 0};
-    CHECK(fc_equip_item(&s, 8) == FC_ITEM_OK);
-    CHECK(s.player.inventory[8].item_id == 20997);
-    CHECK(s.player.equipment[FC_EQUIP_SLOT_SHIELD].item_id == 12610);
-    CHECK(s.player.weapon_kind == FC_WEAPON_UNARMED);
-    /* With a crossbow AND shield worn, bow needs a second inventory slot. */
-    s.player.inventory[9] = (FcItemStack){9185, 1, 0};
-    CHECK(fc_equip_item(&s, 9) == FC_ITEM_OK);
-    s.player.inventory[9] = (FcItemStack){385, 1, 0};
-    uint32_t before = fc_state_hash(&s);
-    CHECK(fc_equip_item(&s, 8) == FC_ITEM_NO_SPACE);
-    CHECK(fc_state_hash(&s) == before);
-    s.player.inventory[14] = (FcItemStack){0};
-    CHECK(fc_equip_item(&s, 8) == FC_ITEM_OK);
-    CHECK(s.player.inventory[8].item_id == 9185);
-    CHECK(s.player.inventory[14].item_id == 12610);
-    CHECK(s.player.equipment[FC_EQUIP_SLOT_SHIELD].item_id == 0);
     reset(&s, 0);
     s.player.inventory[8] = (FcItemStack){11212, 7, 0};
     CHECK(fc_unequip_item(&s, 13) == FC_ITEM_OK); /* merge despite full inventory */
@@ -421,7 +339,7 @@ static int two_handed_and_stacks(void) {
     CHECK(fc_equip_item(&s, 8) == FC_ITEM_OK);
     CHECK(s.player.ammo_count == 50007);
     s.player.inventory[8] = (FcItemStack){11212, INT_MAX - 50006, 0};
-    before = fc_state_hash(&s);
+    uint32_t before = fc_state_hash(&s);
     CHECK(fc_unequip_item(&s, 13) == FC_ITEM_NO_SPACE); /* whole-stack overflow */
     CHECK(fc_state_hash(&s) == before);
     CHECK(fc_equip_item(&s, 8) == FC_ITEM_OK); /* equip only the portion that fits */
@@ -430,29 +348,10 @@ static int two_handed_and_stacks(void) {
     before = fc_state_hash(&s);
     CHECK(fc_equip_item(&s, 8) == FC_ITEM_NO_SPACE);
     CHECK(fc_state_hash(&s) == before);
-    s.player.inventory[8] = (FcItemStack){9143, 100, 0};
-    CHECK(fc_equip_item(&s, 8) == FC_ITEM_OK);
-    CHECK(s.player.ammo_count == 0); /* bolts do not work in a bow */
-    CHECK(s.player.inventory[8].item_id == 11212);
-    s.player.inventory[9] = (FcItemStack){12788, 1, 0};
-    CHECK(fc_equip_item(&s, 9) == FC_ITEM_OK);
-    CHECK(fc_equip_item(&s, 8) == FC_ITEM_OK); /* dragon arrows in quiver */
-    CHECK(s.player.ammo_count == 0); /* MSB cannot fire dragon arrows */
-    s.player.inventory[8] = (FcItemStack){892, 10, 0};
-    CHECK(fc_equip_item(&s, 8) == FC_ITEM_OK);
-    CHECK(s.player.ammo_count == 10);
-    s.player.inventory[9] = (FcItemStack){9185, 1, 0};
-    CHECK(fc_equip_item(&s, 9) == FC_ITEM_OK);
-    s.player.inventory[8] = (FcItemStack){21946, 10, 0};
-    CHECK(fc_equip_item(&s, 8) == FC_ITEM_OK);
-    CHECK(s.player.ammo_count == 0); /* rune crossbow cannot fire dragon bolts */
-    s.player.inventory[9] = (FcItemStack){11785, 1, 0};
-    CHECK(fc_equip_item(&s, 9) == FC_ITEM_OK);
-    CHECK(s.player.ammo_count == 10);
     return 0;
 }
 
-static int supplies_and_loaded_weapon(void) {
+static int supplies(void) {
     FcState s;
     reset(&s, 1);
     fc_set_initial_supplies(&s, 2, 5);
@@ -472,16 +371,6 @@ static int supplies_and_loaded_weapon(void) {
     CHECK(s.player.inventory[3].item_id == 0 && s.player.inventory[2].item_id == 385);
     CHECK(s.player.sharks_remaining == 1 && s.player.prayer_doses_remaining == 4);
     CHECK(s.player.selected_food_slot == -1 && s.player.selected_potion_slot == -1);
-    reset(&s, 1);
-    fc_items_init(&s.player, &FC_LOADOUTS[FC_LOADOUT_BLOWPIPE_PURE]);
-    fc_set_initial_supplies(&s, 0, 0);
-    fc_items_spend_ammo(&s.player);
-    CHECK(s.player.equipment[3].charges == 49999);
-    CHECK(s.player.equipment[13].item_id == 0);
-    CHECK(fc_unequip_item(&s, 3) == FC_ITEM_OK);
-    CHECK(s.player.inventory[0].charges == 49999);
-    CHECK(fc_equip_item(&s, 0) == FC_ITEM_OK);
-    CHECK(s.player.ammo_count == 49999);
     return 0;
 }
 
@@ -534,8 +423,8 @@ static int combat(void) {
 
 static int equipment_test(void) {
     if (loadout_totals() || constant_tables() || transactions() ||
-        two_handed_and_stacks() || supplies_and_loaded_weapon() || combat()) return 1;
-    puts("equipment: preset preservation, tables, atomic transfers, stacks, requirements, supplies and combat passed");
+        ammo_stacks() || supplies() || combat()) return 1;
+    puts("equipment: loadout totals, tables, atomic transfers, stacks, requirements, supplies and combat passed");
     return 0;
 }
 
@@ -773,9 +662,9 @@ static int equipment_appearance_test(void) {
         } else if (removed[variant] >= 0 &&
                    fc_unequip_item(&state, removed[variant]) != FC_ITEM_OK) return 1;
         uint32_t before = fc_state_hash(&state);
-        if (fc_player_appearance_sync(&appearance, &state.player, FC_PLAYER_MODEL_BASE) != 1)
+        if (fc_player_appearance_sync(&appearance, &state.player, FC_PLAYER_MODEL_ID) != 1)
             return 1;
-        if (fc_player_appearance_sync(&appearance, &state.player, FC_PLAYER_MODEL_BASE) != 0)
+        if (fc_player_appearance_sync(&appearance, &state.player, FC_PLAYER_MODEL_ID) != 0)
             return 1;
         ModelEntry *entry = appearance.model->entries;
         for (int f = 0; f < entry->face_count * 3; f++)

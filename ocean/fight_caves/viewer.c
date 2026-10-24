@@ -1970,6 +1970,9 @@ const SpotAnimDef *spotanim_find(const SpotAnimSet *set, int id) {
 
 /* Player Appearance */
 
+/* Model id given to the composed player model. */
+#define FC_PLAYER_MODEL_ID 0xFC000001u
+
 typedef struct {
     ModelSet *parts;
     ModelSet *model;
@@ -1990,16 +1993,16 @@ int fc_player_appearance_load(FcPlayerAppearance *appearance) {
     for (uint32_t i = 0; r.ok && i < count; i++) {
         uint32_t item_id = fc_read_u32(&r);
         uint32_t hide_mask = fc_read_u32(&r);
-        fc_reader_require(&r, fc_item_definition((int)item_id) != NULL
-                              && hide_mask <= 127,
-                          "unknown item or bad hide mask");
-        appearance->records[i].item_id = item_id;
-        appearance->records[i].hide_mask = hide_mask;
+        fc_reader_require(&r, hide_mask <= 127, "bad hide mask");
+        /* The map also covers items the simulation does not offer. */
+        if (!fc_item_definition((int)item_id)) continue;
+        appearance->records[appearance->record_count].item_id = item_id;
+        appearance->records[appearance->record_count].hide_mask = hide_mask;
+        appearance->record_count++;
     }
     fc_reader_require(&r, r.pos == r.size, "unexpected data after the last item");
     fc_reader_close(&r);
     if (!r.ok) { fprintf(stderr, "Invalid player appearance map: %s\n", path); return 0; }
-    appearance->record_count = (int)count;
     appearance->parts = models_load("fc_player.models", (Texture2D){0});
     if (!appearance->parts || appearance->parts->has_textures) return 0;
     for (int i = 0; i < 7; i++)
@@ -2334,12 +2337,6 @@ static const char *const g_ui_asset_names[] = {
     "combaticons_14",
     "combaticons_15",
     "combaticons_16",
-    "combaticons2_5",
-    "combaticons2_6",
-    "combaticons2_7",
-    "combaticons2_10",
-    "combaticons2_11",
-    "combaticons2_12",
     "combaticons2_15",
     "combaticons2_16",
     "combaticons2_17",
@@ -3373,7 +3370,7 @@ typedef struct RuneCUiCombatProfile {
 
 /*
  * Exact b237 combat_interface_weapon_category DB rows from the local
- * Joshua-F dump for the weapon categories the loadouts use
+ * Joshua-F dump for the weapon categories the player can have
  * (FcLoadout.combat_style_profile, or 0 when unarmed). Core owns the selected
  * style; the viewer owns this presentation mapping so weapon tabs use the
  * same labels/icons as OSRS.
@@ -3383,18 +3380,6 @@ static const RuneCUiCombatProfile g_combat_profiles[] = {
         COMBAT_STYLE(0, "Punch", "Accurate", "combaticons_14"),
         COMBAT_STYLE(1, "Kick", "Aggressive", "combaticons_15"),
         COMBAT_STYLE(3, "Block", "Defensive", "combaticons_16"),
-        COMBAT_STYLE_HIDDEN,
-    }},
-    {9, {   /* crossbow: OSRS category 5 */
-        COMBAT_STYLE(0, "Accurate", "Accurate", "combaticons2_5"),
-        COMBAT_STYLE(1, "Rapid", "Rapid", "combaticons2_6"),
-        COMBAT_STYLE(3, "Longrange", "Longrange", "combaticons2_7"),
-        COMBAT_STYLE_HIDDEN,
-    }},
-    {23, {  /* thrown: OSRS category 19 */
-        COMBAT_STYLE(0, "Accurate", "Accurate", "combaticons2_10"),
-        COMBAT_STYLE(1, "Rapid", "Rapid", "combaticons2_11"),
-        COMBAT_STYLE(3, "Longrange", "Longrange", "combaticons2_12"),
         COMBAT_STYLE_HIDDEN,
     }},
     {25, {  /* bow: OSRS category 3 */
@@ -5292,11 +5277,6 @@ typedef struct {
 #define PLAYER_ANIM_HUMAN_TURN 823
 #define PLAYER_ANIM_HUMAN_RUN 824
 #define PLAYER_ANIM_BOW_ATTACK 426
-#define PLAYER_ANIM_XBOW_IDLE 4591
-#define PLAYER_ANIM_XBOW_WALK 4226
-#define PLAYER_ANIM_XBOW_RUN 4228
-#define PLAYER_ANIM_XBOW_ATTACK 7552
-#define PLAYER_ANIM_BLOWPIPE_ATTACK 5061
 #define PLAYER_ANIM_EAT 829
 #define PLAYER_ANIM_DEATH 836
 
@@ -5304,51 +5284,14 @@ typedef struct {
 #define JAD_ANIM_MELEE 2655
 #define JAD_ANIM_MAGIC 2656
 
-/* Indexed by the wielded weapon's visual_profile (FcItemDef). Projectile
- * columns follow FcProjectileProfile. */
-static const FcPlayerVisualProfile PLAYER_VISUALS[FC_NUM_LOADOUTS] = {
-    [FC_LOADOUT_BLACK_DHIDE_RCB] = {
-        PLAYER_ANIM_XBOW_IDLE, PLAYER_ANIM_XBOW_WALK,
-        PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
-        PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
-        PLAYER_ANIM_XBOW_RUN, PLAYER_ANIM_XBOW_ATTACK,
-        {27, 0, 0, 155.0f, 146.0f, 41.0f, 5.0f, 5.0f, 11.0f, 5.0f, 0},
-    },
-    [FC_LOADOUT_SOTA_TBOW] = {
-        PLAYER_ANIM_HUMAN_IDLE, PLAYER_ANIM_HUMAN_WALK,
-        PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
-        PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
-        PLAYER_ANIM_HUMAN_RUN, PLAYER_ANIM_BOW_ATTACK,
-        {1120, 1116, 0, 163.0f, 146.0f, 41.0f, 15.0f, 5.0f, 11.0f, 5.0f, 0},
-    },
-    [FC_LOADOUT_MSBI_PURE] = {
-        PLAYER_ANIM_HUMAN_IDLE, PLAYER_ANIM_HUMAN_WALK,
-        PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
-        PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
-        PLAYER_ANIM_HUMAN_RUN, PLAYER_ANIM_BOW_ATTACK,
-        {15, 24, 0, 163.0f, 146.0f, 41.0f, 15.0f, 5.0f, 11.0f, 5.0f, 0},
-    },
-    [FC_LOADOUT_BLOWPIPE_PURE] = {
-        PLAYER_ANIM_HUMAN_IDLE, PLAYER_ANIM_HUMAN_WALK,
-        PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
-        PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
-        PLAYER_ANIM_HUMAN_RUN, PLAYER_ANIM_BLOWPIPE_ATTACK,
-        {230, 236, 0, 163.0f, 146.0f, 32.0f, 15.0f, 0.0f, 11.0f, 5.0f, 0},
-    },
-    [FC_LOADOUT_ACB_ARMADYL] = {
-        PLAYER_ANIM_XBOW_IDLE, PLAYER_ANIM_XBOW_WALK,
-        PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
-        PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
-        PLAYER_ANIM_XBOW_RUN, PLAYER_ANIM_XBOW_ATTACK,
-        {1468, 0, 0, 155.0f, 146.0f, 41.0f, 5.0f, 5.0f, 11.0f, 5.0f, 0},
-    },
-    [FC_LOADOUT_BOWFA_CRYSTAL] = {
-        PLAYER_ANIM_HUMAN_IDLE, PLAYER_ANIM_HUMAN_WALK,
-        PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
-        PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
-        PLAYER_ANIM_HUMAN_RUN, PLAYER_ANIM_BOW_ATTACK,
-        {1922, 1923, 0, 163.0f, 146.0f, 41.0f, 15.0f, 5.0f, 11.0f, 5.0f, 0},
-    },
+/* The Twisted bow's animations. Projectile columns follow
+ * FcProjectileProfile. */
+static const FcPlayerVisualProfile TWISTED_BOW_VISUALS = {
+    PLAYER_ANIM_HUMAN_IDLE, PLAYER_ANIM_HUMAN_WALK,
+    PLAYER_ANIM_HUMAN_WALK_BACK, PLAYER_ANIM_HUMAN_WALK_LEFT,
+    PLAYER_ANIM_HUMAN_WALK_RIGHT, PLAYER_ANIM_HUMAN_TURN,
+    PLAYER_ANIM_HUMAN_RUN, PLAYER_ANIM_BOW_ATTACK,
+    {1120, 1116, 0, 163.0f, 146.0f, 41.0f, 15.0f, 5.0f, 11.0f, 5.0f, 0},
 };
 
 typedef struct {
@@ -5376,31 +5319,21 @@ static const FcNpcAnims *npc_anims(int npc_type) {
     return &NPC_ANIMS[npc_type];
 }
 
-/* visual_profile -1 is unarmed: no projectile. */
-const FcPlayerVisualProfile *fc_player_visual_profile(int visual_profile) {
+/* The wielded weapon's animations: the Twisted bow's, or unarmed (no
+ * projectile). */
+const FcPlayerVisualProfile *fc_player_visual_profile(const FcPlayer *player) {
     static const FcPlayerVisualProfile unarmed = {
         .idle_anim=808, .walk_anim=819, .walk_back_anim=820,
         .walk_left_anim=822, .walk_right_anim=821, .turn_anim=823,
         .run_anim=824, .attack_anim=422,
     };
-    if (visual_profile == -1) return &unarmed;
-    if (visual_profile < 0 || visual_profile >= FC_NUM_LOADOUTS)
-        visual_profile = FC_ACTIVE_LOADOUT;
-    return &PLAYER_VISUALS[visual_profile];
+    return player->weapon_kind == FC_WEAPON_TWISTED_BOW
+        ? &TWISTED_BOW_VISUALS : &unarmed;
 }
 
-int fc_player_equipment_visual_profile(const FcPlayer *player) {
-    const FcItemDef *weapon = fc_item_definition(player->equipment[FC_EQUIP_SLOT_WEAPON].item_id);
-    return weapon ? weapon->visual_profile : -1;
-}
-
-ModelEntry *fc_actor_player_model_entry(ModelSet *player_models,
-                                        int active_loadout) {
+ModelEntry *fc_actor_player_model_entry(ModelSet *player_models) {
     if (!player_models) return NULL;
-    if (active_loadout < 0 || active_loadout >= FC_NUM_LOADOUTS)
-        active_loadout = FC_ACTIVE_LOADOUT;
-    uint32_t model_id = FC_LOADOUTS[active_loadout].player_model_id;
-    return model_find(player_models, model_id);
+    return model_find(player_models, FC_PLAYER_MODEL_ID);
 }
 
 
@@ -5567,15 +5500,14 @@ static void recreate_player_state(FcActorAnimation *animation,
 
 void fc_actor_animation_reset(FcActorAnimation *animation,
                               const FcState *state,
-                              ModelSet *player_models,
-                              int active_loadout) {
+                              ModelSet *player_models) {
     if (!animation || !state) return;
     fc_visual_scene_init(&animation->scene);
     fc_visual_scene_reset_player(&animation->scene, state->player.x,
                                  state->player.y, 1,
                                  state->player.facing_angle);
-    const FcPlayerVisualProfile *profile = fc_player_visual_profile(
-        fc_player_equipment_visual_profile(&state->player));
+    const FcPlayerVisualProfile *profile =
+        fc_player_visual_profile(&state->player);
     animation->player_pose = (AnimTrack){profile->idle_anim, 0, 0.0f};
     animation->player_action = (AnimTrack){0};
     animation->player_lock_sequence = 0;
@@ -5583,7 +5515,7 @@ void fc_actor_animation_reset(FcActorAnimation *animation,
     animation->player_attack_target = -1;
     animation->prayer_flick_timer = 0.0f;
     recreate_player_state(animation,
-        fc_actor_player_model_entry(player_models, active_loadout));
+                          fc_actor_player_model_entry(player_models));
     for (int i = 0; i < FC_MAX_NPCS; i++) {
         const FcNpc *npc = &state->npcs[i];
         FcNpcAnimation *anim = &animation->npcs[i];
@@ -5662,12 +5594,10 @@ void fc_actor_animation_ingest_tick(FcActorAnimation *animation,
 void fc_actor_animation_ingest_events(FcActorAnimation *animation,
                                       const FcRenderEvents *events,
                                       AnimCache *cache,
-                                      int active_loadout,
+                                      const FcPlayerVisualProfile *profile,
                                       float tps) {
     if (!animation || !events) return;
     if (events->player_attack_fired) {
-        const FcPlayerVisualProfile *profile =
-            fc_player_visual_profile(active_loadout);
         AnimSequence *sequence = cache
             ? anim_get_sequence(cache, profile->attack_anim) : NULL;
         animation->player_lock_sequence = profile->attack_anim;
@@ -5778,18 +5708,16 @@ void fc_actor_animation_update_models(FcActorAnimation *animation,
                                       ModelSet *player_models,
                                       ModelSet *npc_models,
                                       AnimCache *cache,
-                                      int active_loadout,
                                       float tps,
                                       float dt,
                                       const unsigned char deferred_deaths[FC_MAX_NPCS]) {
     if (!animation || !state || !cache) return;
     float anim_dt = fc_actor_animation_scaled_dt(tps, dt);
-    ModelEntry *player_entry =
-        fc_actor_player_model_entry(player_models, active_loadout);
+    ModelEntry *player_entry = fc_actor_player_model_entry(player_models);
     recreate_player_state(animation, player_entry);
     if (animation->player_state && player_entry) {
-        const FcPlayerVisualProfile *profile = fc_player_visual_profile(
-            fc_player_equipment_visual_profile(&state->player));
+        const FcPlayerVisualProfile *profile =
+            fc_player_visual_profile(&state->player);
         FcVisualPose pose = fc_visual_scene_player_pose(&animation->scene);
         uint16_t pose_sequence = player_pose_sequence(profile, pose.locomotion);
         uint16_t action_sequence = player_action_sequence(animation, state);
@@ -6050,7 +5978,6 @@ typedef struct {
     int entity_count;
     ModelSet *player_models;
     ModelSet *npc_models;
-    int active_loadout;
     const RuneCUiAssets *ui_assets;
     Camera3D camera;
 } FcCombatPresentationDrawContext;
@@ -6953,7 +6880,7 @@ static float entity_model_top(const FcCombatPresentationDrawContext *context,
     Model *model = NULL;
     if (entity->entity_type == ENTITY_PLAYER) {
         ModelEntry *entry = fc_actor_player_model_entry(
-            context->player_models, context->active_loadout);
+            context->player_models);
         if (entry) model = &entry->model;
     } else if (context->npc_models) {
         ModelEntry *entry = npc_model_find(context->npc_models,
@@ -7793,7 +7720,6 @@ typedef struct ViewerState {
     Texture2D prayer_on[FC_PROTECTION_PRAYER_COUNT];
     Texture2D prayer_off[FC_PROTECTION_PRAYER_COUNT];
     Texture2D click_cross_tex[FC_CLICK_CROSS_FRAME_COUNT * 2];
-    int active_loadout; /* index into FC_LOADOUTS[] */
     int combat_style;   /* 0=accurate, 1=rapid, 2=long range */
     /* Debug overlay — toggled with O key */
     int dbg_flags;       /* bitmask of DBG_* flags */
@@ -7855,22 +7781,12 @@ static int load_ui_item_icon(RuneCUiState* ui, uint32_t item_id) {
     return 1;
 }
 
+/* Icons for every item the simulation knows: the loadout and the supplies. */
 static int load_fc_ui_item_icons(ViewerState* v) {
-    static const uint32_t ids[] = {
-        FC_ITEM_ID_VIAL, FC_ITEM_ID_SHARK,
-        FC_ITEM_ID_PRAYER_POTION_1, FC_ITEM_ID_PRAYER_POTION_2,
-        FC_ITEM_ID_PRAYER_POTION_3, FC_ITEM_ID_PRAYER_POTION_4,
-    };
     if (!v) return 0;
     int ready = 1;
-    for (int i = 0; i < (int)(sizeof(ids) / sizeof(ids[0])); i++)
-        ready &= load_ui_item_icon(&v->ui, ids[i]);
-    for (int li = 0; li < FC_NUM_LOADOUTS; li++) {
-        const FcLoadout* lo = &FC_LOADOUTS[li];
-        for (int ei = 0; ei < lo->equipment_count; ei++) {
-            ready &= load_ui_item_icon(&v->ui, (uint32_t)lo->equipment[ei]);
-        }
-    }
+    for (int i = 0; i < (int)(sizeof(ITEMS) / sizeof(ITEMS[0])); i++)
+        ready &= load_ui_item_icon(&v->ui, (uint32_t)ITEMS[i].id);
     return ready;
 }
 
@@ -7915,7 +7831,7 @@ static void sync_fc_ui_status(ViewerState* v) {
     v->ui.selected_combat_style = weapon ? (v->combat_style == 2 ? 3 : v->combat_style) : 0;
     runec_ui_set_combat_weapon_name(&v->ui, weapon ? weapon->name : "Unarmed");
     runec_ui_set_combat_style_profile(&v->ui,
-        weapon ? FC_LOADOUTS[weapon->visual_profile].combat_style_profile : 0);
+        weapon ? FC_LOADOUT.combat_style_profile : 0);
 
     for (int i = 0; i < RUNEC_UI_SKILL_COUNT; i++) {
         v->ui.skill_current[i] = 1;
@@ -8274,7 +8190,7 @@ static void print_replay_episode_summary(const ViewerState* v) {
 
 static void sync_player_appearance(ViewerState *v) {
     int changed = fc_player_appearance_sync(&v->appearance, &v->state.player,
-        FC_LOADOUTS[v->active_loadout].player_model_id);
+                                            FC_PLAYER_MODEL_ID);
     if (changed < 0) {
         fprintf(stderr, "Cannot compose player appearance from local equipment assets.\n");
         exit(EXIT_FAILURE);
@@ -8293,7 +8209,7 @@ static void reset_scene_presentation(ViewerState* v) {
     fc_fill_render_events(&v->state, &v->render_events);
     fc_combat_presentation_reset(v->combat_presentation);
     fc_actor_animation_reset(&v->actor_animation, &v->state,
-                             v->appearance.model, v->active_loadout);
+                             v->appearance.model);
     fc_click_feedback_reset(&v->click_feedback);
     dbg_log_clear();
 }
@@ -8715,8 +8631,7 @@ static FcCombatPresentationContext combat_presentation_context(ViewerState* v) {
         .scene = &v->actor_animation.scene,
         .terrain = v->terrain,
         .anim_cache = v->anim_cache,
-        .player_profile = fc_player_visual_profile(
-            fc_player_equipment_visual_profile(&v->state.player)),
+        .player_profile = fc_player_visual_profile(&v->state.player),
         .tps = v->tps,
     };
 }
@@ -8783,8 +8698,7 @@ static void draw_scene(ViewerState* v) {
          * client-style actor runtime. */
         ModelEntry* model;
         if (e->entity_type == ENTITY_PLAYER) {
-            model = fc_actor_player_model_entry(v->appearance.model,
-                                                v->active_loadout);
+            model = fc_actor_player_model_entry(v->appearance.model);
         } else {
             model = npc_model_find(v->npc_models, e->npc_type);
             if (e->npc_slot >= 0 && e->npc_slot < FC_MAX_NPCS &&
@@ -8815,7 +8729,6 @@ static void draw_scene(ViewerState* v) {
         .entity_count = v->entity_count,
         .player_models = v->appearance.model,
         .npc_models = v->npc_models,
-        .active_loadout = v->active_loadout,
         .ui_assets = &v->ui.assets,
         .camera = v->camera,
     };
@@ -9467,7 +9380,6 @@ static ViewerState* fc_viewer_create(int replay) {
     }
     int item_icons_ready = load_fc_ui_item_icons(v);
     v->paused = 1; v->tps = POLICY_REPLAY_BASE_TPS;
-    v->active_loadout = FC_ACTIVE_LOADOUT;
     v->cam_yaw = 0; v->cam_pitch = 0.8f; v->cam_dist = 30;
     v->camera_locked = 1;
     v->camera.up = (Vector3){0,1,0}; v->camera.fovy = 32;
@@ -9627,7 +9539,7 @@ static void fc_viewer_ingest_tick(ViewerState* v) {
                                    &v->render_events);
     fc_actor_animation_ingest_events(
         &v->actor_animation, &v->render_events, v->anim_cache,
-        fc_player_equipment_visual_profile(&v->state.player), v->tps);
+        fc_player_visual_profile(&v->state.player), v->tps);
 
     /* Debug event log — record events from this tick */
     dbg_log_tick(&v->state);
@@ -9830,7 +9742,7 @@ static int fc_viewer_frame(ViewerState* v) {
     }
     fc_actor_animation_update_models(
         &v->actor_animation, &v->state, v->appearance.model, v->npc_models,
-        v->anim_cache, v->active_loadout, v->tps, frame_dt, deferred_deaths);
+        v->anim_cache, v->tps, frame_dt, deferred_deaths);
     /* Draw */
     BeginDrawing();
     ClearBackground(COL_BG);

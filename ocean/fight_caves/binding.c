@@ -157,7 +157,6 @@ void puf_render(Env* env) {
         v->state = v->reset_state = env->state;
         v->reward_params = env->reward_params;
         v->reward_runtime = env->reward_runtime;
-        v->active_loadout = env->state.active_loadout;
         snprintf(v->reward_config_path, sizeof(v->reward_config_path),
                  "Puffer environment configuration");
         v->reward_config_loaded = 1;
@@ -193,9 +192,6 @@ void puf_close(Env* env) {
 
 /* Cold-path metadata for C callers and the standalone --contract command. */
 
-#define FC_STRINGIFY_INNER(value) #value
-#define FC_STRINGIFY(value) FC_STRINGIFY_INNER(value)
-
 const char* fc_training_contract_json(void) {
     static char json[2048];
     static int initialized = 0;
@@ -218,7 +214,7 @@ const char* fc_training_contract_json(void) {
             "\"reward_version\":\"%s\","
             "\"prayer_timing_version\":\"%s\","
             "\"state_hash_version\":%u,"
-            "\"active_loadout\":\"%s\""
+            "\"active_loadout\":\"FC_LOADOUT_SOTA_TBOW\""
             "}",
             FC_CONTRACT_DUMP_SCHEMA_VERSION,
             FC_POLICY_OBS_SIZE,
@@ -241,8 +237,7 @@ const char* fc_training_contract_json(void) {
             FC_ACTION_VERSION,
             FC_REWARD_VERSION,
             FC_PRAYER_TIMING_VERSION,
-            FC_STATE_HASH_VERSION,
-            FC_STRINGIFY(FC_ACTIVE_LOADOUT));
+            FC_STATE_HASH_VERSION);
         initialized = 1;
     }
     return json;
