@@ -3,19 +3,28 @@
  * and debug overlays, and the playable window and replay loop.
  *
  * Controls:
- *   WASD        — move (N/W/S/E)            Space    — pause/resume
- *   1/2/3       — protect melee/range/magic  Right    — single-step tick
- *   F           — eat shark                  Console  — targets/wave/TPS
- *   P           — drink prayer potion        R        — reset episode
- *   Tab         — cycle attack target        A        — toggle auto/manual
- *   O or D*     — toggle debug overlay       G        — grid  C — collision
- *   4/5         — camera presets             L        — toggle camera lock
- *   Scroll      — zoom                       Right-drag — orbit camera
- *   Right click — context menu (dragging dismisses it and orbits)
+ *   Space       — pause/resume              Right      — single-step one tick
+ *   Q or Esc    — quit (Esc first closes an open menu)
+ *   O or D      — toggle debug overlays     Shift+O    — cycle debug overlays
+ *   G           — grid                      C          — collision overlay
+ *   L           — toggle camera lock        Scroll     — zoom
+ *   Right click — context menu              Right-drag — orbit camera
  *
- *   * D only toggles the overlay when not being used for east movement.
- *   Policy replay mode (`./puffer eval`) also adds 1/2/4/0 playback presets.
- *   In replay mode, use Shift+4 / 5 for camera presets.
+ * Manual play (./fight_caves) adds:
+ *   Left click  — walk to a tile or attack an NPC; use the side panel and minimap
+ *   1/2/3       — protect from melee/missiles/magic
+ *   F           — eat shark                 P          — drink prayer potion
+ *   X           — toggle run                R          — reset episode
+ *   4/5         — camera presets            F9         — toggle god mode
+ *   F1-F8       — spawn NPC type 1-8 near the player
+ *
+ * Policy replay (./puffer eval, ./fight_caves eval) adds:
+ *   1/2/4/0     — 1x/2x/4x/10x speed        Up/Down    — faster/slower
+ *   Shift+4/5   — camera presets
+ *
+ * The console in the chat box lists NPC targets (click to attack), toggles
+ * debug overlays and god mode, jumps to a wave, sets the tick rate, and shows
+ * player state, observations, the action mask, rewards and the event log.
  */
 
 #include "raylib.h"
@@ -11752,7 +11761,7 @@ static ViewerState* fc_viewer_create(int replay) {
         return NULL;
     }
 #endif
-    fprintf(stderr,"=== Fight Caves Viewer (Phase 8 — Playable) ===\n");
+    fprintf(stderr, "=== Fight Caves Viewer ===\n");
     /* Keep graphical diagnostics off the native evaluator's stdout. */
     if (replay) {
         SetTraceLogCallback(viewer_trace_log_to_stderr);
